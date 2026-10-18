@@ -1,0 +1,6 @@
+build/
+.figcraft-src/
+.research/
+__pycache__/
+*.pyc
+.DS_Store
