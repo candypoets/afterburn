@@ -11,7 +11,7 @@ main changes the whole map.
   Surfaces  the "same command, every surface" card: Body, Source
   Root      the map's root card: Claim, Facts, Source
 """
-from fc import H, Vt, T, R
+from fc import F, H, Vt, T, R
 
 BG = "#E9E7E2"
 SURF = "#FFFFFF"
@@ -47,14 +47,17 @@ LEAF_W = 620
 ROOT_W = 420
 STAGE_W = 300
 SURFACES_W = 1180
+DETAIL_W = 700
 
 
 def ink(area):
     return AREAS.get(area, ACCENT)
 
 
-def _t(text, size, font=SANS, style="Regular", color=FG, w=None, name=None, lh=None, ls=None, case=None):
-    return T(text, size, font=font, style=style, color=color, w=w, name=name, lh=lh, ls=ls, case=case)
+def _t(text, size, font=SANS, style="Regular", color=FG, w=None, name=None, lh=None, ls=None,
+       case=None, align="left", x=0, y=0):
+    return T(text, size, font=font, style=style, color=color, w=w, name=name, lh=lh, ls=ls,
+             case=case, align=align, x=x, y=y)
 
 
 def heading(title, lede, w=2740):
@@ -166,3 +169,67 @@ def find(node, name):
         if found:
             return found
     return None
+
+
+def detail_screen(detail):
+    """A prototype screen for one area: heading, back link, and a slot for cards."""
+    tint = ink(detail["area"])
+    back = H(
+        _t("←", 14, SANS, "Regular", tint, name="arrow"),
+        _t("Back to the map", 11, MONO, "Medium", tint, name="label"),
+        gap=6, cross="center", pad=[6, 10, 6, 10], fill="#F1EEE7", radius=4, name="Back to the map")
+    cards = Vt(name="Cards", gap=10, w=DETAIL_W - 64)
+    return Vt(
+        _t(detail["eyebrow"], 10, MONO, "Medium", tint, name="eyebrow", ls=6),
+        _t(detail["title"], 38, DISP, "Regular", FG, w=DETAIL_W - 64, name="title", lh=42),
+        _t(detail["lede"], 14, SANS, "Regular", MUTED, w=DETAIL_W - 64, name="lede", lh=20),
+        back,
+        cards,
+        gap=14, pad=32, w=DETAIL_W, fill=SURF, stroke=BORDER, radius=10, name="Detail screen")
+
+
+def caption(text):
+    return _t(text, 10, MONO, "Medium", MUTED, name="caption", ls=4)
+
+
+def map_mode_screen(m):
+    """A sketch of the human-facing surface. All coordinates are absolute."""
+    w, h = 1080, 700
+    tint = ink("COMPONENTS")
+
+    def card(x, y, name, detail, selected=False):
+        return F(
+            "Card " + name,
+            _t(name, 15, SANS, "Medium", FG, name="title", x=16, y=14),
+            _t(detail, 12, SANS, "Regular", MUTED, w=348, name="detail", lh=17, x=16, y=40),
+            x=x, y=y, w=380, h=116, fill=SURF,
+            stroke=tint if selected else BORDER, sw=2 if selected else 1, radius=8, clip=True)
+
+    changes = []
+    y = 52
+    for label, meta in m["changes"]:
+        changes.append(_t(label, 12, SANS, "Medium", FG, name="change", x=16, y=y))
+        changes.append(_t(meta, 9, MONO, "Regular", MUTED, name="meta", x=16, y=y + 17))
+        y += 46
+
+    return F(
+        "Map mode",
+        _t(m["breadcrumb"], 11, MONO, "Medium", FG, name="breadcrumb", x=28, y=24),
+        _t(m["version"], 10, MONO, "Regular", MUTED, w=260, align="right", name="version", x=w - 316, y=25),
+        _t(m["tag"], 9, MONO, "Medium", ACCENT, name="tag", ls=4, x=w - 316, y=52),
+        _t("SELECTED", 9, MONO, "Medium", tint, name="selected tag", ls=4, x=32, y=76),
+        card(32, 96, m["selected"], m["selected_detail"], selected=True),
+        card(32, 240, m["other"], "Live thumbnails, search, drag onto the canvas.", selected=False),
+        F("Changes",
+          _t(m["changes_title"], 10, MONO, "Medium", MUTED, name="label", ls=6, x=16, y=16),
+          *changes,
+          x=760, y=96, w=288, h=470, fill=SURF, stroke=BORDER, radius=8, clip=True),
+        F("Reply",
+          _t("AGENT", 9, MONO, "Medium", ACCENT, name="who", ls=4, x=14, y=10),
+          _t(m["reply"], 12, SANS, "Regular", FG, w=648, name="text", lh=17, x=14, y=26),
+          x=32, y=470, w=680, h=58, fill="#F1EEE7", stroke=BORDER, radius=8, clip=True),
+        F("Ask bar",
+          _t(m["ask"], 13, SANS, "Regular", "#F2EFE8", w=620, name="question", x=16, y=14),
+          _t("⌘↵", 11, MONO, "Regular", DISABLED, name="hint", x=636, y=15),
+          x=32, y=600, w=680, h=48, fill=FG, radius=8, clip=True),
+        w=w, h=h, fill=BG, clip=True, radius=12, stroke=BORDER)

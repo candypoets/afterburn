@@ -16,6 +16,8 @@ def every_anchor():
     for stage in C.ANATOMY["stages"]:
         yield f"stage {stage['name']!r}", stage["source"]
     yield "surfaces", C.ANATOMY["surfaces"]["source"]
+    for card in C.DETAIL["cards"]:
+        yield f"detail {card['title']!r}", card["source"]
 
 
 def main() -> int:

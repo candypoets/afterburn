@@ -63,10 +63,11 @@ def Vt(*kids, **kw):
 
 
 def T(text, size=14, font="Inter", style="Regular", color="#000000", w=None, sh=None,
-      lh=None, ls=None, align="left", name=None, case=None, tnum=False, opacity=None):
+      lh=None, ls=None, align="left", name=None, case=None, tnum=False, opacity=None,
+      x=0, y=0):
     return Node("text", name or text[:40], text=text, size=size, font=font, style=style,
                 color=color, w=w, sh=sh, lh=lh, ls=ls, align=align, case=case, tnum=tnum,
-                opacity=opacity)
+                opacity=opacity, x=x, y=y)
 
 
 def R(w, h, fill=None, radius=0, name="rect", sh=None, sv=None, stroke=None, sw=1):

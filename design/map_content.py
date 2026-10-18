@@ -471,3 +471,78 @@ ANATOMY = {
                 "layout or render path.",
     },
 }
+
+
+# One area, opened. The "zoom in" screen: reached by clicking the Components
+# area on the map, and backed out of with the link at its top.
+
+DETAIL = {
+    "area": "COMPONENTS",
+    "eyebrow": "COMPONENTS · DETAIL",
+    "title": "How an instance stays a copy",
+    "lede": "Zoomed in on one area. Five claims, each with the line of code behind it — select "
+            "any card and ask the agent about it.",
+    "back": "← Back to the map",
+    "caption": "DETAIL SCREEN · click “Components and instances” in the map to open it",
+    "cards": [
+        {
+            "title": "A main changes, every instance rebuilds",
+            "fact": "The engine rebuilds each instance from its main, keeps layer ids and "
+                    "re-applies the overrides, so editing a main is how you change every screen "
+                    "at once.",
+            "source": ("crates/engine/src/components.rs", "When a main component changes, every instance is rebuilt from it"),
+        },
+        {
+            "title": "Overrides are groups",
+            "fact": "Fills, strokes, effects, opacity, visibility, characters, text style, "
+                    "padding, gap, grids, size and interactions can each be changed locally and "
+                    "reset on their own.",
+            "source": ("crates/engine/src/components.rs", "`fills`, `strokes`, `effects`, `opacity`, `visible`"),
+        },
+        {
+            "title": "Variant switches keep what still applies",
+            "fact": "Switching keeps an override where the layer's name path matches and both "
+                    "variants agreed on the property; text layers keep all of theirs.",
+            "source": ("crates/engine/src/components.rs", "Switching variants keeps an override where the layer's name path matches"),
+        },
+        {
+            "title": "Slots are the structural exception",
+            "fact": "An instance cannot gain or lose layers, except inside a slot: a frame bound "
+                    "to a slot property takes the instance's own content and keeps it across "
+                    "syncs.",
+            "source": ("crates/engine/src/components.rs", "Instances never gain or lose layers of their own"),
+        },
+        {
+            "title": "Libraries are the same idea, one level up",
+            "fact": "A file publishes components, sets, styles and variables; other files enable "
+                    "it by link and receive updates with their overrides kept.",
+            "source": ("crates/engine/src/library.rs", "//! Local libraries"),
+        },
+    ],
+}
+
+# A sketch of the surface the human would use: no tools, a selection, a question,
+# and the map's own history. Drawn here rather than described, because the UI is
+# part of the proposal.
+
+MAP_MODE = {
+    "page": "Map mode",
+    "title": "Map mode — a proposal",
+    "lede": "The same document with the drawing tools gone. Navigate, select, ask; the agent keeps "
+            "the map and answers with the selection as context.",
+    "breadcrumb": "FigCraft  ›  Components  ›  Variants",
+    "version": "map v12 · 99e5db3",
+    "selected": "Variants and properties",
+    "selected_detail": "Component sets switch by variant; properties drive the copies.",
+    "other": "Assets panel",
+    "ask": "Ask about “Variants and properties”…",
+    "reply": "The set is engine/components.rs:7. Switching keeps overrides by layer name path.",
+    "changes_title": "CHANGES",
+    "changes": [
+        ("3 cards revised", "this week"),
+        ("2 anchors moved", "agent updated"),
+        ("1 area stale", "needs a redraw"),
+        ("map v12", "commit 99e5db3"),
+    ],
+    "tag": "PROPOSAL · NOT A MAP CLAIM",
+}

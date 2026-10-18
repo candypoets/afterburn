@@ -10,6 +10,10 @@ slot, so the containment on the canvas is the containment in the model. Every
 Leaf's Source is a (path, literal) anchor resolved against the checkout before
 anything is drawn; a missing line stops the build.
 
+Two extra screens: a detail screen for one area (the "zoom in" a human asks
+for), reached by a prototype link from the map; and a map-mode sketch, which is
+a proposal drawn in FigCraft rather than a claim about the code.
+
 Components are turned on by an MCP session driving the same headless engine the
 app uses (figcraft-cli mcp). Publishing goes through the host's bridge, which
 adds publish_project and keeps the server key out of this script.
@@ -35,6 +39,9 @@ CLI = Path(os.environ.get("FIGCRAFT_CLI", "/root/figcraft-host/vendor/figcraft-c
 BRIDGE = Path(os.environ.get("FIGCRAFT_BRIDGE", "/root/figcraft-host/app/mcp_bridge.py"))
 SERVER_DATA = Path(os.environ.get("FIGCRAFT_SERVER_DATA", "/root/figcraft-host/data/files"))
 
+# Where the detail screen sits, to the right of the map.
+DETAIL_X = 2912
+
 
 # ---------------------------------------------------------------- anchors
 
@@ -56,12 +63,15 @@ def resolved():
                     where=src("surfaces", C.ANATOMY["surfaces"]["source"]))
     anatomy = {"title": C.ANATOMY["title"], "lede": C.ANATOMY["lede"],
                "stages": stages, "surfaces": surfaces}
-    return root, branches, anatomy
+    detail = dict(C.DETAIL,
+                  cards=[dict(card, where=src(f"detail {card['title']!r}", card["source"]))
+                         for card in C.DETAIL["cards"]])
+    return root, branches, anatomy, detail
 
 
-def anchor_count(root, branches, anatomy):
+def anchor_count(root, branches, anatomy, detail):
     return (1 + len(branches) + sum(len(b["leaves"]) for b in branches)
-            + len(anatomy["stages"]) + 1)
+            + len(anatomy["stages"]) + 1 + len(detail["cards"]))
 
 
 # ---------------------------------------------------------------- MCP
@@ -120,17 +130,18 @@ def default_text(main, layer):
 
 # ---------------------------------------------------------------- document
 
-def build_document(root, branches, anatomy):
+def build_document(root, branches, anatomy, detail):
     revision, date = sources.revision()
     lines = sources.rust_lines()
     specs = sources.count_specs()
-    anchors = anchor_count(root, branches, anatomy)
+    anchors = anchor_count(root, branches, anatomy, detail)
     leaves = sum(len(b["leaves"]) for b in branches)
 
     doc = Doc("FigCraft · feature map")
     comp_page = doc.page("Components", bg="#E3E0D9")
     map_page = doc.page("Features", bg=K.BG)
     anatomy_page = doc.page("Anatomy", bg=K.BG)
+    mode_page = doc.page("Map mode", bg=K.BG)
 
     def label(text, x, y):
         doc.place(comp_page, T(text, 10, font=K.MONO, color=K.MUTED, name=text, ls=8), x, y)
@@ -173,7 +184,8 @@ def build_document(root, branches, anatomy):
     heading_map = K.heading(
         "FigCraft — feature by feature",
         "A Figma-class tool in pure Rust: what it can do, area by area, and the line of code "
-        "that makes each thing work. Read a branch top to bottom; the ink is the area.", w=2700)
+        "that makes each thing work. Read a branch top to bottom; the ink is the area. The "
+        "Components area opens a detail screen — the first zoom.", w=2700)
     doc.place(map_page, heading_map, 64, 56)
 
     root_slot = Vt(name="Root slot", gap=0, w=K.ROOT_W)
@@ -196,6 +208,11 @@ def build_document(root, branches, anatomy):
     map_block = Vt(content, footer, gap=48, pad=[0, 0, 96, 0], name="Map block")
     doc.place(map_page, map_block, 64, 400)
 
+    detail_screen = K.detail_screen(detail)
+    detail_caption = K.caption(detail["caption"])
+    doc.place(map_page, detail_screen, DETAIL_X, 400)
+    doc.place(map_page, detail_caption, DETAIL_X, 360)
+
     # ---- Anatomy page
     heading_anatomy = K.heading(anatomy["title"], anatomy["lede"], w=1800)
     doc.place(anatomy_page, heading_anatomy, 64, 56)
@@ -206,21 +223,32 @@ def build_document(root, branches, anatomy):
     anatomy_block = Vt(lane, surfaces_slot, note, gap=32, pad=[0, 0, 96, 0], name="Anatomy block")
     doc.place(anatomy_page, anatomy_block, 64, 400)
 
+    # ---- Map mode page: a drawn proposal, not a claim about the code
+    heading_mode = K.heading(C.MAP_MODE["title"], C.MAP_MODE["lede"], w=1200)
+    doc.place(mode_page, heading_mode, 64, 56)
+    mode_frame = K.map_mode_screen(C.MAP_MODE)
+    doc.place(mode_page, mode_frame, 64, 400)
+
     return doc, {
-        "pages": {"components": comp_page, "features": map_page, "anatomy": anatomy_page},
+        "pages": {"components": comp_page, "features": map_page, "anatomy": anatomy_page,
+                  "mode": mode_page},
         "areas": areas, "branch_mains": branch_mains, "leaf_mains": leaf_mains,
         "stage_main": stage_main, "surfaces_main": surfaces_main, "root_main": root_main,
         "arrow_main": arrow_main, "root_slot": root_slot, "columns": columns,
         "map_block": map_block, "heading_map": heading_map, "footer": footer,
+        "detail_screen": detail_screen, "detail_caption": detail_caption,
+        "back_link": K.find(detail_screen, "Back to the map"),
+        "detail_cards": K.find(detail_screen, "Cards"),
         "lane": lane, "surfaces_slot": surfaces_slot, "anatomy_block": anatomy_block,
         "heading_anatomy": heading_anatomy, "note": note,
+        "heading_mode": heading_mode, "mode_frame": mode_frame,
         "anchors": anchors, "revision": revision, "date": date, "lines": lines, "specs": specs,
     }
 
 
 # ---------------------------------------------------------------- assembly
 
-def assemble(s, doc, nodes, root, branches, anatomy):
+def assemble(s, doc, nodes, root, branches, anatomy, detail):
     revision, lines, specs = nodes["revision"], nodes["lines"], nodes["specs"]
 
     # Measure wrapped text, then lay every raw frame out: the writer stores
@@ -286,16 +314,30 @@ def assemble(s, doc, nodes, root, branches, anatomy):
         "Source": root["where"],
     }, parent=nodes["root_slot"].id)
 
+    components_area = None
     for index, branch in enumerate(branches):
         column = nodes["columns"][min(index // 4, 2)]
         bid = instance(nodes["branch_mains"][branch["area"]].id, {
             "Name": branch["title"], "Role": branch["role"], "Source": branch["where"],
         }, parent=column.id)
+        if branch["area"] == detail["area"]:
+            components_area = bid
         for leaf in branch["leaves"]:
             r = s.cmd("instance.slotInsert", id=bid, slot="Code",
                       component=nodes["leaf_mains"][branch["area"]].id)
             s.cmd("instance.setProperties", ids=[r["id"]], properties={
                 "Title": leaf["title"], "Fact": leaf["fact"], "Source": leaf["where"]})
+
+    # The zoom: the area card opens the detail screen; the link on it goes back.
+    for card in detail["cards"]:
+        instance(nodes["leaf_mains"][detail["area"]].id, {
+            "Title": card["title"], "Fact": card["fact"], "Source": card["where"],
+        }, parent=nodes["detail_cards"].id)
+    if components_area:
+        s.cmd("proto.interaction.add", id=components_area, dest=nodes["detail_screen"].id,
+              transition={"type": "dissolve"}, durationMs=200, easing="easeOut")
+        s.cmd("proto.interaction.add", id=nodes["back_link"].id, action={"type": "back"},
+              transition={"type": "dissolve"}, durationMs=200, easing="easeOut")
 
     # Anatomy: the five stages, arrows between, then the seam card
     for i, stage in enumerate(anatomy["stages"]):
@@ -309,12 +351,16 @@ def assemble(s, doc, nodes, root, branches, anatomy):
         "Body": anatomy["surfaces"]["body"], "Source": anatomy["surfaces"]["where"],
     }, parent=nodes["surfaces_slot"].id)
 
-    # place the blocks now that every section has its measured height
+    # Place the blocks now that every section has its measured height.
     for page_key, heading_key, block_key in (("features", "heading_map", "map_block"),
-                                             ("anatomy", "heading_anatomy", "anatomy_block")):
+                                             ("anatomy", "heading_anatomy", "anatomy_block"),
+                                             ("mode", "heading_mode", "mode_frame")):
         s.cmd("page.select", id=nodes["pages"][page_key])
         h = s.tool("get_node", id=nodes[heading_key].id, depth=0)["height"]
         s.cmd("node.set", ids=[nodes[block_key].id], x=64, y=56 + h + 72)
+        if page_key == "features":
+            s.cmd("node.set", ids=[nodes["detail_screen"].id], x=DETAIL_X, y=56 + h + 72)
+            s.cmd("node.set", ids=[nodes["detail_caption"].id], x=DETAIL_X, y=56 + h + 36)
 
     s.cmd("page.select", id=nodes["pages"]["features"])
 
@@ -324,14 +370,32 @@ def assemble(s, doc, nodes, root, branches, anatomy):
 doc_path = OUT / "figcraft-feature-map.raw.figcraft"
 
 
+def write_sidecar(nodes, branches, detail):
+    meta = {
+        "name": "FigCraft · feature map",
+        "version": sources.version(),
+        "revision": nodes["revision"],
+        "date": nodes["date"],
+        "anchors": nodes["anchors"],
+        "areas": len(branches),
+        "capabilities": sum(len(b["leaves"]) for b in branches),
+        "detail": detail["area"],
+        "pages": ["Components", "Features", "Anatomy", "Map mode"],
+    }
+    path = OUT / "figcraft-feature-map.json"
+    path.write_text(json.dumps(meta, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
 def main():
     global doc_path
 
     if "--check" in sys.argv:
-        root, branches, anatomy = resolved()
-        total = anchor_count(root, branches, anatomy)
+        root, branches, anatomy, detail = resolved()
+        total = anchor_count(root, branches, anatomy, detail)
         print(f"{total} anchors OK · {len(branches)} areas · "
-              f"{sum(len(b['leaves']) for b in branches)} capabilities · {sources.version()}")
+              f"{sum(len(b['leaves']) for b in branches)} capabilities · "
+              f"{len(detail['cards'])} detail cards · {sources.version()}")
         return 0
 
     publish = "--publish" in sys.argv
@@ -346,8 +410,8 @@ def main():
                   f"would create a duplicate; pass --force for a new one.")
             return 1
 
-    root, branches, anatomy = resolved()
-    doc, nodes = build_document(root, branches, anatomy)
+    root, branches, anatomy, detail = resolved()
+    doc, nodes = build_document(root, branches, anatomy, detail)
 
     OUT.mkdir(exist_ok=True)
     doc.save(str(doc_path))
@@ -355,10 +419,11 @@ def main():
     s = Session(bridge=publish)
     try:
         s.tool("open_file", path=str(doc_path))
-        assemble(s, doc, nodes, root, branches, anatomy)
+        assemble(s, doc, nodes, root, branches, anatomy, detail)
         out = OUT / "figcraft-feature-map.figcraft"
         s.tool("save_file", path=str(out))
         print("wrote", out)
+        print("sidecar", write_sidecar(nodes, branches, detail))
 
         if publish:
             result = s.tool("publish_project", name=name)
@@ -378,7 +443,7 @@ def main():
 
     SHOTS.mkdir(exist_ok=True)
     for page, slug in (("Features", "features"), ("Anatomy", "anatomy"),
-                       ("Components", "components")):
+                       ("Map mode", "map-mode"), ("Components", "components")):
         target = SHOTS / f"{slug}.png"
         subprocess.run([str(CLI), "render", str(OUT / "figcraft-feature-map.figcraft"),
                         "-o", str(target), "--scale", "0.6", "--page", page],
