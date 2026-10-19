@@ -5,3 +5,9 @@ __pycache__/
 *.pyc
 .DS_Store
 figcraft-work/
+server/figcraft/target/
+server/data/
+server/*.log
+.cargo-home/
+server/bin/
+.docker-config/
