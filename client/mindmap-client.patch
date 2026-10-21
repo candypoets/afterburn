@@ -1,0 +1,154 @@
+diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
+index 1bba81e..ea75ff3 100644
+--- a/apps/figcraft/src/main.rs
++++ b/apps/figcraft/src/main.rs
+@@ -120,10 +120,14 @@ impl eframe::App for App {
+ 
+ fn main() -> eframe::Result {
+     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+-    let args: Vec<String> = std::env::args().skip(1).collect();
++    let mut args: Vec<String> = std::env::args().skip(1).collect();
++    if args.iter().any(|a| a == "--map-mode") {
++        figcraft_ui_egui::set_map_mode(true);
++        args.retain(|a| a != "--map-mode");
++    }
+     if args.iter().any(|a| a == "--version" || a == "-V") {
+         println!(
+-            "FigCraft {}{}",
++            "Mindmap {}{}",
+             env!("CARGO_PKG_VERSION"),
+             option_env!("FIGCRAFT_BUILD_SHA").filter(|s| !s.is_empty()).map(|s| format!(" ({s})")).unwrap_or_default()
+         );
+@@ -143,7 +147,7 @@ fn main() -> eframe::Result {
+         (true, _) => None,
+         (false, Ok(r)) => Some(Arc::new(r)),
+         (false, Err(e)) => {
+-            eprintln!("FigCraft: {e}");
++            eprintln!("Mindmap: {e}");
+             std::process::exit(2);
+         }
+     };
+@@ -219,8 +223,8 @@ fn main() -> eframe::Result {
+     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
+     // and StartupWMClass (FreeBSD's package matches the binary's name instead).
+     let mut viewport = egui::ViewportBuilder::default()
+-        .with_title("FigCraft")
+-        .with_app_id("ai.storyteller.figcraft")
++        .with_title("Mindmap")
++        .with_app_id("dev.mindmap.client")
+         .with_inner_size([1440.0, 900.0])
+         .with_min_inner_size([800.0, 500.0])
+         .with_drag_and_drop(true);
+@@ -243,7 +247,7 @@ fn main() -> eframe::Result {
+     #[cfg(target_os = "macos")]
+     let apple_events = &apple_events;
+     let result = eframe::run_native(
+-        "FigCraft",
++        "Mindmap",
+         options,
+         Box::new(move |_cc| {
+             #[cfg(target_os = "linux")]
+diff --git a/crates/ui-egui/src/canvas.rs b/crates/ui-egui/src/canvas.rs
+index 9e0c1d7..9d4e4c7 100644
+--- a/crates/ui-egui/src/canvas.rs
++++ b/crates/ui-egui/src/canvas.rs
+@@ -933,7 +933,7 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
+         }
+         // The focus view's bar names its frame.
+         let labelled = focus.is_none() && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }));
+-        if labelled && let Some(q) = crate::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), ds.hover == Some(*c)) {
++        if labelled && !crate::map_mode() && let Some(q) = crate::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), ds.hover == Some(*c)) {
+             labels.push((*c, q.map(|p| app.to_page(p))));
+         }
+     }
+diff --git a/crates/ui-egui/src/home.rs b/crates/ui-egui/src/home.rs
+index 236e278..e1580c6 100644
+--- a/crates/ui-egui/src/home.rs
++++ b/crates/ui-egui/src/home.rs
+@@ -203,7 +203,7 @@ fn dropped(app: &mut FigApp, ctx: &egui::Context) {
+ fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
+     let mut y = left.min.y + 20.0;
+     icons::paint(ui.painter(), Rect::from_min_size(pos2(left.min.x + 16.0, y), vec2(20.0, 20.0)), Icon::Logo, ACCENT);
+-    ui.painter().text(pos2(left.min.x + 44.0, y + 10.0), Align2::LEFT_CENTER, "FigCraft", semibold(14.0), t.text);
++    ui.painter().text(pos2(left.min.x + 44.0, y + 10.0), Align2::LEFT_CENTER, "Mindmap", semibold(14.0), t.text);
+     y += 48.0;
+     let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, widgets::FIELD_H));
+     ui.scope_builder(egui::UiBuilder::new().max_rect(search), |ui| {
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index 450317b..0ffac73 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -39,6 +39,18 @@ pub mod list_drag;
+ pub mod live;
+ pub mod live_text;
+ pub mod measure_overlay;
++/// The read-only map client: no layers panel, no design panels, no tools.
++static MAP_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++
++pub fn set_map_mode(on: bool) {
++    MAP_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
++}
++
++pub(crate) fn map_mode() -> bool {
++    MAP_MODE.load(std::sync::atomic::Ordering::Relaxed)
++        || std::env::var_os("MINDMAP_CLIENT").is_some()
++}
++
+ pub mod menus;
+ pub mod missing_fonts;
+ pub mod online;
+@@ -1419,6 +1431,7 @@ impl FigApp {
+     pub(crate) fn frame(&mut self, ui: &mut egui::Ui) {
+         let ctx = ui.ctx().clone();
+         let t = theme::Tokens::get(&ctx);
++        let map_mode = map_mode();
+         // A field that had the keyboard when the frame began keeps its keys from the shortcuts
+         // even if it lets go during the frame (Enter commits it), or as it began (egui drops the
+         // focus on Escape before the frame, which cancels the field's edit and nothing else).
+@@ -1443,7 +1456,9 @@ impl FigApp {
+         // The Inspect tab measures on hover without Alt.
+         self.session.tool.redlines = self.ui.right_tab == RightTab::Inspect;
+         self.end_pen_outside_design();
+-        tabs::tab_bar(self, ui);
++        if !map_mode {
++            tabs::tab_bar(self, ui);
++        }
+         if self.ui.present.is_some() {
+             // A close request can arrive while the presenter fills the window. Let its unsaved
+             // changes dialog take Escape and draw above the player just as it does in the editor.
+@@ -1467,7 +1482,7 @@ impl FigApp {
+             return;
+         }
+         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
+-        if !hidden {
++        if !hidden && !map_mode {
+             egui::Panel::left("left_rail")
+                 .exact_size(56.0)
+                 .resizable(false)
+@@ -1478,7 +1493,7 @@ impl FigApp {
+                 });
+         }
+         // The panels are as wide as asked, less in a window too small for them and the canvas.
+-        let left_open = !hidden && !self.ui.left_collapsed;
++        let left_open = !hidden && !map_mode && !self.ui.left_collapsed;
+         let (left_w, right_w) = fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), self.ui.right_width);
+         let rows = ui.available_rect_before_wrap().y_range();
+         let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
+@@ -1498,7 +1513,7 @@ impl FigApp {
+                     layers::left_panel(self, ui)
+                 });
+         }
+-        if !hidden {
++        if !hidden && !map_mode {
+             edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
+             egui::Panel::right("right_panel")
+                 .resizable(false)
+@@ -1519,7 +1534,7 @@ impl FigApp {
+             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
+             canvas::show(self, ui, &mut worker);
+             self.worker = Some(worker);
+-            if !hidden {
++            if !hidden && !map_mode {
+                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
+                     a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
+                     toolbar::show(self, ui);

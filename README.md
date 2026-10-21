@@ -42,6 +42,18 @@ execution plane (the private Herdr) in the same process, and what a user install
 never see. `design/build_system.py` builds and publishes it; it can be opened on the Mac through
 the app's control channel and `ui.render`.
 
+## The client
+
+**Mindmap.app** is the Mac client: FigCraft's engine and canvas with the editor taken off the
+human's screen. `--map-mode` hides the layers and design panels, the toolbar, the tab bar and the
+frame labels; the app is renamed and carries its own icon. The patch, the icon and `build-mac.sh`
+live in [`client/`](client/README.md). It is a UI gate, not yet a permission model: editing
+shortcuts and the writable document remain, and page navigation is done by the control channel
+until the map has in-canvas links.
+
+The installed FigCraft.app (0.5.1) stays untouched; Mindmap is a separate 0.7.0 bundle talking to
+our 0.7.0 server.
+
 ## Click, then ask
 
 The part that makes this more than a document is `design/context.py`. Given a selected layer — in
@@ -128,7 +140,7 @@ design/
   fc.py            the minimal .figcraft writer (frames, auto layout, text)
   sources.py       anchor resolution, repo statistics, revision
   build_map.py     assemble pages, create components, place instances, publish
-  build_system.py  build and publish the system design
+  build_system.py  build and publish the system design and its screens page
   context.py       the context bundle for a selected layer
   check_anchors.py resolve and print every anchor
 ```
