@@ -87,6 +87,28 @@ containerised either way.
 Next in the fork: a Rust supervisor (spawn, health, restart, stop on shutdown) and the job API in
 front of it.
 
+## Deployment modes
+
+**Host service (the target): one binary, one service.** The document plane and the agent host
+are the same process: it serves files, runs the private Herdr child, and spawns agents in the
+repos on that machine. The unit is `systemd/mindmap-server.service`; install it once:
+
+```sh
+cp systemd/mindmap-server.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now mindmap-server
+```
+
+The running sandbox here cannot reach systemd (`Failed to connect to bus`), so this step is
+yours to run; the unit is committed ready.
+
+**Container (current dev server): document plane only.** It serves files and live sessions and
+has no repos, agent CLIs or shells to host agents in. That is what the compose file does today.
+Mounting the host's repos, Codex/Claude configs, Node/Volta, git and Herdr into it would make a
+second, fatter environment to maintain, which is why agent hosting belongs on the host service.
+
+Either way the document plane is the same server; only the ability to spawn agents differs.
+
 ## What we change here next
 
 - Projects: a project record binds a repo/worktree, an agent and this server's documents.

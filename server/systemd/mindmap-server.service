@@ -1,0 +1,24 @@
+[Unit]
+Description=mindmap server (FigCraft document plane and agent host)
+Documentation=file:///root/code/mindmap/server/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The document plane and the agent host are the same process. It spawns its
+# own private Herdr daemon, so a stop takes the whole cgroup down.
+WorkingDirectory=/root/code/mindmap/server
+Environment=HERDR_PRIVATE_HOME=/root/code/mindmap/server/data/agents
+ExecStart=/root/code/mindmap/server/figcraft/target/release/figcraft-server \
+  --listen 0.0.0.0:47910 --data /root/code/mindmap/server/data
+Restart=always
+RestartSec=2
+KillMode=control-group
+TimeoutStopSec=20
+# The repos and the agent CLIs live under /root on this host; a packaged
+# install would use a dedicated user and /var/lib/mindmap.
+User=root
+
+[Install]
+WantedBy=multi-user.target
