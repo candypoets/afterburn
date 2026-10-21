@@ -6,12 +6,14 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::agent;
 use crate::config::Config;
 use crate::error::{Error, Result, ResultExt};
 use crate::project::ProjectService;
@@ -147,7 +149,8 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
         "init" => {
             let query =
                 workspace.ok_or_else(|| Error::new("init needs a \"workspace\" id or label"))?;
-            let init = service.init(query)?;
+            let target = request_target(request)?;
+            let init = service.init(query, &target)?;
             let link = init
                 .opened
                 .record
@@ -163,7 +166,43 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
                 "agent": init.agent,
             }))
         }
+        "adopt" => {
+            let query =
+                workspace.ok_or_else(|| Error::new("adopt needs a \"workspace\" id or label"))?;
+            let path = request
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::new("adopt needs a \"path\" to a .figcraft file"))?;
+            let name = match request.get("name") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(name)) => Some(name.as_str()),
+                Some(other) => {
+                    return Err(Error::new(format!(
+                        "\"name\" must be a string, not {other}"
+                    )))
+                }
+            };
+            let adopted = service.adopt(query, Path::new(path), name)?;
+            Ok(json!({
+                "id": id,
+                "ok": true,
+                "file": adopted.file,
+                "link": adopted.link,
+                "name": adopted.name,
+            }))
+        }
         other => Err(Error::new(format!("unknown method {other:?}"))),
+    }
+}
+
+/// Read the optional `target` request field, rejecting non-string values.
+fn request_target(request: &Value) -> Result<agent::Target> {
+    match request.get("target") {
+        None | Some(Value::Null) => agent::parse_target(None),
+        Some(Value::String(target)) => agent::parse_target(Some(target)),
+        Some(other) => Err(Error::new(format!(
+            "\"target\" must be a string, not {other}"
+        ))),
     }
 }
 

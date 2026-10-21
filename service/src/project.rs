@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::path::Path;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -9,10 +10,10 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::agent::{self, AgentOutcome};
+use crate::agent::{self, AgentOutcome, Target};
 use crate::config::Config;
 use crate::error::{Error, Result, ResultExt};
-use crate::herdr::{Agent, Herdr};
+use crate::herdr::{Agent, Herdr, Pane};
 use crate::link;
 use crate::mcp::FigcraftSession;
 use crate::records::{ProjectRecord, Store};
@@ -22,6 +23,23 @@ use crate::time;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const POLL_ATTEMPTS: usize = 60;
 
+/// One agent as the Init picker sees it.
+#[derive(Clone, Debug, Serialize)]
+pub struct AgentDetail {
+    /// Pane hosting the agent.
+    pub pane: String,
+    /// Agent kind (`codex`, `claude`, …), when the payload names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Herdr display name, when the payload has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Lifecycle state (`idle`, `working`, `blocked`, `done`, `unknown`).
+    pub status: String,
+    /// Focused in the user's Herdr UI.
+    pub focused: bool,
+}
+
 /// One workspace as the client sees it: Herdr state plus our map state.
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkspaceView {
@@ -29,7 +47,7 @@ pub struct WorkspaceView {
     pub id: String,
     /// Herdr label.
     pub label: String,
-    /// Checkout path, when the workspace is a repository.
+    /// Checkout path, from the worktree or the focused pane's cwd.
     pub path: Option<String>,
     /// Repository name.
     pub repo: Option<String>,
@@ -41,6 +59,10 @@ pub struct WorkspaceView {
     pub agent_names: Vec<String>,
     /// Workspace-level agent status.
     pub agent_status: String,
+    /// Per-agent detail for the Init picker.
+    pub agents_detail: Vec<AgentDetail>,
+    /// Agent CLIs installed on this host, in `AGENT_ORDER`.
+    pub clis: Vec<String>,
     /// Focused in the user's Herdr UI.
     pub focused: bool,
     /// `map`, `empty`, or `none`.
@@ -69,6 +91,17 @@ pub struct InitResult {
     pub opened: Opened,
     /// What happened when ensuring an agent.
     pub agent: AgentOutcome,
+}
+
+/// The result of adopting an already-built map.
+#[derive(Clone, Debug, Serialize)]
+pub struct Adopted {
+    /// FigCraft file id on the document server.
+    pub file: String,
+    /// Owner edit link (`figcraft://join?...`).
+    pub link: String,
+    /// Document name.
+    pub name: String,
 }
 
 /// The stateful project service shared by the CLI and the TCP server.
@@ -107,6 +140,7 @@ impl ProjectService {
         let workspaces = self.herdr.workspaces()?;
         let agents = self.herdr.agents()?;
         let records = self.store.all()?;
+        let clis = agent::installed_kinds();
 
         let mut by_workspace: BTreeMap<&str, Vec<&Agent>> = BTreeMap::new();
         for agent in &agents {
@@ -126,6 +160,21 @@ impl ProjectService {
                 .iter()
                 .filter_map(|agent| agent.agent.clone())
                 .collect();
+            let agents_detail = mine
+                .iter()
+                .filter_map(|agent| {
+                    Some(AgentDetail {
+                        pane: agent.pane_id.clone()?,
+                        kind: agent.agent.clone(),
+                        name: agent.name.clone(),
+                        status: agent
+                            .agent_status
+                            .clone()
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        focused: agent.focused,
+                    })
+                })
+                .collect();
             let record = records.get(&workspace.workspace_id);
             let map = match record {
                 Some(record) if record.built => "map",
@@ -133,10 +182,22 @@ impl ProjectService {
                 None => "none",
             };
             let worktree = workspace.worktree.as_ref();
+            let path = match worktree.and_then(|tree| tree.checkout_path.clone()) {
+                Some(path) => Some(path),
+                // Herdr workspaces created without git (for example the repository itself) have
+                // no `worktree`; their panes still know where they are.
+                None => {
+                    let panes = self
+                        .herdr
+                        .panes(&workspace.workspace_id)
+                        .unwrap_or_default();
+                    pane_path(&panes)
+                }
+            };
             views.push(WorkspaceView {
                 id: workspace.workspace_id.clone(),
                 label: workspace.label.clone(),
-                path: worktree.and_then(|tree| tree.checkout_path.clone()),
+                path,
                 repo: worktree.and_then(|tree| tree.repo_name.clone()),
                 worktree: worktree
                     .and_then(|tree| tree.is_linked_worktree)
@@ -147,6 +208,8 @@ impl ProjectService {
                     .agent_status
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string()),
+                agents_detail,
+                clis: clis.clone(),
                 focused: workspace.focused,
                 map: map.to_string(),
                 file: record.and_then(|record| record.file.clone()),
@@ -191,17 +254,53 @@ impl ProjectService {
 
     /// Open a workspace and ensure an agent is working on it.
     ///
-    /// A failure in the agent stage is reported in the returned `agent` object, not as an error:
-    /// the document link must remain usable.
-    pub fn init(&self, query: &str) -> Result<InitResult> {
-        let opened = self.open(query)?;
+    /// The target is validated before the document is published, so a bad pane or kind cannot
+    /// create a side effect. A failure in the agent stage itself is reported in the returned
+    /// `agent` object, not as an error: the document link must remain usable.
+    pub fn init(&self, query: &str, target: &Target) -> Result<InitResult> {
+        let workspace = self.find_workspace(query)?;
+        agent::validate_target(&self.herdr, &workspace, target)?;
+        let record = self.ensure_project(&workspace)?;
+        let opened = Opened { workspace, record };
         let agent = agent::ensure(
             &self.config,
             &self.herdr,
             &opened.workspace,
             opened.record.file.as_deref(),
+            target,
         );
         Ok(InitResult { opened, agent })
+    }
+
+    /// Publish an already-built `.figcraft` file as a workspace's map.
+    ///
+    /// Unlike [`Self::init`], this never touches an agent: it is the path for seeding a workspace
+    /// whose map was drawn outside the service. The stored record is a normal one except that
+    /// `built` is true.
+    pub fn adopt(&self, query: &str, path: &Path, name: Option<&str>) -> Result<Adopted> {
+        let workspace = self.find_workspace(query)?;
+        let default_name = format!("Mindmap · {}", workspace.label);
+        let name = name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_name.clone());
+
+        let _guard = self
+            .create_lock
+            .lock()
+            .map_err(|_| Error::new("project creation lock poisoned"))?;
+        let record = self.publish_map(&workspace, path, name, true)?;
+        self.store.upsert(record.clone())?;
+        Ok(Adopted {
+            file: record
+                .file
+                .ok_or_else(|| Error::new("adopted map has no file id"))?,
+            link: record
+                .edit
+                .ok_or_else(|| Error::new("adopted map has no edit link"))?,
+            name: record.name.unwrap_or(default_name),
+        })
     }
 
     fn ensure_project(&self, workspace: &WorkspaceView) -> Result<ProjectRecord> {
@@ -220,10 +319,30 @@ impl ProjectService {
     }
 
     fn publish_skeleton(&self, workspace: &WorkspaceView) -> Result<ProjectRecord> {
-        if !self.config.empty_template.is_file() {
+        self.publish_map(
+            workspace,
+            &self.config.empty_template,
+            format!("Mindmap · {}", workspace.label),
+            false,
+        )
+    }
+
+    fn publish_map(
+        &self,
+        workspace: &WorkspaceView,
+        source: &Path,
+        name: String,
+        built: bool,
+    ) -> Result<ProjectRecord> {
+        if !source.is_file() {
+            let what = if built {
+                "map file"
+            } else {
+                "skeleton template"
+            };
             return Err(Error::new(format!(
-                "skeleton template not found at {}",
-                self.config.empty_template.display()
+                "{what} not found at {}",
+                source.display()
             )));
         }
         let key = fs::read_to_string(&self.config.key_file).context(format!(
@@ -238,14 +357,16 @@ impl ProjectService {
             )));
         }
 
-        let name = format!("Mindmap · {}", workspace.label);
+        let description = if built { "map" } else { "skeleton" };
         eprintln!(
-            "mindmap-service: publishing skeleton for {} ({})",
-            workspace.label, workspace.id
+            "mindmap-service: publishing {description} {} for {} ({})",
+            source.display(),
+            workspace.label,
+            workspace.id
         );
 
         let mut session = FigcraftSession::start(&self.config.figcraft_cli)?;
-        session.open_document(&self.config.empty_template)?;
+        session.open_document(source)?;
         session.run_command(
             "collab.publish",
             json!({
@@ -289,7 +410,7 @@ impl ProjectService {
             edit: Some(edit),
             view,
             name: Some(published_name.unwrap_or(name)),
-            built: false,
+            built,
             created: time::now_iso(),
         };
         eprintln!("mindmap-service: published {} as {}", workspace.label, file);
@@ -327,5 +448,58 @@ impl ProjectService {
         Err(Error::new(format!(
             "publish did not become live (last status {last_status}){reason}"
         )))
+    }
+}
+
+/// The focused pane's cwd, else the first pane that knows one.
+///
+/// Herdr workspaces without a `worktree` have no checkout path, but every pane reports the
+/// directory it was opened in. That is the best available answer for the map root, and for the
+/// repository workspace it is exactly the repository root.
+fn pane_path(panes: &[Pane]) -> Option<String> {
+    panes
+        .iter()
+        .find(|pane| pane.focused)
+        .and_then(|pane| pane.cwd.clone())
+        .filter(|cwd| !cwd.trim().is_empty())
+        .or_else(|| {
+            panes
+                .iter()
+                .filter_map(|pane| pane.cwd.clone())
+                .find(|cwd| !cwd.trim().is_empty())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pane(pane_id: &str, cwd: Option<&str>, focused: bool) -> Pane {
+        Pane {
+            pane_id: pane_id.into(),
+            tab_id: None,
+            cwd: cwd.map(str::to_owned),
+            foreground_cwd: None,
+            focused,
+        }
+    }
+
+    #[test]
+    fn pane_path_prefers_the_focused_pane() {
+        let panes = [
+            pane("wX:p1", Some("/root/code/mindmap"), false),
+            pane("wX:p2", Some("/root/code/alzette"), true),
+        ];
+        assert_eq!(pane_path(&panes).as_deref(), Some("/root/code/alzette"));
+    }
+
+    #[test]
+    fn pane_path_falls_back_to_the_first_pane_with_a_cwd() {
+        let panes = [
+            pane("wX:p1", None, false),
+            pane("wX:p2", Some("/root/code/mindmap"), false),
+        ];
+        assert_eq!(pane_path(&panes).as_deref(), Some("/root/code/mindmap"));
+        assert_eq!(pane_path(&[]), None);
     }
 }

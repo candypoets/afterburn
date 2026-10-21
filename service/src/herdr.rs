@@ -75,12 +75,26 @@ pub struct Agent {
     pub focused: bool,
 }
 
-/// A pane, reduced to the fields the tab fallback needs.
+/// One pane from `herdr pane list`.
 #[derive(Clone, Debug, Deserialize)]
-struct Pane {
-    pane_id: String,
+pub struct Pane {
+    /// Stable pane id (`wX:p2`).
+    pub pane_id: String,
+    /// Tab hosting the pane.
     #[serde(default)]
-    tab_id: Option<String>,
+    pub tab_id: Option<String>,
+    /// Working directory of the pane's shell.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Directory of the foreground process, when Herdr knows it.
+    ///
+    /// Parsed with the rest of the pane payload; the path fallback uses `cwd` on purpose.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub foreground_cwd: Option<String>,
+    /// Focused in the user's UI.
+    #[serde(default)]
+    pub focused: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,6 +152,18 @@ impl Herdr {
         Ok(parsed.agents)
     }
 
+    /// List the panes of one workspace.
+    ///
+    /// Used for the cwd fallback (a workspace with no `worktree` still has panes, each with a
+    /// `cwd`) and for finding the pane of a freshly created tab.
+    pub fn panes(&self, workspace_id: &str) -> Result<Vec<Pane>> {
+        let value = self.call(&["pane", "list", "--workspace", workspace_id])?;
+        let parsed: PaneList = serde_json::from_value(value).context(format!(
+            "parse `herdr pane list --workspace {workspace_id}`"
+        ))?;
+        Ok(parsed.panes)
+    }
+
     /// Create a background tab in `workspace_id` at `cwd`, and resolve its first pane.
     pub fn create_tab(&self, workspace_id: &str, cwd: &str) -> Result<CreatedTab> {
         let value = self.call(&[
@@ -191,13 +217,7 @@ impl Herdr {
     pub fn read_screen(&self, pane_id: &str) -> Result<String> {
         let output = Command::new(&self.bin)
             .args([
-                "agent",
-                "read",
-                pane_id,
-                "--source",
-                "visible",
-                "--format",
-                "text",
+                "agent", "read", pane_id, "--source", "visible", "--format", "text",
             ])
             .env("HERDR_ENV", "1")
             .stdin(Stdio::null())
@@ -209,7 +229,10 @@ impl Herdr {
                 ))
             })?;
         if !output.status.success() {
-            return Err(Error::new(herdr_error(&output.stderr, output.status.code())));
+            return Err(Error::new(herdr_error(
+                &output.stderr,
+                output.status.code(),
+            )));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
@@ -233,10 +256,8 @@ impl Herdr {
     }
 
     fn pane_for_tab(&self, workspace_id: &str, tab_id: &str) -> Result<Option<Pane>> {
-        let value = self.call(&["pane", "list", "--workspace", workspace_id])?;
-        let parsed: PaneList = serde_json::from_value(value).context("parse `herdr pane list`")?;
-        Ok(parsed
-            .panes
+        Ok(self
+            .panes(workspace_id)?
             .into_iter()
             .find(|pane| pane.tab_id.as_deref() == Some(tab_id)))
     }

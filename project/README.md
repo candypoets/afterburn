@@ -127,10 +127,14 @@ in `client-workspaces.patch`.
 - **No links**: `mindmap-service` publishes the skeleton, keeps the join link in
   `service/data/projects.json`, and the app joins the returned link through `collab.join`. The
   human never sees it.
-- **Init**: publishes the document, then prompts an agent already in the workspace or starts the
-  first detected CLI (`codex`, `claude`, `kimi`, `opencode`, `gemini`, `cursor`) in a background
-  tab, accepts a first-run folder-trust prompt, and submits the mindmap skill prompt. Verified on
-  a disposable worktree: a fresh codex accepted the prompt.
+- **Init with a choice**: publishes the document, then prompts a chosen agent already in the
+  workspace (`pane:<id>`) or starts a chosen CLI (`kind:<codex>`) in a background tab, accepts a
+  first-run folder-trust prompt, and submits the mindmap skill prompt. Auto still picks the
+  focused/non-blocked agent or the first installed CLI. Verified on disposable worktrees: a fresh
+  codex accepted trust; kimi started by kind; the same kimi prompted by pane.
+- **Adopt**: `mindmap-service adopt <workspace> <file>` publishes an already-built map and marks
+  the workspace ready. Used to give `mindmap` (wX) its first map: "Mindmap · mindmap" with the
+  System, Screens and Product pages (including this picker design).
 - **TCP API** on `47821`: `health`, `workspaces`, `open`, `init` (newline JSON).
 
 Still to come: the model renderer (the agent prompt points at `mindmap render`, which does not

@@ -163,8 +163,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
                                      let resp = ui.add(
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs client-src/crates/ui-egui/src/workspaces.rs
 --- .client-src-orig/crates/ui-egui/src/workspaces.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/workspaces.rs	2026-10-21 20:12:17.241370723 +0200
-@@ -0,0 +1,1057 @@
++++ client-src/crates/ui-egui/src/workspaces.rs	2026-10-21 21:49:50.697530925 +0200
+@@ -0,0 +1,1509 @@
 +//! The Workspaces screen: every Herdr workspace on the project host, with or without a map.
 +//!
 +//! The screen reads the project service over plain TCP (one JSON object per line) on a thread of
@@ -199,6 +199,11 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +const HEADER_H: f32 = 52.0;
 +/// One workspace row.
 +const ROW_H: f32 = 76.0;
++/// The Init split button's height and the chevron segment's width.
++const SPLIT_H: f32 = 34.0;
++const CHEVRON_W: f32 = 32.0;
++/// The agent menu's width (it shrinks to fit a narrow window).
++const PICKER_W: f32 = 360.0;
 +
 +/// How long to wait for a connection to the project service.
 +#[cfg(not(target_arch = "wasm32"))]
@@ -254,6 +259,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    /// The CLIs running in the workspace (`codex`, `dsh`, `claude`, `opencode`), one each.
 +    #[serde(default)]
 +    pub agent_names: Vec<String>,
++    /// Every agent in the workspace, with the pane Init can address.
++    #[serde(default)]
++    pub agents_detail: Vec<AgentDetail>,
 +    #[serde(default)]
 +    pub agent_status: String,
 +    /// The workspace Herdr has focused.
@@ -269,6 +277,66 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    pub tabs: Option<u32>,
 +    #[serde(default)]
 +    pub panes: Option<u32>,
++}
++
++/// One agent in a workspace, as Init may address it.
++#[derive(Clone, Debug, Default, Deserialize)]
++pub struct AgentDetail {
++    /// The Herdr pane the agent lives in (`wX:p2`); Init addresses it as `pane:<pane>`.
++    #[serde(default)]
++    pub pane: String,
++    /// The agent CLI kind (`codex`, `claude`, `kimi`, …).
++    #[serde(default)]
++    pub kind: String,
++    /// Its lifecycle state (`idle`, `working`, `blocked`, `done`, …).
++    #[serde(default)]
++    pub status: String,
++    /// Focused in the user's Herdr UI.
++    #[serde(default)]
++    pub focused: bool,
++}
++
++/// What Init should do: ask an agent already in the workspace, or start a new CLI.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum Target {
++    /// An agent already running in the workspace, addressed by its pane.
++    Existing { pane: String, kind: String, status: String },
++    /// A new agent of this kind.
++    New { kind: String },
++}
++
++impl Target {
++    /// The `target` string the service reads (`pane:wX:p2` or `kind:claude`).
++    pub fn line(&self) -> String {
++        match self {
++            Target::Existing { pane, .. } => format!("pane:{pane}"),
++            Target::New { kind } => format!("kind:{kind}"),
++        }
++    }
++
++    /// The agent kind this target uses.
++    pub fn kind(&self) -> &str {
++        match self {
++            Target::Existing { kind, .. } | Target::New { kind } => kind,
++        }
++    }
++
++    /// What the detail says about the choice: `kimi · idle` or `start claude`.
++    fn summary(&self) -> String {
++        match self {
++            Target::Existing { kind, status, .. } => {
++                let kind = display_kind(kind);
++                let status = status.trim();
++                if status.is_empty() { kind.to_string() } else { format!("{kind} · {status}") }
++            }
++            Target::New { kind } => format!("start {}", display_kind(kind)),
++        }
++    }
++
++    /// Whether this is the agent at `pane`.
++    fn is_at(&self, pane: &str) -> bool {
++        matches!(self, Target::Existing { pane: chosen, .. } if chosen == pane)
++    }
 +}
 +
 +/// What the workspace has: a live map, an empty document, or no document yet.
@@ -318,6 +386,39 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    fn name(&self) -> &str {
 +        if self.label.trim().is_empty() { &self.id } else { &self.label }
 +    }
++
++    /// Whether Init has an agent to ask or a CLI to start.
++    fn has_agents(&self, clis: &[String]) -> bool {
++        !self.agents_detail.is_empty()
++            || self.agents > 0
++            || self.agent_names.iter().any(|name| !name.trim().is_empty())
++            || clis.iter().any(|kind| !kind.trim().is_empty())
++    }
++}
++
++/// The target a freshly selected workspace starts on: its focused agent, else a non-blocked one,
++/// else any agent; with no agent, the first installed CLI; with neither, none (the service chooses).
++fn default_target(w: &Workspace, clis: &[String]) -> Option<Target> {
++    let agent = w
++        .agents_detail
++        .iter()
++        .find(|agent| agent.focused)
++        .or_else(|| w.agents_detail.iter().find(|agent| !is_blocked(&agent.status)))
++        .or_else(|| w.agents_detail.first());
++    if let Some(agent) = agent {
++        return Some(Target::Existing { pane: agent.pane.clone(), kind: agent.kind.clone(), status: agent.status.clone() });
++    }
++    clis.iter().map(|kind| kind.trim()).find(|kind| !kind.is_empty()).map(|kind| Target::New { kind: kind.to_string() })
++}
++
++fn is_blocked(status: &str) -> bool {
++    status.trim().eq_ignore_ascii_case("blocked")
++}
++
++/// An agent kind as shown: the service may not know it.
++fn display_kind(kind: &str) -> &str {
++    let kind = kind.trim();
++    if kind.is_empty() { "agent" } else { kind }
 +}
 +
 +/// What a request from the screen is waiting for.
@@ -333,7 +434,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +#[derive(Clone, Debug)]
 +enum Request {
 +    List,
-+    Act { workspace: String, init: bool },
++    Act { workspace: String, init: bool, target: Option<Target> },
 +}
 +
 +impl Request {
@@ -348,9 +449,16 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    fn line(&self) -> String {
 +        match self {
 +            Request::List => r#"{"id":1,"method":"workspaces"}"#.to_string(),
-+            Request::Act { workspace, init } => {
++            Request::Act { workspace, init, target } => {
 +                let method = if *init { "init" } else { "open" };
-+                serde_json::json!({"id": 2, "method": method, "workspace": workspace}).to_string()
++                let mut request = serde_json::json!({"id": 2, "method": method, "workspace": workspace});
++                // Only Init takes a target, and only when the human (or Retry) chose one.
++                if *init {
++                    if let Some(target) = target {
++                        request["target"] = serde_json::Value::String(target.line());
++                    }
++                }
++                request.to_string()
 +            }
 +        }
 +    }
@@ -358,7 +466,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    fn busy(&self) -> Busy {
 +        match self {
 +            Request::List => Busy::List,
-+            Request::Act { workspace, init } => Busy::Open { workspace: workspace.clone(), init: *init },
++            Request::Act { workspace, init, target } => Busy::Open { workspace: workspace.clone(), init: *init, target: target.clone() },
 +        }
 +    }
 +
@@ -376,7 +484,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +#[derive(Clone, Debug, PartialEq, Eq)]
 +pub enum Busy {
 +    List,
-+    Open { workspace: String, init: bool },
++    Open { workspace: String, init: bool, target: Option<Target> },
 +}
 +
 +impl Busy {
@@ -392,6 +500,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    Action {
 +        workspace: String,
 +        init: bool,
++        /// The same target the failed request used.
++        target: Option<Target>,
 +    },
 +    /// A join that failed; the link is still good until the service says otherwise.
 +    Join(String),
@@ -407,6 +517,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    error: Option<String>,
 +    #[serde(default)]
 +    workspaces: Option<Vec<Workspace>>,
++    /// The agent CLIs installed on the project host, in the service's order.
++    #[serde(default)]
++    clis: Vec<String>,
 +    #[serde(default)]
 +    link: Option<String>,
 +}
@@ -422,6 +535,12 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    pub error: Option<String>,
 +    /// The request in flight, if any.
 +    pub busy: Option<Busy>,
++    /// The agent CLIs installed on the project host, from the last list.
++    pub clis: Vec<String>,
++    /// What Init should use for the selected workspace; `None` lets the service choose.
++    pub target: Option<Target>,
++    /// The Init agent menu is open (it belongs to the screen, not to a row).
++    picker_open: bool,
 +    /// The channel a request's reply arrives on.
 +    rx: Option<Receiver<(Kind, Result<ServiceReply, String>)>>,
 +    /// The link the screen joins now (then shows the map).
@@ -439,8 +558,17 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +            return;
 +        }
 +        self.error = None;
++        self.picker_open = false;
 +        self.retry = Some(Retry::List);
 +        self.start(ctx, Request::List);
++    }
++
++    /// Select `workspace` and put the Init target back on its first agent (or first CLI).
++    pub fn select(&mut self, workspace: &str) {
++        self.selected = Some(workspace.to_string());
++        self.picker_open = false;
++        self.error = None;
++        self.target = self.rows.iter().find(|w| w.id == workspace).and_then(|w| default_target(w, &self.clis));
 +    }
 +
 +    /// Open `workspace`'s map, or Init it, on a thread of its own.
@@ -448,22 +576,69 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +        if self.busy.is_some() {
 +            return;
 +        }
++        // A row's action may name a workspace that isn't selected yet: select it first, so the
++        // target belongs to the workspace Init is about.
++        if self.selected.as_deref() != Some(workspace) {
++            self.select(workspace);
++        }
++        let target = if init { self.target.clone() } else { None };
++        self.act_with(ctx, workspace, init, target);
++    }
++
++    /// Run Open / Init with `target`; Retry comes through here with the failed request's target.
++    fn act_with(&mut self, ctx: &egui::Context, workspace: &str, init: bool, target: Option<Target>) {
++        if self.busy.is_some() {
++            return;
++        }
++        if self.selected.as_deref() != Some(workspace) {
++            self.select(workspace);
++        }
 +        self.selected = Some(workspace.to_string());
++        if init {
++            self.target = target.clone();
++        }
++        self.picker_open = false;
 +        self.error = None;
-+        self.retry = Some(Retry::Action { workspace: workspace.to_string(), init });
-+        self.start(ctx, Request::Act { workspace: workspace.to_string(), init });
++        self.retry = Some(Retry::Action { workspace: workspace.to_string(), init, target: target.clone() });
++        self.start(ctx, Request::Act { workspace: workspace.to_string(), init, target });
 +    }
 +
 +    /// Do again what failed.
 +    pub fn retry(&mut self, ctx: &egui::Context) {
 +        match self.retry.clone() {
-+            Some(Retry::Action { workspace, init }) => self.act(ctx, &workspace, init),
++            Some(Retry::Action { workspace, init, target }) => self.act_with(ctx, &workspace, init, target),
 +            Some(Retry::Join(link)) => {
 +                self.join = Some(link);
 +                ctx.request_repaint();
 +            }
 +            Some(Retry::List) | None => self.refresh(ctx),
 +        }
++    }
++
++    /// Keep the chosen target when a new list still offers it; refresh its status; otherwise fall
++    /// back to the workspace's first agent or CLI.
++    fn reconcile_target(&mut self) {
++        let Some(id) = self.selected.as_deref() else {
++            self.target = None;
++            self.picker_open = false;
++            return;
++        };
++        let Some(w) = self.rows.iter().find(|w| w.id == id) else {
++            self.selected = None;
++            self.target = None;
++            self.picker_open = false;
++            return;
++        };
++        let refreshed = match &self.target {
++            Some(Target::Existing { pane, .. }) => w.agents_detail.iter().find(|agent| &agent.pane == pane).map(|agent| Target::Existing {
++                pane: agent.pane.clone(),
++                kind: agent.kind.clone(),
++                status: agent.status.clone(),
++            }),
++            Some(Target::New { kind }) => self.clis.iter().any(|cli| cli.trim() == kind.trim()).then(|| Target::New { kind: kind.clone() }),
++            None => None,
++        };
++        self.target = refreshed.or_else(|| default_target(w, &self.clis));
 +    }
 +
 +    /// Start `request` on a named thread; its reply wakes the window.
@@ -518,8 +693,12 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +            Kind::List => match result {
 +                Ok(reply) if reply.ok => {
 +                    self.rows = reply.workspaces.unwrap_or_default();
-+                    if self.selected.as_ref().is_some_and(|id| !self.rows.iter().any(|w| &w.id == id)) {
-+                        self.selected = None;
++                    self.clis = reply.clis;
++                    if self.selected.is_none() {
++                        self.target = None;
++                        self.picker_open = false;
++                    } else {
++                        self.reconcile_target();
 +                    }
 +                    self.error = None;
 +                    self.retry = None;
@@ -651,6 +830,14 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    if join_ready(app) {
 +        return;
 +    }
++    // The app's keyboard navigation reserves Tab for the canvas; this screen has no canvas, so
++    // hand Tab back to egui: it moves through the rows, Refresh, the split button and the menu.
++    let step = ui.input(|i| {
++        i.key_pressed(egui::Key::Tab).then_some(if i.modifiers.shift { egui::FocusDirection::Previous } else { egui::FocusDirection::Next })
++    });
++    if let Some(direction) = step {
++        ctx.memory_mut(|memory| memory.move_focus(direction));
++    }
 +    // The first time the screen shows, list the workspaces; Refresh asks again.
 +    if !app.ws.started {
 +        app.ws.started = true;
@@ -753,10 +940,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +                    }
 +                }
 +                match chosen {
-+                    Some(Chosen::Select(id)) => {
-+                        app.ws.selected = Some(id);
-+                        app.ws.error = None;
-+                    }
++                    Some(Chosen::Select(id)) => app.ws.select(&id),
 +                    Some(Chosen::Act { workspace, init }) => app.ws.act(&ctx, &workspace, init),
 +                    None => {}
 +                }
@@ -947,41 +1131,88 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    ui.add_space(18.0);
 +    paragraph(ui, explanation(kind), 13.0, s.muted);
 +
-+    // What Init will do, when the workspace already has an agent to ask.
++    // What Init will do: ask the chosen agent, start a chosen CLI, or let the service choose.
 +    ui.add_space(20.0);
 +    let busy = app.ws.busy.clone();
 +    let busy_here = busy.as_ref().is_some_and(|b| b.for_workspace(&w.id));
-+    let label = action_label(kind, w, busy.as_ref());
++    let init = kind != MapState::Map;
++    let target = if init { app.ws.target.clone() } else { None };
++    let can_init = !init || w.has_agents(&app.ws.clis);
++    let enabled = busy.is_none() && can_init;
++    let menu_available = !w.agents_detail.is_empty() || app.ws.clis.iter().any(|kind| !kind.trim().is_empty());
++    let label = action_label(kind, w, target.as_ref(), busy.as_ref());
++    let split_id = Id::new(("workspace_action", &w.id));
 +    let mut run = false;
++    let mut toggle = false;
++    let mut anchor = None;
 +    ui.horizontal(|ui| {
-+        let width = text_width(ui, &label, semibold(12.5)) + 40.0;
-+        let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
-+        if primary_button(ui, s, Id::new(("workspace_action", &w.id)), rect, &label, !busy_here && busy.is_none()) {
-+            run = true;
++        if init {
++            let width = text_width(ui, &label, semibold(12.5)) + 34.0;
++            let (rect, _) = ui.allocate_exact_size(vec2(width + CHEVRON_W, SPLIT_H), Sense::hover());
++            let split = split_button(ui, s, split_id, rect, &label, enabled, menu_available);
++            run = split.primary;
++            toggle = split.chevron;
++            anchor = Some(split.response);
++        } else {
++            let width = text_width(ui, &label, semibold(12.5)) + 40.0;
++            let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
++            if primary_button(ui, s, split_id, rect, &label, enabled) {
++                run = true;
++            }
 +        }
 +        if w.agents > 0 {
 +            ui.add_space(10.0);
 +            agents_pill(ui, s, w);
 +        }
 +    });
-+    if run {
-+        app.ws.act(&ctx, &w.id, kind != MapState::Map);
++    if toggle {
++        app.ws.picker_open = !app.ws.picker_open;
 +    }
-+    if kind != MapState::Map {
-+        if let Some(agent) = agent_name(w) {
++    if run {
++        app.ws.picker_open = false;
++        app.ws.act(&ctx, &w.id, init);
++    } else if init
++        && app.ws.picker_open
++        && let Some(anchor) = anchor
++    {
++        agent_picker(app, ui, s, w, &anchor);
++    }
++    if init {
++        if !can_init {
 +            ui.add_space(9.0);
-+            ui.label(egui::RichText::new(format!("starts {agent} · already in the workspace")).font(mono(10.5)).color(s.faint));
++            paragraph(
++                ui,
++                "No agent is in this workspace and no agent CLI is installed to start one. Install codex, claude or kimi, then Refresh.",
++                11.0,
++                s.muted,
++            );
++        } else if let Some(target) = target.as_ref() {
++            ui.add_space(9.0);
++            let line = match target {
++                Target::Existing { .. } => format!("{} · already in the workspace", target.summary()),
++                Target::New { .. } => format!("{} · a new agent in the workspace", target.summary()),
++            };
++            ui.label(egui::RichText::new(line).font(mono(10.5)).color(s.faint));
++        } else if let Some(agent) = agent_name(w) {
++            ui.add_space(9.0);
++            ui.label(egui::RichText::new(format!("asks {agent} · already in the workspace")).font(mono(10.5)).color(s.faint));
 +        }
 +    }
 +    if busy_here {
 +        ui.add_space(9.0);
 +        let line = match &busy {
-+            Some(Busy::Open { init: true, .. }) => "The service is starting the agent; the first overview appears when it publishes.",
-+            Some(Busy::Open { init: false, .. }) => "The service is publishing the document…",
-+            _ => "",
++            Some(Busy::Open { init: true, target: Some(Target::New { kind }), .. }) => {
++                format!("The service is starting {}; the first overview appears when it publishes.", display_kind(kind))
++            }
++            Some(Busy::Open { init: true, target: Some(Target::Existing { kind, .. }), .. }) => {
++                format!("The service is asking {}; the first overview appears when it publishes.", display_kind(kind))
++            }
++            Some(Busy::Open { init: true, .. }) => "The service is starting the agent; the first overview appears when it publishes.".to_string(),
++            Some(Busy::Open { init: false, .. }) => "The service is publishing the document…".to_string(),
++            _ => String::new(),
 +        };
 +        if !line.is_empty() {
-+            paragraph(ui, line, 11.5, s.faint);
++            paragraph(ui, &line, 11.5, s.faint);
 +        }
 +    }
 +
@@ -997,16 +1228,27 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +}
 +
 +/// The action's label, including what the service is doing while it works.
-+fn action_label(kind: MapState, w: &Workspace, busy: Option<&Busy>) -> String {
-+    if let Some(Busy::Open { workspace, init }) = busy
++fn action_label(kind: MapState, w: &Workspace, target: Option<&Target>, busy: Option<&Busy>) -> String {
++    if let Some(Busy::Open { workspace, init, target: asking }) = busy
 +        && workspace == &w.id
 +    {
 +        if *init {
-+            return format!("Starting {}…", agent_name(w).unwrap_or("the agent"));
++            return match asking {
++                Some(Target::New { kind }) => format!("Starting {}…", display_kind(kind)),
++                Some(Target::Existing { kind, .. }) => format!("Asking {}…", display_kind(kind)),
++                None => "Starting the agent…".to_string(),
++            };
 +        }
 +        return "Publishing…".to_string();
 +    }
-+    kind.action().to_string()
++    match kind {
++        MapState::Map => kind.action().to_string(),
++        MapState::Empty | MapState::None => match target {
++            Some(Target::Existing { kind, .. }) => format!("Init with {}", display_kind(kind)),
++            Some(Target::New { kind }) => format!("Start {}", display_kind(kind)),
++            None => "Init map".to_string(),
++        },
++    }
 +}
 +
 +fn explanation(kind: MapState) -> &'static str {
@@ -1062,7 +1304,15 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    egui::Frame::NONE.fill(s.soft).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
 +        ui.set_width(ui.available_width());
 +        ui.spacing_mut().item_spacing.y = 2.0;
-+        if w.agent_names.is_empty() {
++        if !w.agents_detail.is_empty() {
++            for agent in &w.agents_detail {
++                agent_row(ui, s, display_kind(&agent.kind), &agent.status, agent.focused);
++            }
++            let unnamed = (w.agents as usize).saturating_sub(w.agents_detail.len());
++            if unnamed > 0 {
++                paragraph(ui, &format!("+{unnamed} other{}", if unnamed == 1 { "" } else { "s" }), 10.5, s.faint);
++            }
++        } else if w.agent_names.is_empty() {
 +            paragraph(
 +                ui,
 +                if w.agents == 0 { "No agents in this workspace." } else { "The workspace has agents; the service did not name them." },
@@ -1071,11 +1321,11 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +            );
 +            if w.map_state() != MapState::Map {
 +                ui.add_space(2.0);
-+                paragraph(ui, "Init starts the first available CLI: codex, dsh, claude or opencode.", 11.0, s.faint);
++                paragraph(ui, "Init starts the selected CLI; choose another with the chevron.", 11.0, s.faint);
 +            }
 +        } else {
 +            for name in &w.agent_names {
-+                agent_row(ui, s, if name.trim().is_empty() { "agent" } else { name }, &w.agent_status);
++                agent_row(ui, s, display_kind(name), &w.agent_status, false);
 +            }
 +            let unnamed = (w.agents as usize).saturating_sub(w.agent_names.len());
 +            if unnamed > 0 {
@@ -1085,9 +1335,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    });
 +}
 +
-+fn agent_row(ui: &mut Ui, s: &Skin, name: &str, status: &str) {
++fn agent_row(ui: &mut Ui, s: &Skin, name: &str, status: &str, focused: bool) {
 +    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
-+    ui.painter().circle_filled(pos2(rect.min.x + 3.0, rect.center().y), 3.0, status_color(status, s));
++    let dot = pos2(rect.min.x + 3.0, rect.center().y);
++    ui.painter().circle_filled(dot, 3.0, status_color(status, s));
++    if focused {
++        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, s.map_ink));
++    }
 +    ui.painter().text(pos2(rect.min.x + 13.0, rect.center().y), Align2::LEFT_CENTER, name, semibold(11.5), s.text);
 +    if !status.trim().is_empty() && !status.eq_ignore_ascii_case("unknown") {
 +        ui.painter().text(pos2(rect.max.x, rect.center().y), Align2::RIGHT_CENTER, status, mono(10.0), s.faint);
@@ -1182,6 +1436,204 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(12.5), ink);
 +    focus_ring(ui, s, rect, &resp, 6);
 +    resp.clicked() && enabled
++}
++
++/// What the Init split button did this frame.
++struct SplitClick {
++    primary: bool,
++    chevron: bool,
++    /// The whole split, for anchoring the agent menu below it.
++    response: Response,
++}
++
++/// The primary Init button with its narrower, darker chevron segment. Both are 34 px tall.
++fn split_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool, menu: bool) -> SplitClick {
++    let seam = rect.max.x - CHEVRON_W;
++    let main = Rect::from_min_max(rect.min, pos2(seam, rect.max.y));
++    let chevron = Rect::from_min_max(pos2(seam, rect.min.y), rect.max);
++    let whole = ui.interact(rect, id.with("whole"), Sense::hover());
++    let main_resp = ui.interact(main, id.with("init"), if enabled { Sense::click() } else { Sense::hover() });
++    let menu_enabled = enabled && menu;
++    let menu_resp = ui.interact(chevron, id.with("menu"), if menu_enabled { Sense::click() } else { Sense::hover() });
++    a11y::button(&main_resp, label);
++    a11y::button(&menu_resp, "Choose the agent for Init");
++
++    let hot = enabled && main_resp.hovered();
++    let menu_hot = menu_enabled && menu_resp.hovered();
++    let main_fill = if !enabled {
++        s.soft
++    } else if hot {
++        s.accent_hover
++    } else {
++        s.accent
++    };
++    let menu_fill = if !menu_enabled {
++        s.soft
++    } else if menu_hot {
++        darken(s.accent_hover, 0.90)
++    } else {
++        darken(s.accent, 0.82)
++    };
++    let main_ink = if enabled { Color32::WHITE } else { s.faint };
++    let menu_ink = if menu_enabled { Color32::WHITE } else { s.faint };
++    ui.painter().rect_filled(main, CornerRadius { nw: 6, ne: 0, sw: 6, se: 0 }, main_fill);
++    ui.painter().rect_filled(chevron, CornerRadius { nw: 0, ne: 6, sw: 0, se: 6 }, menu_fill);
++    ui.painter().text(main.center(), Align2::CENTER_CENTER, label, semibold(12.5), main_ink);
++
++    // The downward chevron is drawn, not a glyph, so it never depends on the font.
++    let c = chevron.center() + vec2(0.0, 0.5);
++    ui.painter().add(egui::Shape::convex_polygon(
++        vec![pos2(c.x - 4.0, c.y - 2.0), pos2(c.x + 4.0, c.y - 2.0), pos2(c.x, c.y + 2.5)],
++        menu_ink,
++        Stroke::NONE,
++    ));
++    focus_ring(ui, s, main, &main_resp, 6);
++    focus_ring(ui, s, chevron, &menu_resp, 6);
++    SplitClick { primary: enabled && main_resp.clicked(), chevron: menu_enabled && menu_resp.clicked(), response: whole }
++}
++
++/// The Init agent picker: an egui popup anchored below the split button. Clicking a row closes it,
++/// and egui's popup handling closes it on a click outside or Escape; it re-aligns to stay in the
++/// window. No native window is involved.
++fn agent_picker(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace, anchor: &Response) {
++    let mut open = app.ws.picker_open;
++    let chosen = app.ws.target.clone();
++    let clis = app.ws.clis.clone();
++    let ctx = ui.ctx().clone();
++    let id = Id::new(("workspace_action", &w.id)).with("menu").with("popup");
++    let width = PICKER_W.min((ctx.content_rect().width() - 24.0).max(120.0));
++    let frame = egui::Frame::NONE
++        .fill(s.panel)
++        .stroke(Stroke::new(1.0, s.border))
++        .corner_radius(CornerRadius::same(8))
++        .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(38) })
++        .inner_margin(egui::Margin::symmetric(12, 11));
++    let mut picked = None;
++    egui::Popup::new(id, ctx, anchor, anchor.layer_id)
++        .width(width)
++        .gap(6.0)
++        .align(egui::RectAlign::BOTTOM_START)
++        .frame(frame)
++        .open_bool(&mut open)
++        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
++        .show(|ui| {
++            picked = picker_body(ui, s, w, chosen.as_ref(), &clis);
++        });
++    if let Some(target) = picked {
++        app.ws.target = Some(target);
++        open = false;
++    }
++    app.ws.picker_open = open;
++}
++
++/// The picker's contents; a click on an existing agent or a CLI returns the target it picked.
++fn picker_body(ui: &mut Ui, s: &Skin, w: &Workspace, chosen: Option<&Target>, clis: &[String]) -> Option<Target> {
++    let mut picked = None;
++    ui.set_width(ui.available_width());
++    ui.spacing_mut().item_spacing = vec2(6.0, 2.0);
++    eyebrow(ui, s, "AGENTS IN THIS WORKSPACE");
++    ui.add_space(1.0);
++    if w.agents_detail.is_empty() {
++        paragraph(ui, "No agents in this workspace yet.", 11.0, s.muted);
++    } else {
++        for agent in &w.agents_detail {
++            let selected = chosen.is_some_and(|target| target.is_at(&agent.pane));
++            if picker_agent_row(ui, s, agent, selected) {
++                picked = Some(Target::Existing { pane: agent.pane.clone(), kind: agent.kind.clone(), status: agent.status.clone() });
++            }
++        }
++    }
++
++    ui.add_space(5.0);
++    divider(ui, s);
++    ui.add_space(5.0);
++    eyebrow(ui, s, "START A NEW AGENT");
++    ui.add_space(1.0);
++    let clis: Vec<&str> = clis.iter().map(|kind| kind.trim()).filter(|kind| !kind.is_empty()).collect();
++    if clis.is_empty() {
++        paragraph(ui, "No agent CLIs installed on the project host.", 11.0, s.muted);
++    } else {
++        ui.horizontal_wrapped(|ui| {
++            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
++            for kind in clis {
++                let selected = matches!(chosen, Some(Target::New { kind: chosen }) if chosen.trim().eq_ignore_ascii_case(kind));
++                if picker_chip(ui, s, kind, selected) {
++                    picked = Some(Target::New { kind: kind.to_string() });
++                }
++            }
++        });
++    }
++    ui.add_space(9.0);
++    paragraph(ui, "The agent reads the repo and draws; 6–12 areas, every card sourced.", 10.5, s.faint);
++    picked
++}
++
++fn picker_agent_row(ui: &mut Ui, s: &Skin, agent: &AgentDetail, chosen: bool) -> bool {
++    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
++    let kind = display_kind(&agent.kind);
++    let status = agent.status.trim();
++    a11y::button(&resp, &if status.is_empty() { kind.to_string() } else { format!("{kind} · {status}") });
++    let hot = resp.hovered() || resp.has_focus();
++    if chosen || hot {
++        let fill = if chosen { s.selected } else { s.soft };
++        ui.painter().rect_filled(rect.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), fill);
++    }
++    let dot = pos2(rect.min.x + 8.0, rect.center().y);
++    ui.painter().circle_filled(dot, 3.0, status_color(status, s));
++    if agent.focused {
++        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, s.map_ink));
++    }
++    ui.painter().text(pos2(rect.min.x + 18.0, rect.center().y), Align2::LEFT_CENTER, kind, semibold(11.5), s.text);
++    if !status.is_empty() && !status.eq_ignore_ascii_case("unknown") {
++        let trail = if chosen { 22.0 } else { 8.0 };
++        ui.painter().text(pos2(rect.max.x - trail, rect.center().y), Align2::RIGHT_CENTER, status, mono(10.0), s.faint);
++    }
++    if chosen {
++        let c = pos2(rect.max.x - 10.0, rect.center().y);
++        let stroke = Stroke::new(1.6, s.accent);
++        ui.painter().line_segment([pos2(c.x - 4.0, c.y), pos2(c.x - 1.0, c.y + 3.5)], stroke);
++        ui.painter().line_segment([pos2(c.x - 1.0, c.y + 3.5), pos2(c.x + 4.5, c.y - 4.0)], stroke);
++    }
++    focus_ring(ui, s, rect.shrink2(vec2(4.0, 1.0)), &resp, 5);
++    resp.clicked()
++}
++
++fn picker_chip(ui: &mut Ui, s: &Skin, kind: &str, chosen: bool) -> bool {
++    let label = display_kind(kind);
++    let width = text_width(ui, label, semibold(10.5)) + 22.0;
++    let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
++    a11y::button(&resp, label);
++    let hot = resp.hovered() || resp.has_focus();
++    let fill = if chosen {
++        with_alpha(s.accent, if s.panel == Color32::WHITE { 12 } else { 28 })
++    } else if hot {
++        s.soft
++    } else {
++        Color32::TRANSPARENT
++    };
++    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
++    let border = if chosen {
++        s.accent
++    } else if hot {
++        with_alpha(s.accent, 140)
++    } else {
++        s.border
++    };
++    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, border), StrokeKind::Inside);
++    let ink = if chosen || hot { s.accent } else { s.text };
++    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(10.5), ink);
++    focus_ring(ui, s, rect, &resp, 5);
++    resp.clicked()
++}
++
++fn divider(ui: &mut Ui, s: &Skin) {
++    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
++    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, s.border));
++}
++
++fn darken(color: Color32, factor: f32) -> Color32 {
++    let factor = factor.clamp(0.0, 1.0);
++    Color32::from_rgb((color.r() as f32 * factor) as u8, (color.g() as f32 * factor) as u8, (color.b() as f32 * factor) as u8)
 +}
 +
 +fn secondary_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
