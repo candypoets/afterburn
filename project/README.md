@@ -68,6 +68,52 @@ in map mode refuses every history command except `comment.*` (implemented). The 
 (creating a thread on a selection, reading replies) is the next UI piece; today the guard allows
 the commands but the panel is still hidden.
 
+
+## Herdr is the inventory (the new shape)
+
+A **workspace is the project**, not the other way round:
+
+- Mindmap lists the Herdr workspaces on the host(s) — label, repo/worktree path, agents and their
+  states — including workspaces that have no map yet.
+- A map is attached to a workspace by identity (`host` + worktree path + branch), not by a link.
+  No map → the canvas shows an empty state with **Init map**.
+- **Init** picks the agent: if the workspace has one, prompt it; if not, start the first available
+  CLI (`codex`, `dsh`, `claude`, `opencode`) in a new pane and prompt that.
+- If a Herdr daemon is already running on the host, the service **attaches to it read-only for
+  listing** and starts agents in it only on Init. If none runs, it starts the bundled one. The
+  private session stays for servers that have no user Herdr, so the two never collide.
+- Remote hosts are Herdr's saved SSH machines: the service lists them per host, and the client
+  shows one merged list.
+
+## Agents write models; the service draws
+
+The agent does not push hundreds of nodes into FigCraft. It writes a **model** and the service
+renders it, the same way `design/build_map.py` does today:
+
+```
+agent: read repo → write .mindmap/model.json → run `mindmap render` → look at the PNG → iterate
+service: validate sources → build components/anchors/pages → publish to the project document
+```
+
+That keeps quality (components, slots, anchors, layout) in code we control, keeps layer ids out of
+the agent's context, and makes the map updatable: a code change means re-reading the repo, editing
+the model, and rendering again. The **mindmap skill** (`skills/mindmap/SKILL.md`) is the contract
+for that model: what an area is, how many, what a source must be, when to open a detail page.
+
+## Init flow, end to end
+
+```
+workspace selected (Herdr) ─▶ project record (host + worktree + branch)
+  ├─ document exists?  no → publish an empty page (the empty state lives in the canvas)
+  ├─ agent in the workspace?  no → start the first detected CLI
+  └─ prompt: "use the mindmap skill on this repo; model at .mindmap/model.json;
+             render into project <id>; stop when the overview has 6–12 sourced areas"
+```
+
+The client shows the Init button while the model is empty, and the agent's state
+(`working / blocked / idle / done`) in the bar. The first map appears page by page as the agent
+renders; comments and questions work from the first card.
+
 ## Milestones
 
 1. **Project service + auto-join** — folder → skeleton document → client opens it, no links.
