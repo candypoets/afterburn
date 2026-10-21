@@ -111,6 +111,7 @@ def build():
                 10, K.MONO, "Regular", K.MUTED, w=900, name="Footer")
     doc.place(page, footer, 64, 780)
     build_screens(doc)
+    build_product(doc)
     return doc, page
 
 
@@ -152,6 +153,180 @@ def main():
         s.close()
 
 
+
+
+# --- product screens ------------------------------------------------------------
+
+def _appbar(w, workspace, tabs=None, active=None, people=("JL", "MK", "TS"), live=3):
+    tab_nodes = []
+    x = 460
+    for name in tabs or []:
+        tab_nodes.append(_ui(name, 12, K.SANS, "Medium", UI_ACCENT if name == active else UI_MUTED,
+                             name="tab " + name, x=x, y=21))
+        if name == active:
+            tab_nodes.append(F("underline", x=x, y=52, w=len(name) * 6.4, h=2, fill=UI_ACCENT))
+        x += len(name) * 7 + 26
+    avatars = []
+    x = w - 250
+    for initials in people:
+        avatars.append(F("Avatar " + initials,
+                         _ui(initials, 9, K.MONO, "Medium", "#FFFFFF", name="initials", x=6, y=5),
+                         x=x, y=16, w=22, h=22, fill="#6B4E8C", radius=11))
+        x += 18
+    return F(
+        "App bar",
+        _ui("Mindmap", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=19),
+        _ui(f"Herdr  /  {workspace}", 11, K.MONO, "Regular", UI_MUTED, name="crumb", x=112, y=22),
+        *tab_nodes,
+        _ui("befree", 10, K.MONO, "Regular", UI_MUTED, name="machine", x=w - 330, y=22),
+        *avatars,
+        *([_ui(f"{live} live", 10, K.MONO, "Medium", "#2F6F6A", name="live", x=w - 160, y=22)] if live else []),
+        F("Share", _ui("Share", 11, K.SANS, "Medium", "#FFFFFF", name="label", x=14, y=7),
+          x=w - 96, y=14, w=72, h=28, fill=UI_TEXT, radius=6),
+        F("line", x=0, y=55, w=w, h=1, fill=UI_BORDER),
+        x=0, y=0, w=w, h=56, fill=UI_PANEL, effects=[shadow(y=2, blur=10, color="#00000010")])
+
+
+def _ws_row(y, name, path, agents, map_state, selected=False):
+    return F(
+        "Workspace " + name,
+        _ui(name, 13, K.SANS, "Medium", UI_TEXT, name="name", x=16, y=10),
+        _ui(path, 9, K.MONO, "Regular", UI_MUTED, w=190, name="path", x=16, y=28),
+        _ui(f"{agents} agent{'s' if agents != 1 else ''}" if agents else "no agent", 9, K.MONO,
+            "Regular", UI_MUTED, name="agents", x=16, y=44),
+        _ui(map_state, 9, K.MONO, "Medium", UI_ACCENT if map_state == "INIT" else "#2F6F6A",
+            name="map", x=236, y=10),
+        x=0, y=y, w=300, h=64, fill=UI_SOFT if selected else UI_PANEL)
+
+
+def _screen_workspaces():
+    f = F("Workspaces", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f.add(
+        _appbar(980, "Workspaces", live=0, people=()),
+        F("Sidebar", x=0, y=56, w=300, h=564, fill=UI_PANEL, stroke=UI_BORDER),
+        _ui("WORKSPACES · BEFREE", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=16, y=72),
+        _ws_row(96, "mindmap", "/root/code/mindmap", 2, "MAP", selected=True),
+        _ws_row(162, "eisledger", "/root/code/eisledger", 1, "INIT"),
+        _ws_row(228, "nuts-cash", "/root/code/nuts-cash", 0, "MAP"),
+        _ws_row(294, "worktree-jev", "~/.herdr/worktrees/…/worktree-jev", 3, "MAP"),
+        _ui("SELECTED WORKSPACE", 9, K.MONO, "Medium", UI_MUTED, name="eyebrow", ls=3, x=328, y=84),
+        _ui("mindmap", 26, K.SANS, "Medium", UI_TEXT, name="title", x=328, y=102),
+        _ui("/root/code/mindmap  ·  main  ·  2 agents working", 11, K.MONO, "Regular", UI_MUTED,
+            name="meta", x=328, y=140),
+        _ui("The map is attached to the workspace, not to a link. Open it, or ask the agents "
+           "already in the workspace.", 12.5, K.SANS, "Regular", UI_MUTED, w=600, name="body",
+            lh=18, x=328, y=170),
+        F("Open map", _ui("Open map", 11, K.SANS, "Medium", "#FFFFFF", name="label", x=18, y=8),
+          x=328, y=214, w=110, h=32, fill=UI_TEXT, radius=6),
+        F("Agents", _ui("2 agents · working", 11, K.SANS, "Medium", UI_TEXT, name="label", x=16, y=8),
+          x=448, y=214, w=150, h=32, fill=UI_PANEL, stroke=UI_BORDER, radius=6),
+        F("Hint", _ui("No map yet? The row says INIT — open it and press Init map.",
+                      11, K.SANS, "Regular", UI_MUTED, w=540, name="hint", x=16, y=12),
+          x=328, y=300, w=600, h=54, fill=UI_SOFT, radius=8))
+    return f
+
+
+def _screen_empty():
+    f = F("Empty map", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f.add(
+        _appbar(980, "eisledger", live=1, people=("JL",)),
+        F("Empty state",
+          _ui("NO MAP YET", 9, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=4, x=28, y=24),
+          _ui("Init the map for eisledger", 24, K.SANS, "Medium", UI_TEXT, name="title", x=28, y=48),
+          _ui("/root/code/eisledger · main · no agent in the workspace", 11, K.MONO, "Regular",
+              UI_MUTED, name="meta", x=28, y=86),
+          _ui("Init starts an agent with the mindmap skill: it reads the repository, names the "
+             "areas, and renders the first overview. You can comment while it works.",
+             12.5, K.SANS, "Regular", UI_MUTED, w=456, name="body", lh=18, x=28, y=112),
+          F("Init map", _ui("Init map", 12, K.SANS, "Medium", "#FFFFFF", name="label", x=20, y=9),
+            x=28, y=174, w=112, h=34, fill=UI_ACCENT, radius=6),
+          _ui("starts codex · detected on this host", 10, K.MONO, "Regular", UI_MUTED, name="hint",
+              x=28, y=220),
+          x=230, y=140, w=520, h=280, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
+          effects=[shadow(y=6, blur=18, color="#00000014")]),
+        _ui("READ THE REPO  →  NAME 6–12 AREAS  →  RENDER THE OVERVIEW", 9, K.MONO, "Medium",
+            UI_MUTED, name="steps", ls=2, x=230, y=470))
+    return f
+
+
+def _screen_init():
+    f = F("Init running", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f.add(
+        _appbar(980, "eisledger", tabs=["Overview"], active="Overview"),
+        _ui("Agent working · codex · reading crates/engine/src", 11, K.MONO, "Regular", UI_TEXT,
+            name="status", x=28, y=84),
+        F("Ghost 1", _ui("Reading the repository…", 12, K.SANS, "Regular", UI_MUTED, x=16, y=14),
+          F("b1", x=16, y=46, w=190, h=8, fill="#E7E5E1", radius=3),
+          F("b2", x=16, y=62, w=150, h=8, fill="#E7E5E1", radius=3),
+          F("b3", x=16, y=78, w=100, h=8, fill="#E7E5E1", radius=3),
+          x=28, y=116, w=300, h=120, fill=UI_SOFT, stroke=UI_BORDER, radius=8),
+        F("Ghost 2", _ui("Naming areas…", 12, K.SANS, "Regular", UI_MUTED, x=16, y=14),
+          F("b1", x=16, y=46, w=170, h=8, fill="#E7E5E1", radius=3),
+          F("b2", x=16, y=62, w=130, h=8, fill="#E7E5E1", radius=3),
+          F("b3", x=16, y=78, w=80, h=8, fill="#E7E5E1", radius=3),
+          x=344, y=116, w=300, h=120, fill=UI_SOFT, stroke=UI_BORDER, radius=8),
+        F("Progress",
+          _ui("INIT · 01 / 03", 9, K.MONO, "Medium", UI_ACCENT, name="step", ls=4, x=16, y=12),
+          _ui("Read the repository and plan the overview. Pages appear as they render.",
+             11.5, K.SANS, "Regular", UI_TEXT, w=740, name="text", lh=16, x=16, y=30),
+          x=28, y=500, w=924, h=64, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
+          effects=[shadow(y=4, blur=14, color="#00000010")]),
+        F("Stop", _ui("Stop", 11, K.SANS, "Medium", UI_TEXT, name="label", x=16, y=8),
+          x=852, y=514, w=78, h=30, fill=UI_PANEL, stroke=UI_BORDER, radius=6))
+    return f
+
+
+def _screen_map():
+    f = F("Map and comments", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f.add(
+        _appbar(980, "mindmap", tabs=["Overview", "Components", "Handoff"], active="Overview", live=3),
+        _canvas_card(24, 80, 1, "Canvas and layers", "One node tree holds the design; the canvas is how you read it.", "Overview", "doc/node.rs:3"),
+        _canvas_card(336, 80, 2, "Components", "A subtree with identity; an instance remembers it and what changed.", "Components", "components.rs:1"),
+        F("Selection", x=18, y=74, w=312, h=164, fill=None, stroke=UI_ACCENT, sw=2, radius=10),
+        _canvas_card(24, 248, 3, "Auto layout", "Frames size themselves; children follow rules.", "Layout", "layout/lib.rs:3"),
+        _canvas_card(336, 248, 4, "Text", "Fonts, shaping, bidi and line layout.", "Text", "text/lib.rs:3"),
+        F("Thread",
+          F("Avatar", _ui("JL", 9, K.MONO, "Medium", "#FFFFFF", name="initials", x=6, y=5),
+            x=14, y=14, w=22, h=22, fill="#6B4E8C", radius=11),
+          _ui("Why does this rebuild every instance?", 11.5, K.SANS, "Medium", UI_TEXT, w=226,
+              name="question", lh=16, x=46, y=16),
+          _ui("Because the main rebuilds its copies and re-applies overrides — components.rs:5.",
+              11, K.SANS, "Regular", UI_MUTED, w=226, name="reply", lh=16, x=46, y=48),
+          F("Rule", x=46, y=104, w=226, h=1, fill=UI_BORDER),
+          _ui("Reply…", 11, K.SANS, "Regular", "#9A9791", name="field", x=46, y=114),
+          x=640, y=90, w=300, h=170, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
+          effects=[shadow(y=6, blur=18, color="#00000018")]),
+        _ask(980, "Ask about a card, or describe the change…"))
+    return f
+
+
+def build_product(doc):
+    page = doc.page("Product", bg=K.BG)
+    doc.place(page, K.heading(
+        "The workspace client",
+        "Herdr is the list of projects. A map is optional, Init gives it a first agent, and the "
+        "human only selects, comments and asks.", w=2000), 64, 56)
+    doc.place(page, _ui("01 · WORKSPACES — every Herdr workspace, with or without a map", 10, K.MONO, "Medium", K.MUTED, name="c1", ls=3), 64, 222)
+    doc.place(page, _ui("02 · EMPTY — Init starts the first agent and the overview", 10, K.MONO, "Medium", K.MUTED, name="c2", ls=3), 1092, 222)
+    doc.place(page, _ui("03 · INIT — pages appear as the agent renders them", 10, K.MONO, "Medium", K.MUTED, name="c3", ls=3), 64, 902)
+    doc.place(page, _ui("04 · MAP — select, comment, ask; pages and people in the bar", 10, K.MONO, "Medium", K.MUTED, name="c4", ls=3), 1092, 902)
+    doc.place(page, _screen_workspaces(), 64, 250)
+    doc.place(page, _screen_empty(), 1092, 250)
+    doc.place(page, _screen_init(), 64, 930)
+    doc.place(page, _screen_map(), 1092, 930)
+
+    rules = Vt(
+        _ui("FIVE RULES", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=4),
+        _ui("1  Herdr workspaces are the projects; a map is optional.   2  No links: the service "
+            "joins the client.   3  Humans select, comment, ask — never edit.", 12, K.SANS, "Regular",
+            UI_TEXT, w=1900, name="one", lh=17),
+        _ui("4  Agents write a model; the service renders components, pages and sources.   "
+            "5  Pages are altitudes; a card can link to one.", 12, K.SANS, "Regular", UI_TEXT,
+            w=1900, name="two", lh=17),
+        gap=6, pad=22, w=2008, fill=UI_PANEL, stroke=UI_BORDER, radius=10, name="Rules")
+    doc.place(page, rules, 64, 1590)
+    doc.place(page, F("spacer", x=0, y=0, w=1, h=48, fill=None), 64, 1720)
+    return page
 
 
 # --- screens page ---------------------------------------------------------------
