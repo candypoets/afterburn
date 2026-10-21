@@ -34,6 +34,14 @@ looked at and argued with.
 **Components** — every main: `Branch`, `Leaf`, `Stage`, `Surfaces`, `Root`, `Arrow`. Edit a main
 and every page follows.
 
+## The system design
+
+A second, single-page design on the same 0.7.0 server: **"Mindmap · system"**. It draws the shape we
+are building — the Mac client over Tailscale, one host service, the document plane and the
+execution plane (the private Herdr) in the same process, and what a user installs versus what they
+never see. `design/build_system.py` builds and publishes it; it can be opened on the Mac through
+the app's control channel and `ui.render`.
+
 ## Click, then ask
 
 The part that makes this more than a document is `design/context.py`. Given a selected layer — in
@@ -120,6 +128,7 @@ design/
   fc.py            the minimal .figcraft writer (frames, auto layout, text)
   sources.py       anchor resolution, repo statistics, revision
   build_map.py     assemble pages, create components, place instances, publish
+  build_system.py  build and publish the system design
   context.py       the context bundle for a selected layer
   check_anchors.py resolve and print every anchor
 ```
