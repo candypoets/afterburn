@@ -1,0 +1,19 @@
+[Unit]
+Description=Mindmap project service (Herdr workspaces to FigCraft documents)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/code/mindmap/service
+Environment=HERDR_ENV=1
+Environment=MINDMAP_SERVER=100.104.9.15:47910
+# Bind the tailnet address, not the LAN: the service has no auth yet.
+Environment=MINDMAP_BIND=100.104.9.15:47821
+ExecStart=/root/code/mindmap/service/target/release/mindmap-service serve
+Restart=on-failure
+RestartSec=2
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

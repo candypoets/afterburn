@@ -21,3 +21,5 @@ client-src/
 .scratch/
 service/target/
 service/data/
+
+.ws-test/

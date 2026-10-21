@@ -1,0 +1,1224 @@
+diff -ruN --exclude target .client-src-orig/apps/figcraft/src/args.rs client-src/apps/figcraft/src/args.rs
+--- .client-src-orig/apps/figcraft/src/args.rs	2026-10-19 15:50:23.000000000 +0200
++++ client-src/apps/figcraft/src/args.rs	2026-10-21 20:08:10.764564203 +0200
+@@ -1,4 +1,5 @@
+-//! The command line: `figcraft [--control <port>] [--automation-read-root <dir>]…
++//! The command line: `figcraft [--control <port>] [--service <address>]
++//! [--automation-read-root <dir>]…
+ //! [--automation-write-root <dir>]… [files…] [figcraft://join?…]`. An invite link
+ //! (what the system passes when a `figcraft://` link is opened) joins that session once the window
+ //! is up; everything else that isn't a flag is a file to open, as a path or a `file://` URL (the
+@@ -11,6 +12,8 @@
+ pub struct Args {
+     /// `--control <port>`: the JSON-lines control server.
+     pub control: Option<u16>,
++    /// `--service <address>`: the project service the Workspaces screen reads (map mode).
++    pub service: Option<String>,
+     pub files: Vec<String>,
+     /// The last invite link given.
+     pub join: Option<String>,
+@@ -71,6 +74,8 @@
+         };
+         if let Some(roots) = roots {
+             roots.push(inline.or_else(|| it.next().cloned()).unwrap_or_default());
++        } else if flag == "--service" {
++            out.service = inline.or_else(|| it.next().cloned());
+         } else if a == "--control" {
+             out.control = it.next().and_then(|p| p.parse().ok());
+         } else if is_invite(a) {
+diff -ruN --exclude target .client-src-orig/apps/figcraft/src/args_tests.rs client-src/apps/figcraft/src/args_tests.rs
+--- .client-src-orig/apps/figcraft/src/args_tests.rs	2026-10-19 15:50:23.000000000 +0200
++++ client-src/apps/figcraft/src/args_tests.rs	2026-10-21 20:08:24.532385820 +0200
+@@ -17,6 +17,16 @@
+ }
+ 
+ #[test]
++fn the_project_service_address_is_an_option_not_a_file() {
++    assert_eq!(parse(&args(&["--service", "100.104.9.15:47821"])).service.as_deref(), Some("100.104.9.15:47821"));
++    let a = parse(&args(&["--service=127.0.0.1:1", "a.figcraft"]));
++    assert_eq!(a.service.as_deref(), Some("127.0.0.1:1"));
++    assert_eq!(a.files, args(&["a.figcraft"]));
++    // Without a value it isn't an address (the default applies), and it isn't a file either.
++    assert_eq!(parse(&args(&["--service"])), Args::default());
++}
++
++#[test]
+ fn automation_roots_repeat_and_are_never_files() {
+     let a = parse(&args(&["--automation-read-root", "in", "--automation-write-root=out", "--automation-read-root=more", "a.figcraft"]));
+     assert_eq!(a.read_roots, args(&["in", "more"]));
+diff -ruN --exclude target .client-src-orig/apps/figcraft/src/main.rs client-src/apps/figcraft/src/main.rs
+--- .client-src-orig/apps/figcraft/src/main.rs	2026-10-21 19:30:38.000000000 +0200
++++ client-src/apps/figcraft/src/main.rs	2026-10-21 20:16:33.458051064 +0200
+@@ -1,12 +1,15 @@
+ //! FigCraft desktop app.
+ //!
+-//! Usage: `figcraft [--control <port>] [files…] [figcraft://join?…]` (an invite link joins that
++//! Usage: `figcraft [--control <port>] [--service <address>] [files…] [figcraft://join?…]` (an invite link joins that
+ //! live session; the app registers itself as the opener of such links: `collab.registerLinks`).
+ //!
+ //! `--control <port>` (or `FIGCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
+ //! `{"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":0,"y":0,"width":100,"height":100}}}`
+ //! → `{"id":1,"ok":true,"result":{…}}`. Methods: `figcraft_ui_egui::control`.
+ //!
++//! `--service <address>` (or `MINDMAP_SERVICE`) is the project service the map client's Workspaces
++//! screen reads; launched with `open --args`, the Mac app gets it this way.
++//!
+ //! `--automation-read-root <dir>` / `--automation-write-root <dir>` (each repeatable) confine the
+ //! files the window and the control channel read and write (`figcraft_engine::file_access`); the
+ //! app's own folders (settings, recovery copies, installed plugins) and opening the files given on
+@@ -137,10 +140,13 @@
+     let args = args::parse(&args);
+     if let Some(flag) = args.unknown.first() {
+         eprintln!(
+-            "FigCraft: unknown option {flag}\nUsage: figcraft [--control PORT] [--automation-read-root DIR]... [--automation-write-root DIR]... [FILE | figcraft://join?...]..."
++            "FigCraft: unknown option {flag}\nUsage: figcraft [--control PORT] [--service ADDRESS] [--automation-read-root DIR]... [--automation-write-root DIR]... [FILE | figcraft://join?...]..."
+         );
+         std::process::exit(2);
+     }
++    if let Some(service) = &args.service {
++        figcraft_ui_egui::workspaces::set_service(service);
++    }
+     let roots = match (
+         args.read_roots.is_empty() && args.write_roots.is_empty(),
+         figcraft_engine::file_access::Roots::new(&args.read_roots, &args.write_roots),
+@@ -209,7 +215,7 @@
+     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
+     let mut fig = FigApp::new(session, Box::new(svc));
+     fig.automation_roots = roots;
+-    fig.ui.home = false;
++    fig.ui.home = figcraft_ui_egui::map_mode() && args.join.is_none();
+     // Files named on the command line are the user's too: their missing fonts are listed.
+     fig.ui.font_checks = opened;
+     fig.note_recovered(recovered.copies);
+diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
+--- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-21 20:14:50.183389142 +0200
+@@ -94,6 +94,7 @@
+ pub mod versions;
+ pub mod widgets;
+ pub mod windows;
++pub mod workspaces;
+ 
+ #[cfg(test)]
+ mod theme_startup_tests;
+@@ -643,7 +644,7 @@
+             shortcuts_tab: figcraft_engine::keymap::Group::Essential,
+             shortcuts_query: String::new(),
+             opacity_digit: None,
+-            home: false,
++            home: map_mode(),
+             home_view: home::Home::default(),
+             title_bar: TitleBar::Native,
+             icon_gallery: false,
+@@ -717,6 +718,8 @@
+ pub struct FigApp {
+     pub session: Session,
+     pub ui: UiState,
++    /// The Workspaces screen (map mode's home): the listed Herdr workspaces and its requests.
++    pub ws: workspaces::State,
+     pub canvas: canvas::CanvasState,
+     pub services: Box<dyn Services>,
+     worker: Option<render_worker::Worker>,
+@@ -763,6 +766,7 @@
+         let pages_height = session.prefs.pages_height;
+         Self {
+             ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
++            ws: workspaces::State::default(),
+             session,
+             canvas: canvas::CanvasState::default(),
+             services,
+@@ -1489,7 +1493,13 @@
+             return;
+         }
+         if !self.has_files() || self.ui.home {
+-            home::show(self, ui);
++            // Map mode browses the projects themselves: Herdr workspaces, with or without a map.
++            // The design app keeps its FigCraft home.
++            if map_mode {
++                workspaces::show(self, ui);
++            } else {
++                home::show(self, ui);
++            }
+             // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
+             // (cleared after the home widgets, which may have just asked for it).
+             self.ui.shortcuts_panel = false;
+@@ -1590,6 +1600,18 @@
+                         .show(ui, |ui| {
+                             ui.spacing_mut().item_spacing = egui::vec2(14.0, 4.0);
+                             ui.horizontal(|ui| {
++                                // Back to the workspace browser (Herdr's projects); the page tabs
++                                // stay as they are.
++                                if ui
++                                    .add(
++                                        egui::Button::new(egui::RichText::new("Workspaces").size(12.0).color(muted))
++                                            .frame(false),
++                                    )
++                                    .clicked()
++                                {
++                                    self.ui.home = true;
++                                }
++                                ui.separator();
+                                 for (id, name) in &pages {
+                                     let active = Some(*id) == current;
+                                     let resp = ui.add(
+diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs client-src/crates/ui-egui/src/workspaces.rs
+--- .client-src-orig/crates/ui-egui/src/workspaces.rs	1970-01-01 01:00:00.000000000 +0100
++++ client-src/crates/ui-egui/src/workspaces.rs	2026-10-21 20:12:17.241370723 +0200
+@@ -0,0 +1,1057 @@
++//! The Workspaces screen: every Herdr workspace on the project host, with or without a map.
++//!
++//! The screen reads the project service over plain TCP (one JSON object per line) on a thread of
++//! its own for each request; the reply comes back on a channel polled once a frame, so the window
++//! never waits on the network. Opening a workspace asks the service to publish its document and
++//! gets an invite link back; the screen joins that link exactly as if the human had pasted it.
++
++use std::sync::OnceLock;
++use std::sync::mpsc::{self, Receiver};
++
++use egui::{Align2, Color32, CornerRadius, FontId, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
++use serde::Deserialize;
++
++use crate::FigApp;
++use crate::a11y;
++use crate::theme::{Tokens, regular, semibold};
++use crate::widgets;
++
++#[cfg(not(target_arch = "wasm32"))]
++use std::io::{BufRead, BufReader, Read, Write};
++#[cfg(not(target_arch = "wasm32"))]
++use std::net::{TcpStream, ToSocketAddrs};
++#[cfg(not(target_arch = "wasm32"))]
++use std::time::Duration;
++
++/// Where the project service listens unless `MINDMAP_SERVICE` or `--service` says otherwise.
++const DEFAULT_SERVICE: &str = "100.104.9.15:47821";
++
++/// The list's width (the detail gets the rest of the window).
++const SIDEBAR: f32 = 340.0;
++/// The thin bar at the top of the window.
++const HEADER_H: f32 = 52.0;
++/// One workspace row.
++const ROW_H: f32 = 76.0;
++
++/// How long to wait for a connection to the project service.
++#[cfg(not(target_arch = "wasm32"))]
++const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
++/// How long the workspace list may take to answer.
++#[cfg(not(target_arch = "wasm32"))]
++const LIST_TIMEOUT: Duration = Duration::from_secs(10);
++/// Open and Init publish a document and may start an agent: they take much longer.
++#[cfg(not(target_arch = "wasm32"))]
++const ACTION_TIMEOUT: Duration = Duration::from_secs(120);
++/// A reply larger than this is refused rather than read into memory.
++const MAX_REPLY: usize = 1024 * 1024;
++
++/// The address given with `--service`, when it was.
++static SERVICE: OnceLock<String> = OnceLock::new();
++
++/// Use `address` for this run (`--service <address>` in the desktop app).
++pub fn set_service(address: &str) {
++    let address = address.trim();
++    if !address.is_empty() {
++        let _ = SERVICE.set(address.to_string());
++    }
++}
++
++/// The project service's address: `--service`, then `MINDMAP_SERVICE`, then the default.
++pub fn service_address() -> String {
++    if let Some(address) = SERVICE.get() {
++        return address.clone();
++    }
++    std::env::var("MINDMAP_SERVICE")
++        .ok()
++        .map(|address| address.trim().to_string())
++        .filter(|address| !address.is_empty())
++        .unwrap_or_else(|| DEFAULT_SERVICE.to_string())
++}
++
++/// One Herdr workspace, as the project service lists it.
++#[derive(Clone, Debug, Default, Deserialize)]
++pub struct Workspace {
++    #[serde(default)]
++    pub id: String,
++    #[serde(default)]
++    pub label: String,
++    #[serde(default)]
++    pub path: Option<String>,
++    #[serde(default)]
++    pub repo: Option<String>,
++    /// A linked worktree rather than the repository's own checkout.
++    #[serde(default)]
++    pub worktree: bool,
++    #[serde(default)]
++    pub agents: u32,
++    /// The CLIs running in the workspace (`codex`, `dsh`, `claude`, `opencode`), one each.
++    #[serde(default)]
++    pub agent_names: Vec<String>,
++    #[serde(default)]
++    pub agent_status: String,
++    /// The workspace Herdr has focused.
++    #[serde(default)]
++    pub focused: bool,
++    /// `"map"`, `"empty"` or `"none"`.
++    #[serde(default)]
++    pub map: String,
++    /// The workspace's document, when it has one.
++    #[serde(default)]
++    pub file: Option<String>,
++    #[serde(default)]
++    pub tabs: Option<u32>,
++    #[serde(default)]
++    pub panes: Option<u32>,
++}
++
++/// What the workspace has: a live map, an empty document, or no document yet.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum MapState {
++    /// A map has been drawn and published.
++    Map,
++    /// A document exists but the map is still empty.
++    Empty,
++    /// The workspace has no document yet.
++    #[default]
++    None,
++}
++
++impl MapState {
++    pub fn of(state: &str) -> MapState {
++        match state {
++            "map" => MapState::Map,
++            "empty" => MapState::Empty,
++            _ => MapState::None,
++        }
++    }
++
++    /// The row badge.
++    fn badge(self) -> &'static str {
++        match self {
++            MapState::Map => "MAP",
++            MapState::Empty => "EMPTY",
++            MapState::None => "INIT",
++        }
++    }
++
++    /// The one action the detail offers.
++    fn action(self) -> &'static str {
++        match self {
++            MapState::Map => "Open map",
++            MapState::Empty | MapState::None => "Init map",
++        }
++    }
++}
++
++impl Workspace {
++    pub fn map_state(&self) -> MapState {
++        MapState::of(&self.map)
++    }
++
++    fn name(&self) -> &str {
++        if self.label.trim().is_empty() { &self.id } else { &self.label }
++    }
++}
++
++/// What a request from the screen is waiting for.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum Kind {
++    /// The workspace list.
++    List,
++    /// Open or Init.
++    Act,
++}
++
++/// A request the service answers.
++#[derive(Clone, Debug)]
++enum Request {
++    List,
++    Act { workspace: String, init: bool },
++}
++
++impl Request {
++    fn kind(&self) -> Kind {
++        match self {
++            Request::List => Kind::List,
++            Request::Act { .. } => Kind::Act,
++        }
++    }
++
++    /// The JSON line the service reads.
++    fn line(&self) -> String {
++        match self {
++            Request::List => r#"{"id":1,"method":"workspaces"}"#.to_string(),
++            Request::Act { workspace, init } => {
++                let method = if *init { "init" } else { "open" };
++                serde_json::json!({"id": 2, "method": method, "workspace": workspace}).to_string()
++            }
++        }
++    }
++
++    fn busy(&self) -> Busy {
++        match self {
++            Request::List => Busy::List,
++            Request::Act { workspace, init } => Busy::Open { workspace: workspace.clone(), init: *init },
++        }
++    }
++
++    /// How long its answer may take.
++    #[cfg(not(target_arch = "wasm32"))]
++    fn timeout(&self) -> Duration {
++        match self {
++            Request::List => LIST_TIMEOUT,
++            Request::Act { .. } => ACTION_TIMEOUT,
++        }
++    }
++}
++
++/// What is in flight: the whole list, or one workspace's Open / Init.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum Busy {
++    List,
++    Open { workspace: String, init: bool },
++}
++
++impl Busy {
++    fn for_workspace(&self, id: &str) -> bool {
++        matches!(self, Busy::Open { workspace, .. } if workspace == id)
++    }
++}
++
++/// What an error's Retry asks for again.
++#[derive(Clone, Debug)]
++enum Retry {
++    List,
++    Action {
++        workspace: String,
++        init: bool,
++    },
++    /// A join that failed; the link is still good until the service says otherwise.
++    Join(String),
++}
++
++/// A reply from the service. Unknown fields are ignored and missing ones take their defaults, so
++/// a service that grows a field never breaks the screen.
++#[derive(Debug, Default, Deserialize)]
++struct ServiceReply {
++    #[serde(default)]
++    ok: bool,
++    #[serde(default)]
++    error: Option<String>,
++    #[serde(default)]
++    workspaces: Option<Vec<Workspace>>,
++    #[serde(default)]
++    link: Option<String>,
++}
++
++/// The Workspaces screen's state.
++#[derive(Default)]
++pub struct State {
++    /// The workspaces last listed.
++    pub rows: Vec<Workspace>,
++    /// The selected workspace id (its detail shows on the right).
++    pub selected: Option<String>,
++    /// The last error, shown in muted red with a Retry.
++    pub error: Option<String>,
++    /// The request in flight, if any.
++    pub busy: Option<Busy>,
++    /// The channel a request's reply arrives on.
++    rx: Option<Receiver<(Kind, Result<ServiceReply, String>)>>,
++    /// The link the screen joins now (then shows the map).
++    pub join: Option<String>,
++    /// What Retry asks for again.
++    retry: Option<Retry>,
++    /// The list was asked for once, when the screen first showed.
++    started: bool,
++}
++
++impl State {
++    /// Ask for the workspace list, on a thread of its own.
++    pub fn refresh(&mut self, ctx: &egui::Context) {
++        if self.busy.is_some() {
++            return;
++        }
++        self.error = None;
++        self.retry = Some(Retry::List);
++        self.start(ctx, Request::List);
++    }
++
++    /// Open `workspace`'s map, or Init it, on a thread of its own.
++    pub fn act(&mut self, ctx: &egui::Context, workspace: &str, init: bool) {
++        if self.busy.is_some() {
++            return;
++        }
++        self.selected = Some(workspace.to_string());
++        self.error = None;
++        self.retry = Some(Retry::Action { workspace: workspace.to_string(), init });
++        self.start(ctx, Request::Act { workspace: workspace.to_string(), init });
++    }
++
++    /// Do again what failed.
++    pub fn retry(&mut self, ctx: &egui::Context) {
++        match self.retry.clone() {
++            Some(Retry::Action { workspace, init }) => self.act(ctx, &workspace, init),
++            Some(Retry::Join(link)) => {
++                self.join = Some(link);
++                ctx.request_repaint();
++            }
++            Some(Retry::List) | None => self.refresh(ctx),
++        }
++    }
++
++    /// Start `request` on a named thread; its reply wakes the window.
++    fn start(&mut self, ctx: &egui::Context, request: Request) {
++        let (tx, rx) = mpsc::channel();
++        self.rx = Some(rx);
++        self.busy = Some(request.busy());
++        #[cfg(not(target_arch = "wasm32"))]
++        {
++            let address = service_address();
++            let context = ctx.clone();
++            let kind = request.kind();
++            let spawned = std::thread::Builder::new().name("figcraft-workspaces".into()).spawn(move || {
++                let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| exchange(&address, &request)))
++                    .unwrap_or_else(|_| Err("The workspace request failed unexpectedly.".to_string()));
++                let _ = tx.send((kind, reply));
++                context.request_repaint();
++            });
++            if let Err(e) = spawned {
++                self.rx = None;
++                self.busy = None;
++                self.error = Some(format!("Could not start the workspace request: {e}"));
++            }
++        }
++        #[cfg(target_arch = "wasm32")]
++        {
++            let _ = (ctx, tx);
++            self.rx = None;
++            self.busy = None;
++            self.error = Some("The project service is only available in the desktop app.".to_string());
++        }
++    }
++
++    /// Take in a finished request's reply: the rows, the join link or the error.
++    fn poll(&mut self) {
++        let received = self.rx.as_ref().map(Receiver::try_recv);
++        let received = match received {
++            None => return,
++            Some(Ok(reply)) => reply,
++            Some(Err(mpsc::TryRecvError::Empty)) => return,
++            Some(Err(mpsc::TryRecvError::Disconnected)) => {
++                self.rx = None;
++                self.busy = None;
++                self.error = Some("The workspace request ended without an answer.".to_string());
++                return;
++            }
++        };
++        self.rx = None;
++        self.busy = None;
++        let (kind, result) = received;
++        match kind {
++            Kind::List => match result {
++                Ok(reply) if reply.ok => {
++                    self.rows = reply.workspaces.unwrap_or_default();
++                    if self.selected.as_ref().is_some_and(|id| !self.rows.iter().any(|w| &w.id == id)) {
++                        self.selected = None;
++                    }
++                    self.error = None;
++                    self.retry = None;
++                }
++                Ok(reply) => self.error = Some(reply.error.unwrap_or_else(|| "The project service refused the request.".to_string())),
++                Err(e) => self.error = Some(e),
++            },
++            Kind::Act => match result {
++                Ok(reply) if reply.ok => match reply.link.filter(|link| !link.trim().is_empty()) {
++                    Some(link) => {
++                        self.join = Some(link);
++                        self.error = None;
++                        self.retry = None;
++                    }
++                    None => self.error = Some("The project service did not return a join link.".to_string()),
++                },
++                Ok(reply) => self.error = Some(reply.error.unwrap_or_else(|| "The project service refused the request.".to_string())),
++                Err(e) => self.error = Some(e),
++            },
++        }
++    }
++}
++
++/// Read one newline-terminated JSON reply from the service; anything but a well-formed reply is
++/// an error the screen shows, never a panic.
++#[cfg(not(target_arch = "wasm32"))]
++fn exchange(address: &str, request: &Request) -> Result<ServiceReply, String> {
++    let timeout = request.timeout();
++    let addresses = address.to_socket_addrs().map_err(|e| format!("Can't resolve the project service at {address}: {e}"))?;
++    let mut last = format!("no address for {address}");
++    let mut stream = None;
++    for addr in addresses {
++        match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
++            Ok(connected) => {
++                stream = Some(connected);
++                break;
++            }
++            Err(e) => last = e.to_string(),
++        }
++    }
++    let mut stream = stream.ok_or_else(|| format!("Can't reach the project service at {address}: {last}"))?;
++    stream.set_read_timeout(Some(timeout)).map_err(|e| format!("Can't set the project service timeout: {e}"))?;
++    stream.set_write_timeout(Some(timeout)).map_err(|e| format!("Can't set the project service timeout: {e}"))?;
++    stream.set_nodelay(true).ok();
++    stream
++        .write_all(request.line().as_bytes())
++        .and_then(|_| stream.write_all(b"\n"))
++        .map_err(|e| format!("Can't ask the project service at {address}: {e}"))?;
++    let mut reader = BufReader::new(stream);
++    let mut line = String::new();
++    let read = reader
++        .by_ref()
++        .take(MAX_REPLY as u64 + 1)
++        .read_line(&mut line)
++        .map_err(|e| format!("No answer from the project service at {address}: {e}"))?;
++    if read == 0 {
++        return Err(format!("The project service at {address} closed without an answer."));
++    }
++    if line.len() > MAX_REPLY {
++        return Err(format!("The project service at {address} sent too large an answer."));
++    }
++    serde_json::from_str(line.trim()).map_err(|e| format!("The project service at {address} sent an answer this app can't read: {e}"))
++}
++
++/// A compact monitor-ish palette over the app's tokens: warm paper for the map client, the same
++/// accent as the map bar. Dark mode keeps the tokens' surfaces and lightens the inks.
++struct Skin {
++    bg: Color32,
++    panel: Color32,
++    border: Color32,
++    text: Color32,
++    muted: Color32,
++    faint: Color32,
++    accent: Color32,
++    accent_hover: Color32,
++    selected: Color32,
++    soft: Color32,
++    map_ink: Color32,
++    danger: Color32,
++    danger_bg: Color32,
++}
++
++impl Skin {
++    fn of(t: &Tokens) -> Skin {
++        if t.dark {
++            let danger = Color32::from_rgb(0xE8, 0x9A, 0x8A);
++            Skin {
++                bg: t.canvas,
++                panel: t.panel,
++                border: t.border,
++                text: t.text,
++                muted: t.text_secondary,
++                faint: t.text_tertiary,
++                accent: Color32::from_rgb(0xD9, 0x7A, 0x5F),
++                accent_hover: Color32::from_rgb(0xE8, 0x8E, 0x75),
++                selected: Color32::from_rgb(0x3A, 0x30, 0x2C),
++                soft: t.hover,
++                map_ink: Color32::from_rgb(0x7F, 0xBD, 0xB5),
++                danger,
++                danger_bg: with_alpha(danger, 28),
++            }
++        } else {
++            let danger = Color32::from_rgb(0x9E, 0x3B, 0x2C);
++            Skin {
++                bg: Color32::from_rgb(0xF4, 0xF4, 0xF2),
++                panel: t.panel,
++                border: t.border,
++                text: t.text,
++                muted: t.text_secondary,
++                faint: t.text_tertiary,
++                accent: Color32::from_rgb(0xB5, 0x45, 0x2F),
++                accent_hover: Color32::from_rgb(0xC2, 0x55, 0x3E),
++                selected: Color32::from_rgb(0xF1, 0xEC, 0xE7),
++                soft: Color32::from_rgb(0xF8, 0xF6, 0xF3),
++                map_ink: Color32::from_rgb(0x2F, 0x6F, 0x6A),
++                danger,
++                danger_bg: with_alpha(danger, 16),
++            }
++        }
++    }
++}
++
++/// Draw the Workspaces screen in the window's `ui`.
++pub fn show(app: &mut FigApp, ui: &mut Ui) {
++    let ctx = ui.ctx().clone();
++    // Take in what the request threads found before drawing the rows they change.
++    app.ws.poll();
++    // A service reply with a link: join it as the human would have, then show the map.
++    if join_ready(app) {
++        return;
++    }
++    // The first time the screen shows, list the workspaces; Refresh asks again.
++    if !app.ws.started {
++        app.ws.started = true;
++        app.ws.refresh(&ctx);
++    }
++    let skin = Skin::of(&Tokens::get(&ctx));
++    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(skin.bg)).show(ui, |ui| {
++        let rect = ui.max_rect();
++        let head = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER_H.min(rect.height())));
++        let body = Rect::from_min_max(pos2(rect.min.x, head.max.y), rect.max);
++        header(app, ui, &skin, head);
++        // The list keeps its width; the detail takes the rest, but never less than 320 px.
++        let side = SIDEBAR.min((body.width() - 320.0).max(240.0));
++        let list = Rect::from_min_size(body.min, vec2(side, body.height()));
++        let detail_rect = Rect::from_min_max(pos2(list.max.x, body.min.y), body.max);
++        sidebar(app, ui, &skin, list);
++        detail(app, ui, &skin, detail_rect);
++        ui.painter().line_segment([pos2(list.max.x, body.min.y), pos2(list.max.x, body.max.y)], Stroke::new(1.0, skin.border));
++    });
++}
++
++/// Join the link the service returned; true when the map is now showing (this frame is done).
++fn join_ready(app: &mut FigApp) -> bool {
++    let Some(link) = app.ws.join.take() else { return false };
++    if app.run("collab.join", serde_json::json!({"link": link.clone()})).is_some() {
++        app.ui.home = false;
++        app.ws = State::default();
++        return true;
++    }
++    let detail = app.ui.last_error.take();
++    app.ws.error = Some(match detail {
++        Some(e) => format!("The map could not be joined: {e}"),
++        None => "The map could not be joined; the document server may be unreachable.".to_string(),
++    });
++    app.ws.retry = Some(Retry::Join(link));
++    false
++}
++
++fn header(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
++    let p = ui.painter();
++    p.rect_filled(rect, CornerRadius::ZERO, s.panel);
++    p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, s.border));
++    let y = rect.center().y;
++    let x = rect.min.x + 24.0;
++    p.text(pos2(x, y), Align2::LEFT_CENTER, "Mindmap", semibold(13.0), s.text);
++    let word = text_width(ui, "Mindmap", semibold(13.0));
++    p.text(pos2(x + word + 8.0, y), Align2::LEFT_CENTER, "·", regular(13.0), s.faint);
++    let dot = text_width(ui, "·", regular(13.0));
++    p.text(pos2(x + word + 8.0 + dot + 8.0, y), Align2::LEFT_CENTER, "Workspaces", regular(13.0), s.text);
++
++    // Right: the service address (quiet), Refresh, and a way back to an open map.
++    let mut right = rect.max.x - 20.0;
++    let address = service_address();
++    let address_w = text_width(ui, &address, mono(10.5));
++    ui.painter().text(pos2(right, y), Align2::RIGHT_CENTER, &address, mono(10.5), s.faint);
++    right -= address_w + 16.0;
++
++    let list_busy = matches!(app.ws.busy, Some(Busy::List));
++    let refresh = if list_busy { "Refreshing…" } else { "Refresh" };
++    let refresh_w = text_width(ui, refresh, semibold(11.0)) + 20.0;
++    let refresh_rect = Rect::from_min_size(pos2(right - refresh_w, y - 13.0), vec2(refresh_w, 26.0));
++    if secondary_button(ui, s, Id::new("workspaces_refresh"), refresh_rect, refresh, !list_busy) {
++        app.ws.refresh(ui.ctx());
++    }
++    right = refresh_rect.min.x - 8.0;
++
++    if app.has_files() {
++        let back = "Back to map";
++        let back_w = text_width(ui, back, semibold(11.0)) + 20.0;
++        let back_rect = Rect::from_min_size(pos2(right - back_w, y - 13.0), vec2(back_w, 26.0));
++        if secondary_button(ui, s, Id::new("workspaces_back"), back_rect, back, true) {
++            app.ui.home = false;
++        }
++    }
++}
++
++fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
++    ui.painter().rect_filled(rect, CornerRadius::ZERO, s.panel);
++    let head = Rect::from_min_size(rect.min, vec2(rect.width(), 42.0));
++    ui.painter().text(pos2(head.min.x + 16.0, head.center().y), Align2::LEFT_CENTER, "WORKSPACES", mono(9.5), s.faint);
++    let count = app.ws.rows.len().to_string();
++    ui.painter().text(pos2(head.max.x - 16.0, head.center().y), Align2::RIGHT_CENTER, count, mono(10.0), s.faint);
++    ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, s.border));
++
++    let list = Rect::from_min_max(pos2(rect.min.x, head.max.y), rect.max);
++    let ctx = ui.ctx().clone();
++    ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
++        ui.set_clip_rect(list);
++        egui::ScrollArea::vertical().id_salt("workspaces_list").auto_shrink([false, false]).show(ui, |ui| {
++            ui.spacing_mut().item_spacing.y = 0.0;
++            let (error, busy, started) = (app.ws.error.clone(), app.ws.busy.is_some(), app.ws.started);
++            if app.ws.rows.is_empty() {
++                empty_list(app, ui, s, &ctx, error.as_deref(), busy, started);
++            } else {
++                let mut chosen = None;
++                for w in &app.ws.rows {
++                    let selected = app.ws.selected.as_deref() == Some(w.id.as_str());
++                    if let Some(c) = row(ui, s, w, selected, busy) {
++                        chosen = Some(c);
++                    }
++                }
++                match chosen {
++                    Some(Chosen::Select(id)) => {
++                        app.ws.selected = Some(id);
++                        app.ws.error = None;
++                    }
++                    Some(Chosen::Act { workspace, init }) => app.ws.act(&ctx, &workspace, init),
++                    None => {}
++                }
++            }
++        });
++    });
++}
++
++/// A row asks for one thing: select its workspace, or open / initialise it.
++enum Chosen {
++    Select(String),
++    Act { workspace: String, init: bool },
++}
++
++fn row(ui: &mut Ui, s: &Skin, w: &Workspace, selected: bool, busy: bool) -> Option<Chosen> {
++    let width = ui.available_width();
++    let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::click());
++    let kind = w.map_state();
++    a11y::button(&resp, &format!("{} · {} · {}", w.name(), kind.badge(), agents_line(w)));
++    if selected {
++        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.selected);
++        ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height())), CornerRadius::ZERO, s.accent);
++    } else if resp.hovered() {
++        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
++    }
++    focus_ring(ui, s, rect, &resp, 0);
++
++    // The badge, top right.
++    let badge = kind.badge();
++    let badge_font = semibold(9.0);
++    let badge_w = text_width(ui, badge, badge_font.clone()) + 12.0;
++    let badge_rect = Rect::from_min_size(pos2(rect.max.x - 14.0 - badge_w, rect.min.y + 11.0), vec2(badge_w, 16.0));
++    let tint = match kind {
++        MapState::Map => s.map_ink,
++        MapState::Empty => s.muted,
++        MapState::None => s.accent,
++    };
++    ui.painter().rect_filled(badge_rect, CornerRadius::same(4), with_alpha(tint, if s.panel == Color32::WHITE { 18 } else { 36 }));
++    ui.painter().rect_stroke(badge_rect, CornerRadius::same(4), Stroke::new(1.0, with_alpha(tint, 90)), StrokeKind::Inside);
++    ui.painter().text(badge_rect.center(), Align2::CENTER_CENTER, badge, badge_font, tint);
++
++    // The focused workspace in Herdr: a small dot beside its label.
++    let label_x = if w.focused { rect.min.x + 24.0 } else { rect.min.x + 16.0 };
++    if w.focused {
++        ui.painter().circle_filled(pos2(rect.min.x + 12.0, rect.min.y + 15.0), 3.0, s.map_ink);
++    }
++    let name = w.name();
++    let name_room = (badge_rect.min.x - 10.0 - label_x).max(40.0);
++    let name_shown = widgets::elide_font(ui, name, name_room, semibold(13.0));
++    ui.painter().text(pos2(label_x, rect.min.y + 15.0), Align2::LEFT_CENTER, &name_shown, semibold(13.0), s.text);
++
++    let path = w.path.as_deref().or(w.repo.as_deref()).unwrap_or("no folder");
++    let path_room = (rect.max.x - 14.0 - (rect.min.x + 16.0)).max(40.0);
++    let path_shown = widgets::elide_start_font(ui, path, path_room, mono(10.5));
++    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 35.0), Align2::LEFT_CENTER, &path_shown, mono(10.5), s.muted);
++
++    // The row's own Open / Init button, bottom right.
++    let action = if kind == MapState::Map { "Open" } else { "Init" };
++    let action_w = text_width(ui, action, semibold(10.5)) + 20.0;
++    let action_rect = Rect::from_min_size(pos2(rect.max.x - 14.0 - action_w, rect.min.y + 44.0), vec2(action_w, 22.0));
++    let action_resp = ui.interact(action_rect, ui.id().with(("workspace_row_action", &w.id)), if busy { Sense::hover() } else { Sense::click() });
++    a11y::button(&action_resp, action);
++    let hot = !busy && action_resp.hovered();
++    let (action_ink, action_border) = if busy {
++        (s.faint, s.border)
++    } else if hot || selected {
++        (s.accent, s.accent)
++    } else {
++        (s.muted, s.border)
++    };
++    if hot {
++        ui.painter().rect_filled(action_rect, CornerRadius::same(4), s.soft);
++    }
++    ui.painter().rect_stroke(action_rect, CornerRadius::same(4), Stroke::new(1.0, action_border), StrokeKind::Inside);
++    ui.painter().text(action_rect.center(), Align2::CENTER_CENTER, action, semibold(10.5), action_ink);
++    focus_ring(ui, s, action_rect, &action_resp, 4);
++
++    let agents_room = (action_rect.min.x - 8.0 - (rect.min.x + 16.0)).max(40.0);
++    let agents = widgets::elide_font(ui, &agents_line(w), agents_room, regular(10.5));
++    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 56.0), Align2::LEFT_CENTER, &agents, regular(10.5), s.muted);
++
++    let cut = name_shown != name || path_shown != path || agents != agents_line(w);
++    let resp = if cut {
++        resp.on_hover_text(format!("{name}\n{path}\n{}", agents_line(w)))
++    } else if w.focused {
++        resp.on_hover_text("Focused in Herdr")
++    } else {
++        resp
++    };
++    let on_button = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| action_rect.contains(p));
++    let mut chosen = None;
++    if resp.clicked() && !on_button {
++        chosen = Some(Chosen::Select(w.id.clone()));
++    }
++    if resp.double_clicked() && !on_button {
++        chosen = Some(Chosen::Act { workspace: w.id.clone(), init: kind != MapState::Map });
++    }
++    if action_resp.clicked() && !busy {
++        chosen = Some(Chosen::Act { workspace: w.id.clone(), init: kind != MapState::Map });
++    }
++    chosen
++}
++
++fn empty_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context, error: Option<&str>, busy: bool, started: bool) {
++    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(16, 18)).show(ui, |ui| {
++        ui.set_width(ui.available_width());
++        ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
++        if let Some(error) = error {
++            ui.label(egui::RichText::new("Can't read the workspaces").font(semibold(12.5)).color(s.text));
++            paragraph(ui, error, 11.5, s.danger);
++            ui.add_space(6.0);
++            if secondary_button_alloc(ui, s, Id::new("workspaces_list_retry"), "Retry", !busy) {
++                app.ws.retry(ctx);
++            }
++        } else if busy || !started {
++            paragraph(ui, "Connecting to the project service…", 12.0, s.muted);
++        } else {
++            ui.label(egui::RichText::new("No workspaces yet").font(semibold(12.5)).color(s.text));
++            paragraph(ui, "Create one in Herdr on the project host, then Refresh.", 11.5, s.muted);
++            ui.add_space(6.0);
++            if secondary_button_alloc(ui, s, Id::new("workspaces_empty_refresh"), "Refresh", !busy) {
++                app.ws.refresh(ctx);
++            }
++        }
++    });
++}
++
++fn detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
++    ui.painter().rect_filled(rect, CornerRadius::ZERO, s.bg);
++    let selected = app.ws.selected.as_deref().and_then(|id| app.ws.rows.iter().find(|w| w.id == id)).cloned();
++    let inner = Rect::from_min_max(rect.min + vec2(32.0, 26.0), rect.max - vec2(32.0, 24.0));
++    ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
++        ui.set_clip_rect(rect);
++        egui::ScrollArea::vertical().id_salt("workspaces_detail").auto_shrink([false, false]).show(ui, |ui| {
++            ui.set_max_width(inner.width().min(720.0));
++            match &selected {
++                Some(w) => workspace_detail(app, ui, s, w),
++                None => intro(app, ui, s),
++            }
++        });
++    });
++}
++
++fn intro(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
++    ui.add_space(36.0);
++    eyebrow(ui, s, "WORKSPACES");
++    ui.add_space(10.0);
++    ui.label(egui::RichText::new("Herdr workspaces are the projects.").font(semibold(27.0)).color(s.text));
++    ui.add_space(8.0);
++    paragraph(ui, "A map is optional.", 14.0, s.muted);
++    ui.add_space(16.0);
++    paragraph(
++        ui,
++        "A workspace can have a live map, an empty document, or no document at all. Select one on the left to open its map or Init the first agent.",
++        12.5,
++        s.muted,
++    );
++    if let Some(error) = app.ws.error.clone() {
++        ui.add_space(22.0);
++        if error_card(ui, s, &error, app.ws.busy.is_some()) {
++            app.ws.retry(ui.ctx());
++        }
++    }
++    ui.add_space(26.0);
++    let maps = app.ws.rows.iter().filter(|w| w.map_state() == MapState::Map).count();
++    let summary = match (app.ws.busy.is_some(), app.ws.rows.len()) {
++        (true, 0) => "Reading the workspaces from the project service…".to_string(),
++        (_, 0) if app.ws.started => "No workspaces listed yet.".to_string(),
++        (_, 0) => String::new(),
++        (_, n) => format!("{n} workspace{} · {maps} with a map", if n == 1 { "" } else { "s" }),
++    };
++    if !summary.is_empty() {
++        ui.label(egui::RichText::new(summary).font(mono(10.5)).color(s.faint));
++    }
++}
++
++fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
++    let kind = w.map_state();
++    let ctx = ui.ctx().clone();
++    eyebrow(ui, s, "SELECTED WORKSPACE");
++    ui.add_space(6.0);
++    ui.label(egui::RichText::new(w.name()).font(semibold(28.0)).color(s.text));
++    ui.add_space(8.0);
++    let path = w.path.as_deref().unwrap_or("no folder");
++    ui.add(egui::Label::new(egui::RichText::new(path).font(mono(11.0)).color(s.muted)).wrap());
++    ui.add_space(3.0);
++    ui.label(egui::RichText::new(meta_line(w)).font(regular(11.0)).color(s.faint));
++    ui.add_space(18.0);
++    paragraph(ui, explanation(kind), 13.0, s.muted);
++
++    // What Init will do, when the workspace already has an agent to ask.
++    ui.add_space(20.0);
++    let busy = app.ws.busy.clone();
++    let busy_here = busy.as_ref().is_some_and(|b| b.for_workspace(&w.id));
++    let label = action_label(kind, w, busy.as_ref());
++    let mut run = false;
++    ui.horizontal(|ui| {
++        let width = text_width(ui, &label, semibold(12.5)) + 40.0;
++        let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
++        if primary_button(ui, s, Id::new(("workspace_action", &w.id)), rect, &label, !busy_here && busy.is_none()) {
++            run = true;
++        }
++        if w.agents > 0 {
++            ui.add_space(10.0);
++            agents_pill(ui, s, w);
++        }
++    });
++    if run {
++        app.ws.act(&ctx, &w.id, kind != MapState::Map);
++    }
++    if kind != MapState::Map {
++        if let Some(agent) = agent_name(w) {
++            ui.add_space(9.0);
++            ui.label(egui::RichText::new(format!("starts {agent} · already in the workspace")).font(mono(10.5)).color(s.faint));
++        }
++    }
++    if busy_here {
++        ui.add_space(9.0);
++        let line = match &busy {
++            Some(Busy::Open { init: true, .. }) => "The service is starting the agent; the first overview appears when it publishes.",
++            Some(Busy::Open { init: false, .. }) => "The service is publishing the document…",
++            _ => "",
++        };
++        if !line.is_empty() {
++            paragraph(ui, line, 11.5, s.faint);
++        }
++    }
++
++    if let Some(error) = app.ws.error.clone() {
++        ui.add_space(18.0);
++        if error_card(ui, s, &error, app.ws.busy.is_some()) {
++            app.ws.retry(&ctx);
++        }
++    }
++
++    agents_block(ui, s, w);
++    details_block(ui, s, w);
++}
++
++/// The action's label, including what the service is doing while it works.
++fn action_label(kind: MapState, w: &Workspace, busy: Option<&Busy>) -> String {
++    if let Some(Busy::Open { workspace, init }) = busy
++        && workspace == &w.id
++    {
++        if *init {
++            return format!("Starting {}…", agent_name(w).unwrap_or("the agent"));
++        }
++        return "Publishing…".to_string();
++    }
++    kind.action().to_string()
++}
++
++fn explanation(kind: MapState) -> &'static str {
++    match kind {
++        MapState::Map => "The map is attached to this workspace, not to a link. Open it to read, select and comment.",
++        MapState::Empty => {
++            "A document exists but its map is still empty. Init starts an agent with the mindmap skill; it reads the repository and draws the first overview."
++        }
++        MapState::None => {
++            "No document yet. Init publishes one and starts an agent with the mindmap skill; it reads the repository and draws the first overview."
++        }
++    }
++}
++
++fn meta_line(w: &Workspace) -> String {
++    let mut parts: Vec<&str> = Vec::new();
++    if let Some(repo) = w.repo.as_deref().filter(|r| !r.trim().is_empty()) {
++        parts.push(repo);
++    }
++    if w.worktree {
++        parts.push("worktree");
++    }
++    let agents = agents_line(w);
++    parts.push(&agents);
++    parts.join("  ·  ")
++}
++
++fn agents_line(w: &Workspace) -> String {
++    if w.agents == 0 {
++        return "no agents".to_string();
++    }
++    let count = format!("{} agent{}", w.agents, if w.agents == 1 { "" } else { "s" });
++    let status = w.agent_status.trim();
++    if status.is_empty() || status.eq_ignore_ascii_case("unknown") { count } else { format!("{count} · {status}") }
++}
++
++fn agent_name(w: &Workspace) -> Option<&str> {
++    w.agent_names.iter().map(String::as_str).find(|name| !name.trim().is_empty())
++}
++
++fn agents_pill(ui: &mut Ui, s: &Skin, w: &Workspace) {
++    let label = agents_line(w);
++    let width = text_width(ui, &label, regular(10.5)) + 22.0;
++    let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
++    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, s.border), StrokeKind::Inside);
++    ui.painter().text(rect.center(), Align2::CENTER_CENTER, &label, regular(10.5), s.muted);
++}
++
++fn agents_block(ui: &mut Ui, s: &Skin, w: &Workspace) {
++    ui.add_space(26.0);
++    eyebrow(ui, s, "AGENTS");
++    ui.add_space(8.0);
++    egui::Frame::NONE.fill(s.soft).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
++        ui.set_width(ui.available_width());
++        ui.spacing_mut().item_spacing.y = 2.0;
++        if w.agent_names.is_empty() {
++            paragraph(
++                ui,
++                if w.agents == 0 { "No agents in this workspace." } else { "The workspace has agents; the service did not name them." },
++                11.5,
++                s.muted,
++            );
++            if w.map_state() != MapState::Map {
++                ui.add_space(2.0);
++                paragraph(ui, "Init starts the first available CLI: codex, dsh, claude or opencode.", 11.0, s.faint);
++            }
++        } else {
++            for name in &w.agent_names {
++                agent_row(ui, s, if name.trim().is_empty() { "agent" } else { name }, &w.agent_status);
++            }
++            let unnamed = (w.agents as usize).saturating_sub(w.agent_names.len());
++            if unnamed > 0 {
++                paragraph(ui, &format!("+{unnamed} more"), 10.5, s.faint);
++            }
++        }
++    });
++}
++
++fn agent_row(ui: &mut Ui, s: &Skin, name: &str, status: &str) {
++    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
++    ui.painter().circle_filled(pos2(rect.min.x + 3.0, rect.center().y), 3.0, status_color(status, s));
++    ui.painter().text(pos2(rect.min.x + 13.0, rect.center().y), Align2::LEFT_CENTER, name, semibold(11.5), s.text);
++    if !status.trim().is_empty() && !status.eq_ignore_ascii_case("unknown") {
++        ui.painter().text(pos2(rect.max.x, rect.center().y), Align2::RIGHT_CENTER, status, mono(10.0), s.faint);
++    }
++}
++
++fn status_color(status: &str, s: &Skin) -> Color32 {
++    match status.to_ascii_lowercase().as_str() {
++        "working" | "busy" | "running" | "thinking" => s.accent,
++        "blocked" | "error" | "failed" => s.danger,
++        "idle" | "done" | "ready" | "waiting" => s.map_ink,
++        _ => s.faint,
++    }
++}
++
++fn details_block(ui: &mut Ui, s: &Skin, w: &Workspace) {
++    let mut rows: Vec<(&str, String)> = Vec::new();
++    if let Some(repo) = w.repo.as_deref().filter(|r| !r.trim().is_empty()) {
++        rows.push(("Repository", repo.to_string()));
++    }
++    if w.worktree {
++        rows.push(("Checkout", "linked worktree".to_string()));
++    }
++    if let Some(tabs) = w.tabs {
++        rows.push(("Tabs", tabs.to_string()));
++    }
++    if let Some(panes) = w.panes {
++        rows.push(("Panes", panes.to_string()));
++    }
++    if let Some(file) = w.file.as_deref().filter(|f| !f.trim().is_empty()) {
++        rows.push(("Document", file.to_string()));
++    }
++    if rows.is_empty() {
++        return;
++    }
++    ui.add_space(26.0);
++    eyebrow(ui, s, "WORKSPACE");
++    ui.add_space(8.0);
++    for (label, value) in &rows {
++        meta_row(ui, s, label, value);
++    }
++}
++
++fn meta_row(ui: &mut Ui, s: &Skin, label: &str, value: &str) {
++    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
++    ui.painter().text(pos2(rect.min.x, rect.center().y), Align2::LEFT_CENTER, label, mono(10.0), s.faint);
++    let room = (rect.width() - 110.0).max(40.0);
++    let shown = widgets::elide_start_font(ui, value, room, mono(10.5));
++    ui.painter().text(pos2(rect.max.x, rect.center().y), Align2::RIGHT_CENTER, &shown, mono(10.5), s.muted);
++    if shown != value {
++        let _ = resp.on_hover_text(value);
++    }
++}
++
++fn eyebrow(ui: &mut Ui, s: &Skin, text: &str) {
++    ui.label(egui::RichText::new(text).font(mono(9.5)).color(s.faint));
++}
++
++fn paragraph(ui: &mut Ui, text: &str, size: f32, color: Color32) {
++    ui.add(egui::Label::new(egui::RichText::new(text).font(regular(size)).color(color)).wrap());
++}
++
++fn error_card(ui: &mut Ui, s: &Skin, text: &str, busy: bool) -> bool {
++    let mut retry = false;
++    egui::Frame::NONE
++        .fill(s.danger_bg)
++        .stroke(Stroke::new(1.0, with_alpha(s.danger, 70)))
++        .corner_radius(CornerRadius::same(6))
++        .inner_margin(egui::Margin::symmetric(12, 10))
++        .show(ui, |ui| {
++            ui.set_width(ui.available_width());
++            ui.add(egui::Label::new(egui::RichText::new(text).font(regular(12.0)).color(s.danger)).wrap());
++            ui.add_space(8.0);
++            retry = secondary_button_alloc(ui, s, Id::new("workspaces_error_retry"), "Retry", !busy);
++        });
++    retry
++}
++
++fn primary_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
++    let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
++    a11y::button(&resp, label);
++    let hot = enabled && resp.hovered();
++    let fill = if !enabled {
++        s.soft
++    } else if hot {
++        s.accent_hover
++    } else {
++        s.accent
++    };
++    let ink = if enabled { Color32::WHITE } else { s.faint };
++    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
++    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(12.5), ink);
++    focus_ring(ui, s, rect, &resp, 6);
++    resp.clicked() && enabled
++}
++
++fn secondary_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
++    let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
++    a11y::button(&resp, label);
++    let hot = enabled && resp.hovered();
++    let ink = if enabled { if hot { s.accent } else { s.muted } } else { s.faint };
++    if hot {
++        ui.painter().rect_filled(rect, CornerRadius::same(5), s.soft);
++    }
++    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, if hot { s.accent } else { s.border }), StrokeKind::Inside);
++    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(11.0), ink);
++    focus_ring(ui, s, rect, &resp, 5);
++    resp.clicked() && enabled
++}
++
++/// A secondary button laid out in the current vertical flow; true when clicked.
++fn secondary_button_alloc(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: bool) -> bool {
++    let width = text_width(ui, label, semibold(11.0)) + 20.0;
++    let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
++    secondary_button(ui, s, id, rect, label, enabled)
++}
++
++fn focus_ring(ui: &Ui, s: &Skin, rect: Rect, resp: &Response, radius: u8) {
++    if resp.has_focus() {
++        ui.painter().rect_stroke(rect, CornerRadius::same(radius), Stroke::new(2.0, s.accent), StrokeKind::Outside);
++    }
++}
++
++fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
++    ui.painter().layout_no_wrap(text.to_string(), font, Color32::WHITE).size().x
++}
++
++fn mono(size: f32) -> FontId {
++    FontId::monospace(size)
++}
++
++fn with_alpha(color: Color32, alpha: u8) -> Color32 {
++    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
++}

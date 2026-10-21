@@ -47,8 +47,10 @@ open -a ~/Applications/Mindmap.app --args --map-mode --control 49125 \
 
 ## Known gaps (the next slice)
 
-- **Opening a project.** There is still no folder → project flow in the client; the current entry
-  is a join link (see `project/README.md` for the design that removes links entirely).
+- **Opening a project.** The client now opens on the Herdr workspace list (map mode) and opens or
+  initialises a workspace through the Rust service; see `project/README.md`.
+- **The map itself.** Init starts and prompts the agent, but the model renderer (`mindmap render`)
+  is still missing, so the agent cannot draw the overview yet.
 - **Comments surface.** The guard allows comments, but the panel that creates and reads a thread
   is still hidden with the old chrome.
 - **In-canvas links.** Cards show "Open →" in the design, but clicking one still selects it rather

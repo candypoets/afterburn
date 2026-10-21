@@ -114,20 +114,27 @@ The client shows the Init button while the model is empty, and the agent's state
 (`working / blocked / idle / done`) in the bar. The first map appears page by page as the agent
 renders; comments and questions work from the first card.
 
-## Status — first slice built
+## Status — built in Rust
 
-- **Workspace inventory**: `project/service.py list` (and `GET /workspaces`) reads Herdr's
-  workspaces and agents, and marks each `map` / `empty` / `none` from the project records.
-- **No-link open**: `project/service.py open <workspace>` publishes a one-page skeleton
-  ("No map yet" + label + repo path), stores the edit link server-side in
-  `project/data/projects.json`, launches Mindmap with that link internally, and joins + dismisses
-  the dialog over the app's control channel. Verified on `eisledger`: the Mac showed the empty
-  workspace with the `Overview` tab and `1 live`, no link anywhere.
-- **Service**: `project/service.py serve` exposes `/health`, `/workspaces`, `/open/<id>` and
-  `/init/<id>` (init is open for now).
+The Python reference was scaffolding and has been removed. The product service is
+[`service/`](../service/README.md), a Rust binary (serde only, std TCP), and the client browser is
+in `client-workspaces.patch`.
 
-Still to come: the in-app workspace browser (the list lives in the service/CLI today), Init
-starting the agent, the model renderer, comments in the canvas, and remote hosts.
+- **Workspace inventory**: `mindmap-service list` reads Herdr's workspaces and agents and marks
+  each `map` / `empty` / `none`.
+- **In-app browser**: Mindmap opens on the workspace list (map mode): rows with label, path,
+  agents and MAP/EMPTY/INIT badges; the right pane opens the map or starts Init.
+- **No links**: `mindmap-service` publishes the skeleton, keeps the join link in
+  `service/data/projects.json`, and the app joins the returned link through `collab.join`. The
+  human never sees it.
+- **Init**: publishes the document, then prompts an agent already in the workspace or starts the
+  first detected CLI (`codex`, `claude`, `kimi`, `opencode`, `gemini`, `cursor`) in a background
+  tab, accepts a first-run folder-trust prompt, and submits the mindmap skill prompt. Verified on
+  a disposable worktree: a fresh codex accepted the prompt.
+- **TCP API** on `47821`: `health`, `workspaces`, `open`, `init` (newline JSON).
+
+Still to come: the model renderer (the agent prompt points at `mindmap render`, which does not
+exist yet), the comments surface, remote hosts, auth on the service socket, and a systemd unit.
 
 ## Milestones
 
