@@ -11,3 +11,6 @@ server/*.log
 .cargo-home/
 server/bin/
 .docker-config/
+
+# project service state (tokens, published file ids)
+project/data/

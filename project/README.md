@@ -114,6 +114,21 @@ The client shows the Init button while the model is empty, and the agent's state
 (`working / blocked / idle / done`) in the bar. The first map appears page by page as the agent
 renders; comments and questions work from the first card.
 
+## Status — first slice built
+
+- **Workspace inventory**: `project/service.py list` (and `GET /workspaces`) reads Herdr's
+  workspaces and agents, and marks each `map` / `empty` / `none` from the project records.
+- **No-link open**: `project/service.py open <workspace>` publishes a one-page skeleton
+  ("No map yet" + label + repo path), stores the edit link server-side in
+  `project/data/projects.json`, launches Mindmap with that link internally, and joins + dismisses
+  the dialog over the app's control channel. Verified on `eisledger`: the Mac showed the empty
+  workspace with the `Overview` tab and `1 live`, no link anywhere.
+- **Service**: `project/service.py serve` exposes `/health`, `/workspaces`, `/open/<id>` and
+  `/init/<id>` (init is open for now).
+
+Still to come: the in-app workspace browser (the list lives in the service/CLI today), Init
+starting the agent, the model renderer, comments in the canvas, and remote hosts.
+
 ## Milestones
 
 1. **Project service + auto-join** — folder → skeleton document → client opens it, no links.
