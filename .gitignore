@@ -14,3 +14,10 @@ server/bin/
 
 # project service state (tokens, published file ids)
 project/data/
+
+# Rust service/client build state
+client-src/
+.client-src-orig/
+.scratch/
+service/target/
+service/data/
