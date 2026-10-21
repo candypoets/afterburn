@@ -48,7 +48,8 @@ the app's control channel and `ui.render`.
 human's screen. `--map-mode` hides the layers and design panels, the toolbar, the tab bar and the
 frame labels, and adds a top bar with one tab per page and the live count. The app is renamed and
 carries its own icon; eframe's runtime Dock-icon override is skipped in map mode so the bundle's
-icon is the one shown. The patch, the icon and `build-mac.sh`
+icon is the one shown. Every command that edits the document is refused in map mode — select,
+navigate and comment only. The patch, the icon and `build-mac.sh`
 live in [`client/`](client/README.md). It is a UI gate, not yet a permission model: editing
 shortcuts and the writable document remain, and page navigation is done by the control channel
 until the map has in-canvas links.
@@ -143,6 +144,7 @@ design/
   sources.py       anchor resolution, repo statistics, revision
   build_map.py     assemble pages, create components, place instances, publish
   build_system.py  build and publish the system design and its screens page
+project/README.md  how opening a folder replaces links: project service, Herdr, agents
   context.py       the context bundle for a selected layer
   check_anchors.py resolve and print every anchor
 ```

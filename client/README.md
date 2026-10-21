@@ -32,6 +32,10 @@ open -a ~/Applications/Mindmap.app --args --map-mode --control 49125 \
   are not drawn. The canvas, selection, zoom, prototype links and live session stay.
 - Adds a **map bar** at the top: one tab per page (click to `page.select`, accent underline on the
   active page) and a live count (`N live` while joined, `offline` otherwise, counting you).
+- **Refuses edits.** Every command whose spec is a document edit is refused in map mode
+  (`FigApp::run` checks `CommandSpec::history`), except `comment.*`; `tool.*` and `text.edit` are
+  refused too. Selection, navigation, zoom, joins and comments still run. Hiding the tools was
+  not enough; this is the permission model.
 - **Keeps the bundle icon.** eframe calls `NSApplication.setApplicationIconImage` from the embedded
   FigCraft icon when `with_icon` is set, which is why the Dock showed FigCraft even with a new
   bundle. Map mode now skips `with_icon`, so macOS uses `AppIcon.icns` from the bundle.
@@ -43,6 +47,10 @@ open -a ~/Applications/Mindmap.app --args --map-mode --control 49125 \
 
 ## Known gaps (the next slice)
 
+- **Opening a project.** There is still no folder → project flow in the client; the current entry
+  is a join link (see `project/README.md` for the design that removes links entirely).
+- **Comments surface.** The guard allows comments, but the panel that creates and reads a thread
+  is still hidden with the old chrome.
 - **In-canvas links.** Cards show "Open →" in the design, but clicking one still selects it rather
   than moving the canvas. The next step is: a click on a card with a navigate interaction selects
   its destination page and zooms to the target — no prototype player.

@@ -91,10 +91,10 @@ index 236e278..e1580c6 100644
      let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, widgets::FIELD_H));
      ui.scope_builder(egui::UiBuilder::new().max_rect(search), |ui| {
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 450317b..fd2057f 100644
+index 450317b..8fdd08a 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
-@@ -39,6 +39,18 @@ pub mod list_drag;
+@@ -39,6 +39,33 @@ pub mod list_drag;
  pub mod live;
  pub mod live_text;
  pub mod measure_overlay;
@@ -110,10 +110,35 @@ index 450317b..fd2057f 100644
 +        || std::env::var_os("MINDMAP_CLIENT").is_some()
 +}
 +
++/// What the human may do in map mode: look, navigate, ask and comment. Every
++/// command that would edit the document is refused, not just hidden.
++fn map_command_allowed(id: &str) -> bool {
++    if id.starts_with("comment.") || id.starts_with("collab.") || id.starts_with("view.") {
++        return true;
++    }
++    if id.starts_with("tool.") || id.starts_with("text.edit") {
++        return false;
++    }
++    match figcraft_engine::cmd::all_commands().iter().find(|c| c.id == id) {
++        Some(spec) => !spec.history,
++        None => true,
++    }
++}
++
  pub mod menus;
  pub mod missing_fonts;
  pub mod online;
-@@ -1419,6 +1431,7 @@ impl FigApp {
+@@ -760,6 +787,9 @@ impl FigApp {
+ 
+     /// Run a command, surfacing errors as a toast. Returns the result.
+     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
++        if map_mode() && !map_command_allowed(id) {
++            return None;
++        }
+         let r = self.session.execute(id, &params);
+         self.handle_ui_requests();
+         r.map_err(|e| self.failed(id, &e)).ok()
+@@ -1419,6 +1449,7 @@ impl FigApp {
      pub(crate) fn frame(&mut self, ui: &mut egui::Ui) {
          let ctx = ui.ctx().clone();
          let t = theme::Tokens::get(&ctx);
@@ -121,7 +146,7 @@ index 450317b..fd2057f 100644
          // A field that had the keyboard when the frame began keeps its keys from the shortcuts
          // even if it lets go during the frame (Enter commits it), or as it began (egui drops the
          // focus on Escape before the frame, which cancels the field's edit and nothing else).
-@@ -1443,7 +1456,9 @@ impl FigApp {
+@@ -1443,7 +1474,9 @@ impl FigApp {
          // The Inspect tab measures on hover without Alt.
          self.session.tool.redlines = self.ui.right_tab == RightTab::Inspect;
          self.end_pen_outside_design();
@@ -132,7 +157,7 @@ index 450317b..fd2057f 100644
          if self.ui.present.is_some() {
              // A close request can arrive while the presenter fills the window. Let its unsaved
              // changes dialog take Escape and draw above the player just as it does in the editor.
-@@ -1467,7 +1482,7 @@ impl FigApp {
+@@ -1467,7 +1500,7 @@ impl FigApp {
              return;
          }
          let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
@@ -141,7 +166,7 @@ index 450317b..fd2057f 100644
              egui::Panel::left("left_rail")
                  .exact_size(56.0)
                  .resizable(false)
-@@ -1478,7 +1493,7 @@ impl FigApp {
+@@ -1478,7 +1511,7 @@ impl FigApp {
                  });
          }
          // The panels are as wide as asked, less in a window too small for them and the canvas.
@@ -150,7 +175,7 @@ index 450317b..fd2057f 100644
          let (left_w, right_w) = fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), self.ui.right_width);
          let rows = ui.available_rect_before_wrap().y_range();
          let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
-@@ -1498,7 +1513,7 @@ impl FigApp {
+@@ -1498,7 +1531,7 @@ impl FigApp {
                      layers::left_panel(self, ui)
                  });
          }
@@ -159,7 +184,7 @@ index 450317b..fd2057f 100644
              edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
              egui::Panel::right("right_panel")
                  .resizable(false)
-@@ -1519,13 +1534,86 @@ impl FigApp {
+@@ -1519,13 +1552,86 @@ impl FigApp {
              let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
              canvas::show(self, ui, &mut worker);
              self.worker = Some(worker);

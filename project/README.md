@@ -1,0 +1,76 @@
+# project — open a folder, get the map
+
+The goal: **no links in the human's hands.** Opening a local or remote folder gives a project,
+its design, its pages, and an agent already working on it. Links and tokens become an internal
+detail of the project service.
+
+## The objects
+
+| Object | Holds |
+|---|---|
+| **Project** | id, name, folder (`/path` or `host:/path`), host, document id on our server, the edit token, the Herdr workspace id, created/updated. |
+| **Agent host** | the machine that owns the folder and runs the private Herdr session (one per Mindmap server). |
+| **Document** | the FigCraft file on the 0.7.0 fork; pages = the map's altitudes. |
+
+Stored server-side (a small JSON store or SQLite under `server/data/projects/`), never shown to the
+human.
+
+## Open flow
+
+```
+open folder ──▶ project service ──▶ project exists? ──▶ document exists?
+                    │                      │ no                │ no
+                    │                      └─ create record     └─ publish a skeleton page, store id + token
+                    │
+                    ├─ ensure the private Herdr session (start it if down)
+                    ├─ ensure a workspace for the folder (`herdr workspace create --cwd …`)
+                    ├─ count agents (`herdr agent list`); if 0, start one
+                    └─ return {server, file, token} to the client
+```
+
+The client receives `{server, file, token}` and calls `collab.join` **itself** — no join dialog, no
+link text. `--project <id>` (or a project URL over Tailscale) is the only argument.
+
+Pages are ready immediately: the service publishes a skeleton page (project name, folder, a note
+that the agent is reading the repository), then the agent builds the real map on top of it.
+
+## Remote folders
+
+The project service runs where the folder lives, because that is where Herdr, the agent CLIs and
+the worktrees are. The server holds the document. The Mac client talks to:
+
+- the document server (`ws://…:47910`) for the canvas,
+- the project service (HTTP, over Tailscale) for "open this project".
+
+No ports are exposed publicly; both ride the tailnet.
+
+## Herdr and the agents
+
+- **Bundled, not required.** Ship the pinned `herdr` binary with the server. On startup: use a
+  `herdr` already on `PATH` if its version matches; otherwise install the bundled one under
+  `server/bin/`. The user never installs or starts it.
+- **Private session**, as proven in `server/private-herdr.sh`: own socket under
+  `server/data/agents`, every inherited `HERDR_*` variable unset, named session. The user's own
+  Herdr is never touched.
+- **One workspace per project** (`--cwd` the folder); worktrees for parallel designs come from
+  `herdr worktree`.
+- **Agent count from Herdr**: parse `herdr agent list` for the project's workspace. If 0, start
+  one: detect available CLIs in order (`codex`, `dsh`, `claude`, `opencode`), start the first with
+  `herdr agent start`, then prompt it.
+- **The prompt** is the `/init` contract: read the repository, emit a map model for our builder,
+  render the pages through the FigCraft MCP joined to the project document, and leave sources on
+  each card.
+
+## Read-only humans
+
+The client is a viewer with a voice: selection, navigation, comments, questions. The command guard
+in map mode refuses every history command except `comment.*` (implemented). The comments surface
+(creating a thread on a selection, reading replies) is the next UI piece; today the guard allows
+the commands but the panel is still hidden.
+
+## Milestones
+
+1. **Project service + auto-join** — folder → skeleton document → client opens it, no links.
+2. **Comments in map mode** — one affordance: select, comment, read the thread.
+3. **Agent bootstrap** — Herdr ensure/install, workspace, agent count, `/init` through the builder.
+4. **Click-to-navigate** — a card with a destination moves the canvas to it (no prototype player).
