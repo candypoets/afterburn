@@ -13,7 +13,7 @@ taken off the human's screen. It is named **Mindmap**, has its own icon, and ope
 
 ```sh
 git clone https://github.com/storytold/figcraft ~/code/figcraft
-cd ~/code/figcraft && git checkout -b mindmap-client
+cd ~/code/figcraft && git checkout -b mindmap-client   # patch is against 0.7.0, main a0d1162
 git apply ~/code/mindmap/client/mindmap-client.patch
 ~/code/mindmap/client/build-mac.sh ~/code/figcraft
 ```
@@ -30,6 +30,11 @@ open -a ~/Applications/Mindmap.app --args --map-mode --control 49125 \
 - Adds **map mode** (`--map-mode`, or `MINDMAP_CLIENT=1`): the left rail and layers/Assets panels,
   the right Design/Prototype/Inspect panels, the bottom toolbar, the tab bar and the frame labels
   are not drawn. The canvas, selection, zoom, prototype links and live session stay.
+- Adds a **map bar** at the top: one tab per page (click to `page.select`, accent underline on the
+  active page) and a live count (`N live` while joined, `offline` otherwise, counting you).
+- **Keeps the bundle icon.** eframe calls `NSApplication.setApplicationIconImage` from the embedded
+  FigCraft icon when `with_icon` is set, which is why the Dock showed FigCraft even with a new
+  bundle. Map mode now skips `with_icon`, so macOS uses `AppIcon.icns` from the bundle.
 - Renames the app: window title, run name, app id (`dev.mindmap.client`), the home wordmark and the
   version line. The bundle carries `CFBundleName`/`CFBundleDisplayName` **Mindmap** and `AppIcon`.
 - Leaves the engine untouched: this is a UI gate, not a permission model. Editing shortcuts still
@@ -38,9 +43,11 @@ open -a ~/Applications/Mindmap.app --args --map-mode --control 49125 \
 
 ## Known gaps (the next slice)
 
-- **Page navigation.** With tabs and the layers panel hidden there is no way to move between pages;
-  today the control channel does it (`page.select`). The map needs in-canvas links (the detail
-  screen's prototype link is the pattern) or a minimal page switcher.
+- **In-canvas links.** Cards show "Open →" in the design, but clicking one still selects it rather
+  than moving the canvas. The next step is: a click on a card with a navigate interaction selects
+  its destination page and zooms to the target — no prototype player.
+- **Auto-join.** A join link passed at launch opens the Join dialog prefilled; the control channel
+  (`collab.join`) completes it. It should join straight away.
 - **Ask bar.** The composer in the "Screens" design page is a drawing, not wired yet.
 - **Comments.** Pinning and reading threads should survive in map mode; the Comments panel was in
   the hidden chrome.

@@ -46,7 +46,9 @@ the app's control channel and `ui.render`.
 
 **Mindmap.app** is the Mac client: FigCraft's engine and canvas with the editor taken off the
 human's screen. `--map-mode` hides the layers and design panels, the toolbar, the tab bar and the
-frame labels; the app is renamed and carries its own icon. The patch, the icon and `build-mac.sh`
+frame labels, and adds a top bar with one tab per page and the live count. The app is renamed and
+carries its own icon; eframe's runtime Dock-icon override is skipped in map mode so the bundle's
+icon is the one shown. The patch, the icon and `build-mac.sh`
 live in [`client/`](client/README.md). It is a UI gate, not yet a permission model: editing
 shortcuts and the writable document remain, and page navigation is done by the control channel
 until the map has in-canvas links.

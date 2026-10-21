@@ -9,7 +9,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from fc import Doc, F, H, Vt, R, T
+from fc import Doc, F, H, Vt, R, T, shadow
 import map_kit as K
 import build_map
 
@@ -156,69 +156,130 @@ def main():
 
 # --- screens page ---------------------------------------------------------------
 
-def _mock(w=820, h=600, name="Screen"):
-    return F(name, w=w, h=h, fill="#EDEBE6", stroke=K.BORDER, radius=14, clip=True)
+UI_BG = "#F4F4F2"
+UI_PANEL = "#FFFFFF"
+UI_BORDER = "#E3E2DF"
+UI_TEXT = "#1A1A1A"
+UI_MUTED = "#6E6C68"
+UI_ACCENT = "#B5452F"
+UI_SOFT = "#F1F0ED"
 
 
-def _topbar(w=820):
-    return F("Top bar",
-             _t("Mindmap", 15, K.SANS, "Medium", K.FG, name="wordmark", x=20, y=17),
-             _t("FigCraft  ›  Components", 11, K.MONO, "Regular", K.MUTED, name="crumb", x=132, y=20),
-             F("Share", _t("Share", 11, K.SANS, "Medium", "#FFFFFF", name="label", x=14, y=7),
-               x=w - 96, y=13, w=72, h=30, fill=K.ACCENT, radius=6),
-             x=0, y=0, w=w, h=56, fill=K.SURF, clip=True)
+def _ui(text, size, font=K.SANS, style="Regular", color=UI_TEXT, w=None, name=None, lh=None, ls=None, x=0, y=0):
+    return _t(text, size, font, style, color, w=w, name=name, lh=lh, ls=ls, x=x, y=y)
 
 
-def _card(x, y, title, lines, w=360, h=180):
-    return F("Card " + title,
-             _t(title, 15, K.SANS, "Medium", K.FG, name="title", x=14, y=12),
-             _t(lines, 11, K.SANS, "Regular", K.MUTED, w=w - 28, name="body", lh=16, x=14, y=38),
-             x=x, y=y, w=w, h=h, fill=K.SURF, stroke=K.BORDER, radius=8, clip=True)
+def _shadow():
+    return F("shadow", x=0, y=0, w=1, h=1, fill=None)
 
 
-def _composer(x, y, w, question, hint="⏎"):
-    return F("Composer",
-             _t(question, 13, K.SANS, "Regular", "#F2EFE8", w=w - 70, name="question", x=16, y=14),
-             _t(hint, 11, K.MONO, "Regular", K.DISABLED, name="hint", x=w - 34, y=15),
-             x=x, y=y, w=w, h=46, fill=K.FG, radius=9, clip=True)
+def _topbar(w, active="Overview", crumb="FigCraft  /  Components"):
+    tabs = ["Overview", "Components", "Handoff"]
+    tab_nodes = []
+    x = 460
+    for name in tabs:
+        tab_nodes.append(_ui(name, 12, K.SANS, "Medium", UI_ACCENT if name == active else UI_MUTED,
+                             name="tab " + name, x=x, y=21))
+        if name == active:
+            tab_nodes.append(F("underline", x=x, y=52, w=len(name) * 6.4, h=2, fill=UI_ACCENT))
+        x += len(name) * 7 + 26
+    people = [("JL", "#6B4E8C"), ("MK", "#2F6F6A"), ("TS", "#8A6D2B")]
+    avatars = []
+    x = w - 280
+    for initials, color in people:
+        avatars.append(F("Avatar " + initials,
+                         _ui(initials, 9, K.MONO, "Medium", "#FFFFFF", name="initials", x=6, y=5),
+                         x=x, y=16, w=22, h=22, fill=color, radius=11))
+        x += 18
+    return F(
+        "Top bar",
+        _ui("Mindmap", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=19),
+        _ui(crumb, 11, K.MONO, "Regular", UI_MUTED, name="crumb", x=112, y=22),
+        *tab_nodes,
+        *avatars,
+        _ui("3 live", 10, K.MONO, "Medium", "#2F6F6A", name="live", x=w - 160, y=22),
+        F("Share", _ui("Share", 11, K.SANS, "Medium", "#FFFFFF", name="label", x=14, y=7),
+          x=w - 96, y=14, w=72, h=28, fill=UI_TEXT, radius=6),
+        F("line", x=0, y=55, w=w, h=1, fill=UI_BORDER),
+        x=0, y=0, w=w, h=56, fill=UI_PANEL, effects=[shadow(y=2, blur=10, color="#00000010")])
+
+
+def _canvas_card(x, y, index, title, body, link, source="", w=300, h=152):
+    return F(
+        "Card " + title,
+        _ui(f"{index:02d}  ·  {link.upper()}", 9, K.MONO, "Medium", UI_MUTED, name="eyebrow", ls=3, x=16, y=14),
+        _ui(title, 15, K.SANS, "Medium", UI_TEXT, name="title", x=16, y=34),
+        _ui(body, 11.5, K.SANS, "Regular", UI_MUTED, w=w - 32, name="body", lh=16, x=16, y=58),
+        _ui(source, 9, K.MONO, "Regular", "#9A9791", name="source", x=16, y=h - 44),
+        _ui("Open  →", 11, K.SANS, "Medium", UI_ACCENT, name="link", x=16, y=h - 26),
+        x=x, y=y, w=w, h=h, fill=UI_PANEL, stroke=UI_BORDER, radius=8,
+        effects=[shadow(y=2, blur=8, color="#00000010")])
+
+
+def _ask(w, text, context=None):
+    kids = []
+    x_text = 20
+    if context:
+        kids.append(F("Context",
+                      _ui(context, 9, K.MONO, "Regular", UI_MUTED, w=272, name="context", x=10, y=7),
+                      x=14, y=13, w=292, h=26, fill=UI_SOFT, radius=5))
+        x_text = 320
+    kids.append(_ui(text, 12.5, K.SANS, "Regular", UI_TEXT, name="question", x=x_text, y=18))
+    kids.append(F("Send", _ui("↑", 13, K.SANS, "Medium", "#FFFFFF", name="glyph", x=9, y=5),
+                  x=w - 56 - 44, y=11, w=28, h=28, fill=UI_ACCENT, radius=14))
+    return F("Ask bar", *kids, x=28, y=524, w=w - 56, h=50, fill=UI_PANEL, stroke=UI_BORDER,
+             radius=10, effects=[shadow(y=4, blur=16, color="#00000018")])
+
+
+def _reply(x, y, w=304, h=170):
+    return F("Agent reply",
+             _ui("AGENT", 9, K.MONO, "Medium", UI_ACCENT, name="who", ls=4, x=16, y=14),
+             _ui("Every instance is rebuilt from its main, keeping layer ids and re-applying "
+                 "overrides. That is why a component edit reaches every screen.", 11.5, K.SANS,
+                 "Regular", UI_TEXT, w=w - 32, name="text", lh=17, x=16, y=34),
+             _ui("crates/engine/src/components.rs:5", 9, K.MONO, "Regular", UI_MUTED,
+                 name="source", x=16, y=h - 26),
+             x=x, y=y, w=w, h=h, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
+             effects=[shadow(y=4, blur=14, color="#00000014")])
+
+
+def _screens_page(doc):
+    page = doc.page("Screens", bg=K.BG)
+    doc.place(page, K.heading(
+        "The canvas client",
+        "No tools, no panels. Pages and people in one thin bar, cards that link to the next "
+        "altitude, and a question bar that carries the selection with it.", w=1900), 64, 56)
+
+    project = F("Project screen", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    project.add(
+        _topbar(980, active="Overview"),
+        _canvas_card(28, 84, 1, "Canvas and layers", "Frames, groups, sections and text are one node tree. The canvas is how you read it now.", "Overview", "doc/node.rs:3"),
+        _canvas_card(344, 84, 2, "Components", "A component is a subtree with identity; an instance remembers it and what changed.", "Components", "components.rs:1"),
+        _canvas_card(660, 84, 3, "Handoff", "The same file becomes the spec: measurements, annotations, code.", "Handoff", "devinspect.rs:1"),
+        _canvas_card(28, 252, 4, "Auto layout", "Frames size themselves and children follow rules instead of coordinates.", "Layout", "layout/lib.rs:3"),
+        _canvas_card(344, 252, 5, "Styles and variables", "Colour, number, string and boolean values, with modes and bindings.", "Styles", "doc/lib.rs:170"),
+        _canvas_card(660, 252, 6, "Text", "Fonts, shaping, bidi and line layout — a stack of its own.", "Text", "text/lib.rs:3"),
+        _ask(980, "Ask about a card, or describe the change…"))
+    doc.place(page, project, 64, 250)
+
+    detail = F("Detail screen", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    detail.add(
+        _topbar(980, active="Components", crumb="FigCraft  /  Components  /  Variants"),
+        _ui("←  Overview", 11, K.SANS, "Medium", UI_ACCENT, name="back", x=28, y=74),
+        _canvas_card(28, 100, 1, "A main changes, every instance rebuilds", "The engine rebuilds each instance, keeps layer ids and re-applies the overrides.", "Detail", "components.rs:5", w=420),
+        _canvas_card(28, 268, 2, "Overrides are groups", "Fills, strokes, effects, opacity, characters, text style and size reset on their own.", "Detail", "components.rs:11", w=420),
+        _reply(500, 100),
+        _ask(980, "Why does editing a main change every screen?", context="Components and instances  ·  components.rs:1"))
+    doc.place(page, detail, 1092, 250)
+
+    doc.place(page, _ui("01 · PROJECT — cards link down, pages and people stay in the bar", 10, K.MONO, "Medium", K.MUTED, name="cap1", ls=3), 64, 222)
+    doc.place(page, _ui("02 · DETAIL — a link moves the canvas; the ask carries its sources", 10, K.MONO, "Medium", K.MUTED, name="cap2", ls=3), 1092, 222)
+    doc.place(page, F("spacer", x=0, y=0, w=1, h=64, fill=None), 64, 870)
+    return page
 
 
 def build_screens(doc):
-    page = doc.page("Screens", bg=K.BG)
-    doc.place(page, K.heading(
-        "Client screens — a proposal",
-        "The map client has no tools: a canvas, a top bar, a question bar, and the agent's work "
-        "shown where it happened. Two screens, drawn at the size of the Mac window.", w=1800),
-        64, 56)
-
-    project = _mock(name="Project")
-    project.add(
-        _topbar(),
-        _card(24, 80, "Canvas and layers", "Frames, groups, sections, shapes and text are one node tree. The canvas is how you edit it — or, here, how you read it."),
-        _card(420, 80, "Components", "A component is a subtree with identity; an instance remembers it and what changed."),
-        _card(24, 280, "Auto layout", "Frames size themselves and children follow rules instead of coordinates."),
-        _composer(24, 526, 772, "Ask or describe a change…", "⌘K"))
-    doc.place(page, project, 64, 250)
-
-    ask = _mock(name="Ask")
-    ask.add(
-        _topbar(),
-        _card(24, 80, "Canvas and layers", "Frames, groups, sections, shapes and text are one node tree. The canvas is how you edit it — or, here, how you read it.", h=180),
-        F("Selection", x=18, y=74, w=372, h=192, fill=None, stroke=K.ACCENT, sw=2, radius=10),
-        F("Context",
-          _t("SELECTED · Components and instances", 9, K.MONO, "Medium", K.ACCENT, name="label", ls=4, x=12, y=6),
-          _t("components.rs:1", 10, K.MONO, "Regular", K.MUTED, name="src", x=250, y=6),
-          x=24, y=470, w=520, h=26, fill="#F7F4EE", stroke=K.BORDER, radius=6, clip=True),
-        F("Reply",
-          _t("AGENT", 9, K.MONO, "Medium", K.ACCENT, name="who", ls=4, x=14, y=10),
-          _t("Every instance is rebuilt from its main, keeping layer ids and re-applying overrides. That is why a component edit reaches every screen.", 11, K.SANS, "Regular", K.FG, w=330, name="text", lh=16, x=14, y=28),
-          x=420, y=280, w=372, h=150, fill=K.SURF, stroke=K.BORDER, radius=8, clip=True),
-        _composer(24, 526, 772, "Why does editing a main change every screen?", "⏎"))
-    doc.place(page, ask, 960, 250)
-
-    doc.place(page, _t("PROJECT · no panels, no tools", 10, K.MONO, "Medium", K.MUTED, name="cap1", ls=4), 64, 870)
-    doc.place(page, _t("ASK · the selection carries its sources", 10, K.MONO, "Medium", K.MUTED, name="cap2", ls=4), 960, 870)
-    return page
+    return _screens_page(doc)
 
 
 if __name__ == "__main__":

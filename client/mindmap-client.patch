@@ -1,14 +1,15 @@
 diff --git a/apps/figcraft/src/main.rs b/apps/figcraft/src/main.rs
-index 1bba81e..ea75ff3 100644
+index 1bba81e..cf71568 100644
 --- a/apps/figcraft/src/main.rs
 +++ b/apps/figcraft/src/main.rs
-@@ -120,10 +120,14 @@ impl eframe::App for App {
+@@ -120,10 +120,15 @@ impl eframe::App for App {
  
  fn main() -> eframe::Result {
      env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 -    let args: Vec<String> = std::env::args().skip(1).collect();
 +    let mut args: Vec<String> = std::env::args().skip(1).collect();
-+    if args.iter().any(|a| a == "--map-mode") {
++    let map_mode = args.iter().any(|a| a == "--map-mode");
++    if map_mode {
 +        figcraft_ui_egui::set_map_mode(true);
 +        args.retain(|a| a != "--map-mode");
 +    }
@@ -19,7 +20,7 @@ index 1bba81e..ea75ff3 100644
              env!("CARGO_PKG_VERSION"),
              option_env!("FIGCRAFT_BUILD_SHA").filter(|s| !s.is_empty()).map(|s| format!(" ({s})")).unwrap_or_default()
          );
-@@ -143,7 +147,7 @@ fn main() -> eframe::Result {
+@@ -143,7 +148,7 @@ fn main() -> eframe::Result {
          (true, _) => None,
          (false, Ok(r)) => Some(Arc::new(r)),
          (false, Err(e)) => {
@@ -28,7 +29,7 @@ index 1bba81e..ea75ff3 100644
              std::process::exit(2);
          }
      };
-@@ -219,8 +223,8 @@ fn main() -> eframe::Result {
+@@ -219,8 +224,8 @@ fn main() -> eframe::Result {
      // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
      // and StartupWMClass (FreeBSD's package matches the binary's name instead).
      let mut viewport = egui::ViewportBuilder::default()
@@ -39,7 +40,22 @@ index 1bba81e..ea75ff3 100644
          .with_inner_size([1440.0, 900.0])
          .with_min_inner_size([800.0, 500.0])
          .with_drag_and_drop(true);
-@@ -243,7 +247,7 @@ fn main() -> eframe::Result {
+@@ -228,8 +233,12 @@ fn main() -> eframe::Result {
+     // before enabling a client-side frame. Other windows inherit that decision.
+     fig.ui.title_bar = desktop_title_bar();
+     viewport = window_chrome(viewport, fig.ui.title_bar);
+-    if let Some(icon) = icon {
+-        viewport = viewport.with_icon(icon);
++    // In map mode the bundle's icon is the identity: eframe would set the
++    // runtime (Dock) icon from the embedded FigCraft one.
++    if !map_mode {
++        if let Some(icon) = icon {
++            viewport = viewport.with_icon(icon);
++        }
+     }
+     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
+     graphics::configure(&mut options.wgpu_options);
+@@ -243,7 +252,7 @@ fn main() -> eframe::Result {
      #[cfg(target_os = "macos")]
      let apple_events = &apple_events;
      let result = eframe::run_native(
@@ -75,7 +91,7 @@ index 236e278..e1580c6 100644
      let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, widgets::FIELD_H));
      ui.scope_builder(egui::UiBuilder::new().max_rect(search), |ui| {
 diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
-index 450317b..0ffac73 100644
+index 450317b..fd2057f 100644
 --- a/crates/ui-egui/src/lib.rs
 +++ b/crates/ui-egui/src/lib.rs
 @@ -39,6 +39,18 @@ pub mod list_drag;
@@ -89,7 +105,7 @@ index 450317b..0ffac73 100644
 +    MAP_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
 +}
 +
-+pub(crate) fn map_mode() -> bool {
++pub fn map_mode() -> bool {
 +    MAP_MODE.load(std::sync::atomic::Ordering::Relaxed)
 +        || std::env::var_os("MINDMAP_CLIENT").is_some()
 +}
@@ -143,7 +159,7 @@ index 450317b..0ffac73 100644
              edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
              egui::Panel::right("right_panel")
                  .resizable(false)
-@@ -1519,7 +1534,7 @@ impl FigApp {
+@@ -1519,13 +1534,86 @@ impl FigApp {
              let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
              canvas::show(self, ui, &mut worker);
              self.worker = Some(worker);
@@ -152,3 +168,82 @@ index 450317b..0ffac73 100644
                  ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
                      a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
                      toolbar::show(self, ui);
+                 });
+             }
+         });
++        if map_mode {
++            let pages: Vec<(figcraft_doc::NodeId, String)> = self
++                .session
++                .doc()
++                .map(|d| {
++                    d.pages
++                        .iter()
++                        .filter_map(|p| d.node(*p).map(|n| (*p, n.name.clone())))
++                        .collect()
++                })
++                .unwrap_or_default();
++            let current = self.session.page().ok();
++            let (people, joined) = {
++                let live = self.session.live();
++                (live.peers.len() + 1, matches!(live.status, figcraft_engine::live::Status::Live))
++            };
++            let accent = egui::Color32::from_rgb(0xB5, 0x45, 0x2F);
++            let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
++            let ink = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
++            egui::Area::new(egui::Id::new("map_bar"))
++                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 10.0))
++                .order(egui::Order::Foreground)
++                .show(&ctx, |ui| {
++                    egui::Frame::NONE
++                        .fill(egui::Color32::from_rgb(0xFF, 0xFF, 0xFF))
++                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0xE3, 0xE2, 0xDF)))
++                        .corner_radius(egui::CornerRadius::same(10))
++                        .inner_margin(egui::Margin::symmetric(10, 6))
++                        .show(ui, |ui| {
++                            ui.spacing_mut().item_spacing = egui::vec2(14.0, 4.0);
++                            ui.horizontal(|ui| {
++                                for (id, name) in &pages {
++                                    let active = Some(*id) == current;
++                                    let resp = ui.add(
++                                        egui::Button::new(
++                                            egui::RichText::new(name)
++                                                .size(12.0)
++                                                .color(if active { accent } else { muted }),
++                                        )
++                                        .frame(false),
++                                    );
++                                    if active {
++                                        let r = resp.rect;
++                                        ui.painter().line_segment(
++                                            [
++                                                egui::pos2(r.left(), r.bottom() + 2.0),
++                                                egui::pos2(r.right(), r.bottom() + 2.0),
++                                            ],
++                                            egui::Stroke::new(2.0, accent),
++                                        );
++                                    }
++                                    if resp.clicked() {
++                                        self.run("page.select", serde_json::json!({"id": id}));
++                                    }
++                                }
++                                ui.separator();
++                                ui.label(
++                                    egui::RichText::new(if joined {
++                                        format!("{people} live")
++                                    } else {
++                                        "offline".to_string()
++                                    })
++                                    .size(10.0)
++                                    .color(if joined {
++                                        egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
++                                    } else {
++                                        ink
++                                    }),
++                                );
++                            });
++                        });
++                });
++        }
+         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
+         for (name, x, shown, grows) in edges {
+             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {
