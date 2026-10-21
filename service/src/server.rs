@@ -127,7 +127,13 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
         })),
         "workspaces" => {
             let workspaces = service.workspaces()?;
-            Ok(json!({ "id": id, "ok": true, "workspaces": workspaces }))
+            // The picker needs the host-wide CLI list; workspace views carry it too, but the
+            // client reads it once for the screen.
+            let clis = workspaces
+                .first()
+                .map(|workspace| workspace.clis.clone())
+                .unwrap_or_default();
+            Ok(json!({ "id": id, "ok": true, "workspaces": workspaces, "clis": clis }))
         }
         "open" => {
             let query =
