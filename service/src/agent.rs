@@ -365,7 +365,19 @@ fn ensure_inner(
                     workspace.id
                 ))
             })?;
-            prompt_when_ready(herdr, pane, prompt)?;
+            let kind = agent.agent.as_deref();
+            let status = agent.agent_status.as_deref();
+            if is_tui_dsh(kind) {
+                if matches!(status, Some("working" | "blocked")) {
+                    return Err(Error::new(format!(
+                        "dsh in {pane} is {status}; choose the idle dsh pane",
+                        status = status.unwrap_or("busy")
+                    )));
+                }
+                herdr.pane_run(pane, &one_line(prompt))?;
+            } else {
+                prompt_when_ready(herdr, pane, prompt)?;
+            }
             Ok(AgentOutcome {
                 state: AgentState::Existing,
                 target: Some(target_request),
@@ -438,6 +450,17 @@ fn accept_trust(herdr: &Herdr, pane: &str) -> Result<bool> {
     herdr.send_keys(pane, &["enter"])?;
     std::thread::sleep(std::time::Duration::from_secs(2));
     Ok(true)
+}
+
+/// The DeepSeek harness TUI: Herdr sees it but its agent prompt protocol rejects it as an
+/// unnamed/non-agent pane. Literal pane input is the honest way to reach it.
+fn is_tui_dsh(kind: Option<&str>) -> bool {
+    matches!(kind, Some("dsh-tui" | "dsh"))
+}
+
+/// One line for a terminal TUI; newlines would submit the prompt in pieces.
+fn one_line(prompt: &str) -> String {
+    prompt.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Prompt the agent, accepting a trust prompt once if the first submission is rejected.

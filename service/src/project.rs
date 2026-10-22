@@ -771,6 +771,19 @@ fn pane_path(panes: &[Pane]) -> Option<String> {
         })
 }
 
+/// The checked-out branch of `path`, or `None` when it is not a git checkout.
+fn git_branch(path: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!branch.is_empty() && branch != "HEAD").then_some(branch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,18 +816,4 @@ mod tests {
         assert_eq!(pane_path(&panes).as_deref(), Some("/root/code/mindmap"));
         assert_eq!(pane_path(&[]), None);
     }
-}
-
-
-/// The checked-out branch of `path`, or `None` when it is not a git checkout.
-fn git_branch(path: &str) -> Option<String> {
-    let output = Command::new("git")
-        .args(["-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!branch.is_empty() && branch != "HEAD").then_some(branch)
 }

@@ -186,6 +186,20 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
                 ));
             }
             let result = service.send(query, &target, &prompt, &parsed)?;
+            if !result.agent.prompted {
+                let reason = result
+                    .agent
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "the agent did not accept the prompt".to_string());
+                return Ok(json!({
+                    "id": id,
+                    "ok": false,
+                    "error": format!("the prompt was not sent: {reason}"),
+                    "agent": result.agent,
+                    "sent": 0,
+                }));
+            }
             Ok(json!({
                 "id": id,
                 "ok": true,

@@ -4,6 +4,11 @@ A Herdr workspace is a project. This binary lists the workspaces on the host, gi
 FigCraft document the first time it is opened, and, on **Init**, makes sure an agent is working on
 it. **Send** prompts an agent with canvas comments without opening or publishing a document.
 **Diff** compares the client's map snapshot with the last successful sync and with the repository,
+**dsh-tui** is detected by Herdr but rejects the agent prompt protocol as an unnamed pane. The
+service falls back to `herdr pane run` (literal text + Enter) for an **idle** dsh; a working dsh is
+refused with a reason rather than silently accepted. `send` now returns `ok:false` when the agent
+did not accept the prompt, so the client keeps comments and shows the error.
+
 **Sync** prompts an agent with both real diffs and starts an in-memory job, and **sync_status**
 follows that job until Herdr shows the agent finished. `adopt` attaches a map that was already
 drawn, without prompting an agent. The edit link (with its token) stays in the service; callers get

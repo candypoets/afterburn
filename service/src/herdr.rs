@@ -237,6 +237,30 @@ impl Herdr {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
+    /// Type literal text into a pane and press Enter (`herdr pane run`). This is the fallback for
+    /// terminal agents Herdr detects but cannot prompt through its agent protocol (dsh-tui).
+    pub fn pane_run(&self, pane_id: &str, text: &str) -> Result<()> {
+        // `pane run` prints nothing on success, unlike the JSON-returning commands.
+        let output = Command::new(&self.bin)
+            .args(["pane", "run", pane_id, text])
+            .env("HERDR_ENV", "1")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| {
+                Error::new(format!(
+                    "could not run {}: {error}",
+                    self.bin.to_string_lossy()
+                ))
+            })?;
+        if !output.status.success() {
+            return Err(Error::new(herdr_error(
+                &output.stderr,
+                output.status.code(),
+            )));
+        }
+        Ok(())
+    }
+
     /// Press keys in an agent's pane (Herdr names: `enter`, `esc`, single characters).
     pub fn send_keys(&self, pane_id: &str, keys: &[&str]) -> Result<()> {
         let mut args = vec!["agent", "send-keys", pane_id];
