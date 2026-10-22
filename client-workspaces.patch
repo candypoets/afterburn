@@ -300,13 +300,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-src/crates/ui-egui/src/canvas.rs
 --- .client-src-orig/crates/ui-egui/src/canvas.rs	2026-10-21 19:19:18.000000000 +0200
-+++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 15:54:53.930027468 +0200
++++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 15:56:57.436427261 +0200
 @@ -242,7 +242,10 @@
          painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
      }
      app.session.tool.labels = overlays(app, &painter, &t);
 -    crate::frame_labels::rename_field(app, ui);
-+    detail_badges(app, &painter);
++    detail_badges(app, ui);
 +    if !crate::map_mode() {
 +        crate::frame_labels::rename_field(app, ui);
 +    }
@@ -335,32 +335,51 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return false;
      }
      if resp.secondary_clicked() {
-@@ -877,6 +882,24 @@
+@@ -877,6 +882,43 @@
  
  /// Everything drawn over the rendered page; returns the frame labels drawn (frame, corners on the
  /// page) for the engine to hit-test.
-+/// A small link badge on every card that has a dedicated detail page.
-+fn detail_badges(app: &FigApp, painter: &egui::Painter) {
-+    let Ok(ds) = app.session.ds() else { return };
-+    let doc = ds.doc.clone();
-+    for id in doc.subtree(ds.page) {
-+        let Some(node) = doc.node(id) else { continue };
-+        if !node.plugin_data.contains_key(crate::new_page::DETAIL_PAGE_KEY) {
-+            continue;
++/// A clickable link badge on every card that has a dedicated detail page.
++fn detail_badges(app: &mut FigApp, ui: &mut Ui) {
++    let links: Vec<(NodeId, u64, Pos2)> = match app.session.ds() {
++        Ok(ds) => {
++            let doc = ds.doc.clone();
++            doc.subtree(ds.page)
++                .into_iter()
++                .filter_map(|id| {
++                    let page_id = doc
++                        .node(id)?
++                        .plugin_data
++                        .get(crate::new_page::DETAIL_PAGE_KEY)?
++                        .parse::<u64>()
++                        .ok()?;
++                    let q = node_quad(app, &doc, id)?;
++                    Some((id, page_id, pos2(q[1].x - 14.0, q[1].y + 14.0)))
++                })
++                .collect()
 +        }
-+        let Some(q) = node_quad(app, &doc, id) else { continue };
-+        let center = pos2(q[1].x - 14.0, q[1].y + 14.0);
++        Err(_) => Vec::new(),
++    };
++    let painter = ui.painter();
++    for (id, page_id, center) in links {
 +        let ink = Color32::from_rgb(0x2F, 0x6F, 0x6A);
 +        painter.circle_filled(center, 11.0, ink);
 +        painter.circle_stroke(center, 11.0, stroke(Color32::WHITE, 1.5));
 +        painter.text(center, Align2::CENTER_CENTER, "↗", egui::FontId::proportional(12.0), Color32::WHITE);
++        let hit = Rect::from_center_size(center, vec2(26.0, 26.0));
++        let response = ui
++            .interact(hit, ui.id().with(("detail_link", id)), Sense::click())
++            .on_hover_text("Open detail page");
++        if response.clicked() {
++            app.run("page.select", serde_json::json!({"id": page_id}));
++        }
 +    }
 +}
 +
  fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [Point; 4])> {
      let mut labels = Vec::new();
      let Ok(ds) = app.session.ds() else { return labels };
-@@ -1045,31 +1068,35 @@
+@@ -1045,31 +1087,35 @@
              } else {
                  4
              };
@@ -419,7 +438,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
              }
          }
      }
-@@ -1195,7 +1222,7 @@
+@@ -1195,7 +1241,7 @@
          painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
          painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
      }
@@ -2233,8 +2252,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/page_delete.rs client-src/crates/ui-egui/src/page_delete.rs
 --- .client-src-orig/crates/ui-egui/src/page_delete.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/page_delete.rs	2026-10-22 15:43:19.847020317 +0200
-@@ -0,0 +1,73 @@
++++ client-src/crates/ui-egui/src/page_delete.rs	2026-10-22 15:55:44.493372343 +0200
+@@ -0,0 +1,96 @@
 +//! Delete-page confirmation. A page's cards and comments are not recoverable from the map UI.
 +
 +use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Stroke, vec2};
@@ -2300,6 +2319,29 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/page_delete.rs cl
 +        });
 +    if delete {
 +        let page_name = name.clone();
++        // A component's detail link must not survive the page it points at.
++        let stale: Vec<figcraft_doc::NodeId> = app
++            .session
++            .doc()
++            .map(|doc| {
++                doc.pages
++                    .iter()
++                    .flat_map(|page| doc.subtree(*page))
++                    .filter(|node| {
++                        doc.node(*node)
++                            .and_then(|node| node.plugin_data.get(crate::new_page::DETAIL_PAGE_KEY))
++                            .and_then(|value| value.parse::<u64>().ok())
++                            == Some(id.0)
++                    })
++                    .collect()
++            })
++            .unwrap_or_default();
++        for node in stale {
++            let _ = app.session.execute(
++                "node.set",
++                &serde_json::json!({"id": node, "pluginData": {crate::new_page::DETAIL_PAGE_KEY: null}}),
++            );
++        }
 +        if app.run("page.delete", serde_json::json!({"id": id})).is_some() {
 +            app.toast(format!("Deleted {page_name}"));
 +        }
