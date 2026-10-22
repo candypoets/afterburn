@@ -143,6 +143,20 @@ bundle. Still to come: persisting those drafts as shared FigCraft comment thread
 renderer (the agent prompt points at `mindmap render`, which does not exist yet), remote hosts,
 auth on the service socket, and a systemd unit.
 
+### Page prompts and two modes (designed)
+
+- **No selection = the whole page.** The composer's context becomes `Mindmap · whole page`; the
+  prompt can ask for page-wide work ("these designs are outdated — remove all outdated design")
+  and the agent sees the page, not a card. Esc or the composer's **×** clears a selection; the
+  input clears and drafts stay.
+- **Edit map** is one mode: the agent edits the map only (add, rename, restructure, remove), and
+  comments attach to a card or the page. Nothing in the repository changes.
+- **Sync** is the other: the agent reads the repository, diffs it against the map, and applies
+  one direction — `Code → map` (the map catches up) or `Map → code` (the repository changes). The
+  sync screen shows the diff (`3 changed`, `2 new in code`, `1 stale`), the direction, and the
+  agent target; applying records a map version.
+- The same bottom input is the comment and the prompt; the mode decides what the agent may touch.
+
 **A note on live design updates.** The client and the document server sync correctly (page
 rename/delete and document edits arrive live). The design *pipeline* was the problem: importing a
 multi-page `.figcraft` into a live document flattens its nodes onto the current page and appends

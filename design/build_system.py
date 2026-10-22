@@ -156,9 +156,21 @@ def main():
 
 # --- product screens ------------------------------------------------------------
 
-def _appbar(w, workspace, tabs=None, active=None, people=("JL", "MK", "TS"), live=3):
+def _mode_switch(x, y, active="Edit"):
+    edit = active == "Edit"
+    return F("Modes",
+             F("Edit", _ui("Edit", 10, K.SANS, "Medium", UI_ACCENT if edit else UI_MUTED,
+                           name="e", x=12, y=5),
+               x=3, y=3, w=58, h=22, fill=UI_PANEL if edit else None, radius=11),
+             F("Sync", _ui("Sync", 10, K.SANS, "Medium", UI_MUTED if edit else UI_TEXT,
+                           name="s", x=12, y=5),
+               x=65, y=3, w=58, h=22, fill=UI_PANEL if not edit else None, radius=11),
+             x=x, y=y, w=128, h=28, fill=UI_SOFT, stroke=UI_BORDER, radius=14)
+
+
+def _appbar(w, workspace, tabs=None, active=None, people=("JL", "MK", "TS"), live=3, mode=None):
     tab_nodes = []
-    x = 460
+    x = 500 if mode else 460
     for name in tabs or []:
         tab_nodes.append(_ui(name, 12, K.SANS, "Medium", UI_ACCENT if name == active else UI_MUTED,
                              name="tab " + name, x=x, y=21))
@@ -177,6 +189,7 @@ def _appbar(w, workspace, tabs=None, active=None, people=("JL", "MK", "TS"), liv
         _ui("Mindmap", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=19),
         _ui(f"Herdr  /  {workspace}", 11, K.MONO, "Regular", UI_MUTED, name="crumb", x=112, y=22),
         *tab_nodes,
+        *([_mode_switch(330, 14, mode)] if mode else []),
         _ui("befree", 10, K.MONO, "Regular", UI_MUTED, name="machine", x=w - 330, y=22),
         *avatars,
         *([_ui(f"{live} live", 10, K.MONO, "Medium", "#2F6F6A", name="live", x=w - 160, y=22)] if live else []),
@@ -315,10 +328,12 @@ def _draft(x, y, text, w):
              x=x, y=y, w=w, h=28, fill=UI_PANEL, stroke=UI_BORDER, radius=6)
 
 
-def _composer(x, y, w, context, placeholder, drafts, target="kimi", send=False, menu=False):
+def _composer(x, y, w, context, placeholder, drafts, target="kimi", send=False, menu=False, clear=False):
     kids = [
         _ui("COMMENTING ON  ·  " + context, 8.5, K.MONO, "Medium", UI_ACCENT, name="context", ls=2,
             x=16, y=12),
+        *([_ui("×  clear selection", 8.5, K.MONO, "Regular", UI_MUTED, name="clear", x=w - 130, y=12)]
+          if clear else []),
         _ui(placeholder, 12.5, K.SANS, "Regular", "#9A9791" if not send else UI_TEXT, w=w - 250,
             name="input", x=16, y=34),
         F("Target", _ui(target + "  ▾", 10.5, K.SANS, "Medium", UI_TEXT, name="name", x=12, y=6),
@@ -349,9 +364,9 @@ def _composer(x, y, w, context, placeholder, drafts, target="kimi", send=False, 
 
 
 def _screen_map():
-    f = F("Map and composer", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f = F("Comment on a selection", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "mindmap", tabs=["Overview", "Components", "Handoff"], active="Overview", live=3),
+        _appbar(980, "mindmap", tabs=["Overview"], active="Overview", live=3, mode="Edit"),
         _canvas_card(24, 84, 1, "Canvas and layers", "One node tree holds the design; the canvas is how you read it.", "Overview", "doc/node.rs:3"),
         _canvas_card(336, 84, 2, "Components", "A subtree with identity; an instance remembers what changed.", "Components", "components.rs:1"),
         _canvas_card(24, 232, 3, "Auto layout", "Frames size themselves; children follow rules.", "Layout", "layout/lib.rs:3"),
@@ -364,80 +379,99 @@ def _screen_map():
         _pin(614, 236, 3),
         _ui("DRAFTS · 1", 8.5, K.MONO, "Medium", UI_MUTED, name="drafts", ls=2, x=24, y=400),
         _draft(24, 416, "Can the rebuild reuse the instance's layer ids?", 340),
-        _composer(24, 486, 932, "Components · components.rs:1", "Comment on this card…", 1),
-        _ui("Select another card: the input clears, the draft stays.", 9, K.MONO, "Regular", UI_MUTED,
-            name="note", x=24, y=582))
+        _composer(24, 486, 932, "Components · Overview", "Comment on this card…", 1, clear=True),
+        _ui("Esc or × clears the selection; the input clears, the draft stays.", 9, K.MONO, "Regular",
+            UI_MUTED, name="note", x=24, y=582))
     return f
 
 
-def _screen_send():
-    f = F("Send", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+def _screen_page():
+    f = F("Comment on the page", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "mindmap", tabs=["Overview", "Components", "Handoff"], active="Components", live=2),
-        _canvas_card(24, 84, 1, "Canvas and layers", "The selected card is what the prompt is about.", "Overview", "doc/node.rs:3"),
-        _canvas_card(336, 84, 2, "Components", "Two drafts and one prompt, in one send.", "Components", "components.rs:1"),
-        F("Selection", x=330, y=78, w=312, h=152, fill=None, stroke=UI_ACCENT, sw=2, radius=10),
+        _appbar(980, "mindmap", tabs=["Overview"], active="Overview", live=2, mode="Edit"),
+        _canvas_card(24, 84, 1, "Canvas and layers", "One node tree holds the design; the canvas is how you read it.", "Overview", "doc/node.rs:3"),
+        _canvas_card(336, 84, 2, "Components", "A subtree with identity; an instance remembers what changed.", "Components", "components.rs:1"),
+        _canvas_card(24, 232, 3, "Auto layout", "Frames size themselves; children follow rules.", "Layout", "layout/lib.rs:3"),
         _pin(302, 88, 1),
         _pin(614, 88, 2),
-        _pin(302, 236, 3),
-        _ui("DRAFTS · 2", 8.5, K.MONO, "Medium", UI_MUTED, name="drafts", ls=2, x=24, y=372),
-        _draft(24, 388, "Can the rebuild reuse the instance's layer ids?", 340),
-        _draft(374, 388, "This should say where overrides reset.", 300),
-        _ui("The same input, now the prompt: it sends with both drafts attached.", 9, K.MONO,
-            "Regular", UI_MUTED, name="note", x=24, y=424),
-        _composer(24, 470, 932, "Components · components.rs:1",
-                  "Why does editing a main change every screen?", 2, send=True, menu=True)
-    )
+        _ui("NO SELECTION  ·  THE WHOLE PAGE", 8.5, K.MONO, "Medium", UI_MUTED, name="whole", ls=2,
+            x=24, y=400),
+        _draft(24, 416, "Whole page  ·  remove all outdated design", 320),
+        _composer(24, 486, 932, "Mindmap · whole page",
+                  "These designs are outdated — remove all outdated design.", 1, send=True),
+        _ui("Empty canvas or Esc clears a selection, and the prompt becomes about the page.", 9,
+            K.MONO, "Regular", UI_MUTED, name="note", x=24, y=582))
     return f
 
 
-def _screen_notes():
-    f = F("Comment model", w=980, h=620, fill=UI_PANEL, stroke=UI_BORDER, radius=12, clip=True)
+def _screen_sync():
+    f = F("Sync mode", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _ui("THE COMMENT MODEL", 9, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=4, x=48, y=44),
-        _ui("One input, two verbs", 30, K.SANS, "Medium", UI_TEXT, name="title", x=48, y=68),
-        _ui("The bar at the bottom is the comment box and the prompt box. The selection tells it "
-           "what you are talking about.", 12.5, K.SANS, "Regular", UI_MUTED, w=620, name="lede",
-            lh=18, x=48, y=116),
-        _ui("1", 12, K.MONO, "Medium", UI_ACCENT, name="n1", x=48, y=180),
-        _ui("Select.", 13, K.SANS, "Medium", UI_TEXT, name="t1", x=72, y=178),
-        _ui("The chip shows the page, card and source. Text selects; ⌘C copies. Right-click is Copy "
-           "or Comment, nothing else.", 11.5, K.SANS, "Regular", UI_MUTED, w=330, name="b1", lh=16,
-            x=72, y=200),
-        _ui("2", 12, K.MONO, "Medium", UI_ACCENT, name="n2", x=520, y=180),
-        _ui("Comment (⏎).", 13, K.SANS, "Medium", UI_TEXT, name="t2", x=544, y=178),
-        _ui("The input becomes a draft on that selection. Choosing another card clears the input; "
-           "the drafts stay above it.", 11.5, K.SANS, "Regular", UI_MUTED, w=340, name="b2", lh=16,
-            x=544, y=200),
-        _ui("3", 12, K.MONO, "Medium", UI_ACCENT, name="n3", x=48, y=272),
-        _ui("Send (⌘⏎).", 13, K.SANS, "Medium", UI_TEXT, name="t3", x=72, y=270),
-        _ui("The same input becomes the prompt. Every draft attaches; the target chip picks the "
-           "agent, or a new CLI.", 11.5, K.SANS, "Regular", UI_MUTED, w=330, name="b3", lh=16,
-            x=72, y=292),
-        _ui("4", 12, K.MONO, "Medium", UI_ACCENT, name="n4", x=520, y=272),
-        _ui("Nothing else.", 13, K.SANS, "Medium", UI_TEXT, name="t4", x=544, y=270),
-        _ui("No layers panel, no design tools, no auto-send. A draft reaches an agent only when "
-           "you send it.", 11.5, K.SANS, "Regular", UI_MUTED, w=340, name="b4", lh=16, x=544, y=292),
+        _appbar(980, "mindmap", tabs=["Overview"], active="Overview", live=2, mode="Sync"),
+        _canvas_card(24, 84, 1, "Canvas and layers", "The map says one thing; main says another.", "Overview", "doc/node.rs:3"),
+        _canvas_card(336, 84, 2, "Components", "A subtree with identity; an instance remembers what changed.", "Components", "components.rs:1"),
+        F("Badge changed", _ui("~  CODE CHANGED", 7.5, K.MONO, "Medium", "#8A6D2B", name="b", ls=1, x=8, y=4),
+          x=190, y=94, w=112, h=18, fill="#F7F0E2", radius=4),
+        F("Badge new", _ui("+  NEW IN CODE", 7.5, K.MONO, "Medium", "#2F6F6A", name="b", ls=1, x=8, y=4),
+          x=516, y=94, w=100, h=18, fill="#EAF3F1", radius=4),
+        F("Sync panel",
+          _ui("SYNC  ·  main  ↔  map v12", 9, K.MONO, "Medium", UI_ACCENT, name="title", ls=2, x=16, y=12),
+          _ui("7 changes", 9, K.MONO, "Regular", UI_MUTED, name="count", x=300, y=12),
+          F("Direction",
+            F("Code → map", _ui("Code → map", 9.5, K.SANS, "Medium", UI_ACCENT, name="l", x=9, y=5),
+              x=3, y=3, w=82, h=22, fill=UI_PANEL, radius=11),
+            F("Map → code", _ui("Map → code", 9.5, K.SANS, "Medium", UI_MUTED, name="l", x=9, y=5),
+              x=89, y=3, w=82, h=22, fill=None, radius=11),
+            x=560, y=4, w=176, h=28, fill=UI_SOFT, stroke=UI_BORDER, radius=14),
+          _ui("~  3 cards changed", 10.5, K.SANS, "Regular", UI_TEXT, name="r1", x=16, y=46),
+          _ui("Components · Layout · Handoff", 9, K.MONO, "Regular", UI_MUTED, name="d1", x=170, y=48),
+          _ui("+  2 new in code", 10.5, K.SANS, "Regular", UI_TEXT, name="r2", x=16, y=68),
+          _ui("agent runtime · worktrees", 9, K.MONO, "Regular", UI_MUTED, name="d2", x=170, y=70),
+          _ui("−  1 stale card", 10.5, K.SANS, "Regular", UI_TEXT, name="r3", x=16, y=90),
+          _ui("old export flow", 9, K.MONO, "Regular", UI_MUTED, name="d3", x=170, y=92),
+          _ui("Code → map reads the repository and updates the map. Map → code writes the repository.",
+              9, K.MONO, "Regular", UI_MUTED, w=540, name="hint", x=16, y=120),
+          x=24, y=352, w=932, h=152, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
+          effects=[shadow(y=4, blur=14, color="#00000014")]),
+        _composer(24, 520, 932, "Sync · Mindmap · main",
+                  "Ask kimi to reconcile these changes…", 0, send=True))
+    return f
+
+
+def _mode_model():
+    f = F("Two modes", w=2008, h=430, fill=UI_PANEL, stroke=UI_BORDER, radius=12, clip=True)
+    f.add(
+        _ui("TWO MODES", 9, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=4, x=40, y=30),
+        _ui("Edit the map, then sync it", 28, K.SANS, "Medium", UI_TEXT, name="title", x=40, y=50),
+        _ui("The same canvas and the same input. The mode decides what the agent is allowed to touch.",
+            12, K.SANS, "Regular", UI_MUTED, w=1100, name="lede", lh=18, x=40, y=94),
+        _ui("EDIT MAP", 9, K.MONO, "Medium", UI_TEXT, name="e", ls=3, x=40, y=152),
+        _ui("The agent edits the map only: add, rename, restructure, remove cards. Comments attach to "
+           "a card or — with no selection — to the whole page. Nothing in the repository changes.",
+            11.5, K.SANS, "Regular", UI_MUTED, w=900, name="eb", lh=17, x=40, y=174),
+        _ui("SYNC", 9, K.MONO, "Medium", UI_ACCENT, name="s", ls=3, x=1040, y=152),
+        _ui("The agent reads the repository, diffs it against the map and applies one direction: "
+           "code → map (the map catches up) or map → code (the repository changes). It records a "
+           "map version and the diff.", 11.5, K.SANS, "Regular", UI_MUTED, w=900, name="sb", lh=17,
+            x=1040, y=174),
         F("Flow",
-          _ui("Select", 11, K.SANS, "Medium", UI_TEXT, name="s1", x=20, y=9),
-          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a1", x=78, y=9),
-          _ui("⏎ comment", 11, K.SANS, "Medium", UI_TEXT, name="s2", x=102, y=9),
-          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a2", x=196, y=9),
-          _ui("2 drafts", 11, K.SANS, "Medium", UI_ACCENT, name="s3", x=220, y=9),
-          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a3", x=292, y=9),
-          _ui("⌘⏎ send to kimi", 11, K.SANS, "Medium", UI_TEXT, name="s4", x=316, y=9),
-          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a4", x=440, y=9),
-          _ui("reply", 11, K.SANS, "Medium", "#2F6F6A", name="s5", x=464, y=9),
-          x=48, y=390, w=520, h=30, fill=UI_SOFT, radius=15),
-        F("Right click",
-          _ui("Copy", 11, K.SANS, "Regular", UI_TEXT, name="c1", x=14, y=8),
-          _ui("Comment", 11, K.SANS, "Medium", UI_ACCENT, name="c2", x=14, y=30),
-          _ui("nothing else", 9, K.MONO, "Regular", UI_MUTED, name="c3", x=14, y=52),
-          x=712, y=386, w=120, h=74, fill=UI_PANEL, stroke=UI_BORDER, radius=8,
-          effects=[shadow(y=4, blur=12, color="#00000014")]),
-        _ui("One selection, one input. Comment as often as you like; the drafts wait above the "
-           "bar until you send them.", 10, K.MONO, "Regular", UI_MUTED, w=760, name="foot",
-            x=48, y=474))
+          _ui("Comment / edit", 10.5, K.SANS, "Medium", UI_TEXT, name="f1", x=18, y=8),
+          _ui("→", 10.5, K.SANS, "Regular", UI_MUTED, name="a1", x=128, y=8),
+          _ui("map v12", 10.5, K.SANS, "Medium", UI_ACCENT, name="f2", x=152, y=8),
+          _ui("→", 10.5, K.SANS, "Regular", UI_MUTED, name="a2", x=218, y=8),
+          _ui("Sync", 10.5, K.SANS, "Medium", UI_TEXT, name="f3", x=242, y=8),
+          _ui("→", 10.5, K.SANS, "Regular", UI_MUTED, name="a3", x=288, y=8),
+          _ui("diff  ·  review", 10.5, K.SANS, "Medium", UI_TEXT, name="f4", x=312, y=8),
+          _ui("→", 10.5, K.SANS, "Regular", UI_MUTED, name="a4", x=420, y=8),
+          _ui("apply", 10.5, K.SANS, "Medium", UI_TEXT, name="f5", x=444, y=8),
+          _ui("→", 10.5, K.SANS, "Regular", UI_MUTED, name="a5", x=494, y=8),
+          _ui("map v13", 10.5, K.SANS, "Medium", "#2F6F6A", name="f6", x=518, y=8),
+          x=40, y=260, w=620, h=28, fill=UI_SOFT, radius=14),
+        _ui("No selection means the whole page. Esc or × clears the selection. The input is the comment "
+           "and the prompt; drafts wait above it until you send them.", 10, K.MONO, "Regular",
+            UI_MUTED, w=1100, name="foot", x=40, y=316),
+        _ui("Humans select, copy, comment and send. Agents edit and sync. Nothing is automatic.",
+            10, K.MONO, "Regular", UI_MUTED, w=1100, name="foot2", x=40, y=342))
     return f
 
 
@@ -446,32 +480,34 @@ def build_product(doc):
     page = doc.page("Product", bg=K.BG)
     doc.place(page, K.heading(
         "The workspace client",
-        "Herdr is the list of projects. A map is optional, Init gives it an agent, and comments "
-        "are drafts you send.", w=2000), 64, 56)
+        "Herdr is the list of projects. A map is optional, Init gives it an agent, and two modes "
+        "keep the map and the code honest.", w=2000), 64, 56)
     doc.place(page, _ui("01 · WORKSPACES — every Herdr workspace, with or without a map", 10, K.MONO, "Medium", K.MUTED, name="c1", ls=3), 64, 222)
     doc.place(page, _ui("02 · EMPTY — Init asks which agent, existing or new", 10, K.MONO, "Medium", K.MUTED, name="c2", ls=3), 1092, 222)
     doc.place(page, _ui("03 · INIT — pages appear as the agent renders them", 10, K.MONO, "Medium", K.MUTED, name="c3", ls=3), 64, 902)
-    doc.place(page, _ui("04 · COMMENT — one input at the bottom; a draft on the selection", 10, K.MONO, "Medium", K.MUTED, name="c4", ls=3), 1092, 902)
-    doc.place(page, _ui("05 · SEND — the same input becomes the prompt; drafts attach", 10, K.MONO, "Medium", K.MUTED, name="c5", ls=3), 64, 1582)
-    doc.place(page, _ui("06 · MODEL — select, comment, send; nothing else", 10, K.MONO, "Medium", K.MUTED, name="c6", ls=3), 1092, 1582)
+    doc.place(page, _ui("04 · COMMENT — a selection, and one way to clear it", 10, K.MONO, "Medium", K.MUTED, name="c4", ls=3), 1092, 902)
+    doc.place(page, _ui("05 · PAGE — no selection means the whole page", 10, K.MONO, "Medium", K.MUTED, name="c5", ls=3), 64, 1582)
+    doc.place(page, _ui("06 · SYNC — diff the map against the repository", 10, K.MONO, "Medium", K.MUTED, name="c6", ls=3), 1092, 1582)
+    doc.place(page, _ui("07 · TWO MODES — edit the map, then sync it with the code", 10, K.MONO, "Medium", K.MUTED, name="c7", ls=3), 64, 2262)
     doc.place(page, _screen_workspaces(), 64, 250)
     doc.place(page, _screen_empty(), 1092, 250)
     doc.place(page, _screen_init(), 64, 930)
     doc.place(page, _screen_map(), 1092, 930)
-    doc.place(page, _screen_send(), 64, 1610)
-    doc.place(page, _screen_notes(), 1092, 1610)
+    doc.place(page, _screen_page(), 64, 1610)
+    doc.place(page, _screen_sync(), 1092, 1610)
+    doc.place(page, _mode_model(), 64, 2290)
 
     rules = Vt(
         _ui("FIVE RULES", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=4),
         _ui("1  Herdr workspaces are the projects; a map is optional.   2  No links: the service "
             "joins the client.   3  Humans select, copy, comment, ask — never edit.", 12, K.SANS,
             "Regular", UI_TEXT, w=1900, name="one", lh=17),
-        _ui("4  A comment is a draft until you send it to an agent.   5  Agents write a model; the "
-            "service renders components, pages and sources.", 12, K.SANS, "Regular", UI_TEXT,
+        _ui("4  No selection means the whole page; Esc or × clears it.   5  Edit the map, then sync "
+            "it with the repository — one direction at a time.", 12, K.SANS, "Regular", UI_TEXT,
             w=1900, name="two", lh=17),
         gap=6, pad=22, w=2008, fill=UI_PANEL, stroke=UI_BORDER, radius=10, name="Rules")
-    doc.place(page, rules, 64, 2290)
-    doc.place(page, F("spacer", x=0, y=0, w=1, h=40, fill=None), 64, 2400)
+    doc.place(page, rules, 64, 2770)
+    doc.place(page, F("spacer", x=0, y=0, w=1, h=40, fill=None), 64, 2870)
     return page
 
 
