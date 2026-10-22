@@ -179,9 +179,16 @@ impl ProjectService {
 
     /// Herdr's workspaces, enriched with agent counts and project state, sorted by label.
     pub fn workspaces(&self) -> Result<Vec<WorkspaceView>> {
+        let records = self.store.all()?;
+        self.workspaces_with(&records)
+    }
+
+    fn workspaces_with(
+        &self,
+        records: &BTreeMap<String, ProjectRecord>,
+    ) -> Result<Vec<WorkspaceView>> {
         let workspaces = self.herdr.workspaces()?;
         let agents = self.herdr.agents()?;
-        let records = self.store.all()?;
         let clis = agent::installed_kinds();
 
         let mut by_workspace: BTreeMap<&str, Vec<&Agent>> = BTreeMap::new();
@@ -270,21 +277,16 @@ impl ProjectService {
 
     /// Resolve a workspace by exact id or label, then case-insensitively.
     pub fn find_workspace(&self, query: &str) -> Result<WorkspaceView> {
-        let workspaces = self.workspaces()?;
-        if let Some(found) = workspaces
-            .iter()
-            .find(|workspace| workspace.id == query || workspace.label == query)
-        {
-            return Ok(found.clone());
-        }
-        let original = query;
-        let query = original.to_lowercase();
-        workspaces
-            .into_iter()
-            .find(|workspace| {
-                workspace.label.to_lowercase() == query || workspace.id.to_lowercase() == query
-            })
-            .ok_or_else(|| Error::new(format!("no workspace {original:?}")))
+        resolve_workspace(self.workspaces()?, query)
+    }
+
+    /// Resolve a workspace without importing or writing project records.
+    ///
+    /// `diff` only needs the Herdr label and checkout path, so it must not trigger the one-time
+    /// legacy import on a fresh data directory.
+    fn find_workspace_readonly(&self, query: &str) -> Result<WorkspaceView> {
+        let records = self.store.all_readonly()?;
+        resolve_workspace(self.workspaces_with(&records)?, query)
     }
 
     /// Open a workspace: reuse its published document, or publish the skeleton.
@@ -349,7 +351,7 @@ impl ProjectService {
     /// legacy import and no write) and runs `git` without touching the repository. With no last
     /// sync every node is reported as added and the code lists stay empty.
     pub fn diff(&self, query: &str, map: &MapSnapshot) -> Result<DiffResult> {
-        let workspace = self.find_workspace(query)?;
+        let workspace = self.find_workspace_readonly(query)?;
         let last = self.store.last_sync(&workspace.id)?;
         let map_diff = sync::diff_maps(map, last.as_ref().map(|last| &last.map));
         let last_commit = last.as_ref().map(|last| last.commit.as_str());
@@ -374,7 +376,7 @@ impl ProjectService {
         note: &str,
         map: &MapSnapshot,
     ) -> Result<SyncStarted> {
-        let workspace = self.find_workspace(query)?;
+        let workspace = self.find_workspace_readonly(query)?;
         agent::preflight(&self.herdr, &workspace, target)?;
         let record = self.store.get(&workspace.id)?.ok_or_else(|| {
             Error::new(format!(
@@ -725,6 +727,24 @@ impl ProjectService {
             "publish did not become live (last status {last_status}){reason}"
         )))
     }
+}
+
+/// Resolve a workspace by exact id or label, then case-insensitively.
+fn resolve_workspace(workspaces: Vec<WorkspaceView>, query: &str) -> Result<WorkspaceView> {
+    if let Some(found) = workspaces
+        .iter()
+        .find(|workspace| workspace.id == query || workspace.label == query)
+    {
+        return Ok(found.clone());
+    }
+    let original = query;
+    let query = original.to_lowercase();
+    workspaces
+        .into_iter()
+        .find(|workspace| {
+            workspace.label.to_lowercase() == query || workspace.id.to_lowercase() == query
+        })
+        .ok_or_else(|| Error::new(format!("no workspace {original:?}")))
 }
 
 /// The focused pane's cwd, else the first pane that knows one.

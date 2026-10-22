@@ -759,4 +759,22 @@ mod tests {
             Some("claude")
         );
     }
+
+    #[test]
+    fn sync_preflight_rejects_an_unusable_workspace_before_herdr() {
+        let herdr = Herdr::new(PathBuf::from("/nonexistent/herdr"));
+        let no_path = workspace(None);
+        let error = preflight(&herdr, &no_path, &Target::Auto)
+            .err()
+            .map(|error| error.message().to_string())
+            .unwrap_or_default();
+        assert!(error.contains("no checkout path"), "{error}");
+
+        let path = workspace(Some("/repo/eisledger"));
+        let error = preflight(&herdr, &path, &Target::Kind("not-a-cli".into()))
+            .err()
+            .map(|error| error.message().to_string())
+            .unwrap_or_default();
+        assert!(error.contains("unsupported agent kind"), "{error}");
+    }
 }

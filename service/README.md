@@ -3,9 +3,11 @@
 A Herdr workspace is a project. This binary lists the workspaces on the host, gives each one a
 FigCraft document the first time it is opened, and, on **Init**, makes sure an agent is working on
 it. **Send** prompts an agent with canvas comments without opening or publishing a document.
-`adopt` attaches a map that was already drawn, without prompting an agent. The edit link (with its
-token) stays in the service; callers get a link and a file id they can hand to a client that knows
-how to join.
+**Diff** compares the client's map snapshot with the last successful sync and with the repository,
+**Sync** prompts an agent with both real diffs and starts an in-memory job, and **sync_status**
+follows that job until Herdr shows the agent finished. `adopt` attaches a map that was already
+drawn, without prompting an agent. The edit link (with its token) stays in the service; callers get
+a link and a file id they can hand to a client that knows how to join.
 
 This is the Rust port of the behavior in [`../project/service.py`](../project/service.py), with the
 product shape from [`../project/README.md`](../project/README.md). The Python file is unchanged.
@@ -20,8 +22,9 @@ product shape from [`../project/README.md`](../project/README.md). The Python fi
 | `src/mcp.rs` | Newline-delimited JSON-RPC client for `figcraft-cli mcp`. |
 | `src/agent.rs` | Agent detection, tab creation, start, prompt (Init and Send), in-band failure. |
 | `src/comments.rs` | Canvas-comment validation and prompt rendering for `send`. |
-| `src/records.rs` | `service/data/projects.json` store (atomic writes, mode 0600). |
-| `src/server.rs` | Newline-delimited JSON TCP API (`health`, `workspaces`, `open`, `init`, `send`, `adopt`). |
+| `src/sync.rs` | Map snapshot validation, design/code diffs, sync prompt, job transitions. |
+| `src/records.rs` | `service/data/projects.json` store (atomic writes, mode 0600, `last_sync`). |
+| `src/server.rs` | Newline-delimited JSON TCP API (`health`, `workspaces`, `open`, `init`, `send`, `adopt`, `diff`, `sync`, `sync_status`). |
 | `src/link.rs` | Rewrites the join link's `host` parameter to the public address. |
 | `src/config.rs` | Paths and environment overrides. |
 | `src/time.rs`, `src/error.rs` | UTC timestamps and the small error type. |
@@ -278,6 +281,204 @@ The name defaults to `Mindmap · <label>`. The `link` is the owner edit link; li
 stored link it contains a token and is not logged. The workspace may have an existing record; it
 is replaced. The TCP API exposes the same operation as `adopt` (see below).
 
+## Diffing and syncing the map
+
+A sync is two real diffs, not a semantic guess. The client supplies the map it is showing; the
+service compares it by node id with the snapshot written by the last successful sync, and runs
+`git` against the commit that sync recorded. Both lists go to the agent in one prompt. The service
+never locks, opens, or edits the document: the map stays editable while a sync is in flight.
+
+### The map snapshot
+
+`diff` and `sync` both take the whole map as it is on the client:
+
+```json
+{
+  "pages": [{"id": 1, "name": "Mindmap"}],
+  "nodes": [
+    {"id": 36, "name": "heading", "parent": null, "page": 1, "kind": "frame", "text": ""},
+    {"id": 37, "name": "title", "parent": 36, "page": 1, "kind": "text", "text": "The workspace client"}
+  ]
+}
+```
+
+Validation happens before the workspace is resolved or anything is prompted:
+
+* `map` must be an object with a `pages` list and a `nodes` list; both are required and may be
+  empty. Any other shape, a missing list, or a non-object entry is `ok:false`.
+* Page and node `id`s are positive integers and unique. A node's `page` must be one of the page ids.
+* `parent` is optional: missing, `null`, or a positive integer. It is recorded as sent; the service
+  does not require the parent node to be in the same snapshot.
+* `name`, `kind`, and `text` are strings. Missing or non-string values are rejected (page `name` and
+  node `name` are required too).
+* At most **500 pages** and **5,000 nodes**. A larger snapshot is rejected, never truncated. The
+  request line itself is capped at 1 MiB.
+* Unknown fields are ignored, not stored.
+
+The snapshot is captured at sync start. `diff` does not store it. `sync` keeps it in the job and
+writes it to `last_sync` only when the agent finishes successfully.
+
+### `diff`
+
+```json
+{"id":2,"method":"diff","workspace":"wX","map":{"pages":[{"id":1,"name":"Mindmap"}],"nodes":[…]}}
+```
+
+```json
+{
+  "id": 2,
+  "ok": true,
+  "last": {"exists": true, "commit": "3dbbcd8…", "at": "2026-10-22T12:00:00Z"},
+  "map": {
+    "added": [{"id": 9, "name": "New card", "page": "Mindmap"}],
+    "removed": [{"id": 7, "name": "Old card", "page": "Mindmap"}],
+    "changed": [{"id": 3, "name": "Components", "fields": ["name", "text"]}]
+  },
+  "code": {
+    "head": "ce9d2b2…",
+    "from": "3dbbcd8…",
+    "files": [{"path": "crates/x", "added": 10, "removed": 2}],
+    "commits": [{"hash": "abc1234", "subject": "Fix the map"}]
+  }
+}
+```
+
+* `last` is the workspace's recorded last successful sync. With none it is `{"exists": false}`.
+* `map` compares the supplied snapshot with `last_sync.map` by node id, sorted by id. Added and
+  removed rows carry `name` and the page label: current label for added, last-synced label for
+  removed. Changed rows carry the current name and the fields that differ, in `name`, `text`,
+  `kind`, `parent`, `page` order. A page rename alone is not a node change, so it is not reported.
+* A first sync (`last.exists:false`) reports every node as added and no removed or changed rows.
+  The code lists are empty; `code.head` is still filled in when the checkout is a repository.
+* `code` runs `git -C <path> rev-parse HEAD`, `git diff --numstat <last>..HEAD`, and
+  `git log --format=%h%x09%s <last>..HEAD`. Binary numstat lines (`- -`) count as 0 added/removed.
+  Files and commits are each capped at **100**. `code.from` is the last-sync commit.
+* A workspace with no checkout path, a directory that is not a git repository, an unknown last
+  commit, or a git failure is **not a request error**: the code lists are empty and `code.note`
+  says why. This is the only extra field in `code`.
+* `diff` does **not** write project records. It resolves the workspace from a read-only record view
+  (no legacy import) and reads `last_sync` through a read-only store path.
+
+### `sync`
+
+```json
+{"id":3,"method":"sync","workspace":"wX","target":"pane:wX:p2","prompt":"optional note","map":{…}}
+```
+
+```json
+{
+  "id": 3,
+  "ok": true,
+  "job": {"id": "sync-18f3…-1", "state": "in_flight", "started": "2026-10-22T12:01:00Z", "agent": {…}},
+  "agent": {"state": "existing", "target": "pane:wX:p2", "pane": "wX:p2", "prompted": true, …}
+}
+```
+
+`target` is optional and parsed exactly like `send`: `auto`, `pane:<pane-id>`, or
+`kind:<agent-kind>`. Before anything is started or prompted, the service requires:
+
+* a target that can actually be prompted: a `pane:` agent that is in the workspace, or for `auto`
+  an existing agent/installed CLI, or for `kind:` an installed CLI;
+* a non-empty checkout path for the workspace;
+* an existing project record (`open` the workspace first). Without one, `sync` is `ok:false` rather
+  than inventing a record whose `last_sync` could never be written.
+
+Any failure in that preflight is `ok:false` with no prompt, tab, job, or record write. The agent is
+then handled by the same `ensure_with_prompt` policy as Send: reuse an existing agent or start the
+requested/first installed kind in a background tab, accept first-run folder trust, and submit the
+prompt. If the prompt is not accepted, `sync` is `ok:false` and no job is created. Agent failures
+are not in-band here, because a sync without a job would be dishonest.
+
+The submitted prompt is built from the two diffs:
+
+```text
+Sync <label> (<path>) against the code.
+
+DESIGN CHANGES SINCE <last|first> sync:
++ <card> (<page>)
+~ <card> (name, text)
+- <card> (<page>)
+
+CODE SINCE <commit>:
+<n files>, <n commits>
+  <path> (+a/−r)
+  <hash> <subject>
+
+NOTE: <prompt>
+```
+
+* `DESIGN CHANGES SINCE last sync:` when a last sync exists, otherwise `… SINCE first sync:`.
+  Added, changed, and removed rows are in that order; design and code sections are omitted when
+  empty. A first sync therefore has no code section.
+* `CODE SINCE <commit>:` uses the commit recorded by the last sync; the count line and rows are
+  omitted when there are no files or commits.
+* `NOTE:` is omitted when `prompt` is blank. Present notes are trimmed.
+* The prompt is capped at **20,000 characters**. Individual lines are shortened to 240 characters,
+  the note keeps at most 2,000, and a section that runs out of room ends with `… and N more`.
+* Labels, page names, paths, and commit subjects are escaped to one line (`\n`, `\t`, `\\`).
+
+The job is in memory only:
+
+```json
+{"id","workspace","started","started_secs","head","map_snapshot","pane","agent","state":"in_flight","seen_active":false}
+```
+
+It keeps the head commit and the map snapshot from before the prompt. `sync` itself writes no
+records. There is no document lock; the client may keep editing the map.
+
+### `sync_status`
+
+```json
+{"id":4,"method":"sync_status","job":"sync-18f3…-1"}
+```
+
+```json
+{
+  "id": 4,
+  "ok": true,
+  "job": {"id": "sync-18f3…-1", "state": "done", "started": "2026-10-22T12:01:00Z", "agent": {…}},
+  "last": {"exists": true, "commit": "ce9d2b2…", "at": "2026-10-22T12:02:30Z"}
+}
+```
+
+For every poll of an in-flight job, the service reads `herdr agent list` and looks for the job's
+workspace and pane:
+
+* `working` or `blocked` sets `seen_active` and keeps the job `in_flight` (blocked means the agent
+  is alive and waiting, not that the sync failed).
+* `idle` or `done` finishes the job only if `seen_active` is already true. Before the first active
+  observation, idle means the prompt has not started yet; the job stays `in_flight`.
+* A missing agent (the pane no longer appears) or a status such as `error`, `failed`, `exited`,
+  `stopped`, `crashed`, or `gone` fails the job with a `job.reason`.
+* A job older than **30 minutes** fails with a timeout before Herdr is polled.
+* Unknown statuses keep the job in flight; the timeout is the backstop.
+* If `herdr agent list` itself fails, `sync_status` returns `ok:false` and leaves the job in
+  flight; the client can retry the poll.
+
+On success, just before reporting `done`, the service writes only `last_sync` through the store:
+
+```json
+{"commit": "<head captured by sync>", "at": "<completion time>", "map": {<start snapshot>}}
+```
+
+The store lock and atomic rename make that update safe, and all other record fields (including
+unknown ones) are preserved. A failed job writes nothing; the previous `last_sync` stays intact.
+A finished job is returned as-is on later polls. Unknown or empty job ids are `ok:false`.
+
+### Limits
+
+| Item | Limit |
+|---|---|
+| Request line | 1 MiB |
+| Map pages | 500 |
+| Map nodes | 5,000 |
+| Code files in a diff | 100 |
+| Code commits in a diff | 100 |
+| Sync prompt | 20,000 characters |
+| Note kept in a prompt | 2,000 characters |
+| Prompt line | 240 characters |
+| In-flight job | 30 minutes |
+
 ## TCP API
 
 `serve` binds `MINDMAP_BIND` (default `0.0.0.0:47821`). The framing is one JSON object per line,
@@ -298,11 +499,16 @@ Requests:
 | `init` | `{"id":4,"method":"init","workspace":"wP","target":"pane:wX:p2"}` | same as `open` plus `"agent":{…}` |
 | `send` | `{"id":5,"method":"send","workspace":"wX","target":"pane:wX:p2","prompt":"Why does this rebuild?","comments":[{"text":"…","node":"Components","page":"Mindmap"}]}` | `{"id":5,"ok":true,"agent":{…},"sent":1}` |
 | `adopt` | `{"id":6,"method":"adopt","workspace":"wX","path":"build/mindmap-system.figcraft","name":"Mindmap · mindmap"}` | `{"id":6,"ok":true,"file":"…","link":"figcraft://…","name":"…"}` |
+| `diff` | `{"id":7,"method":"diff","workspace":"wX","map":{…}}` | `{"id":7,"ok":true,"last":{…},"map":{…},"code":{…}}` |
+| `sync` | `{"id":8,"method":"sync","workspace":"wX","target":"pane:wX:p2","prompt":"optional note","map":{…}}` | `{"id":8,"ok":true,"job":{"id":"sync-…","state":"in_flight",…},"agent":{…}}` |
+| `sync_status` | `{"id":9,"method":"sync_status","job":"sync-…"}` | `{"id":9,"ok":true,"job":{…},"last":{…}}` |
 
 `target` is optional: absent or `"auto"`, `"pane:<pane-id>"`, or `"kind:<agent-kind>"`. `name` is
 optional for `adopt` and defaults to `Mindmap · <label>`. `send` never returns a link: it only
 prompts an agent, and its `comments`/`prompt` rules and prompt format are described in
-[Send](#sending-canvas-comments).
+[Send](#sending-canvas-comments). `diff`, `sync`, and `sync_status` require the `map` snapshot,
+target/record rules, prompt, and job lifecycle described in [Diffing and syncing the
+map](#diffing-and-syncing-the-map).
 
 `workspace` accepts the Herdr id (`wP`) or label (`eisledger`), case-insensitively as a fallback.
 Errors are `{"id":N,"ok":false,"error":"…"}`. Invalid JSON gets `id: null`; the connection stays
@@ -310,26 +516,78 @@ open. Request lines are capped at 1 MiB.
 
 ## State and security
 
-Records are `service/data/projects.json`, keyed by workspace id, with the reference shape:
+Records are `service/data/projects.json`, keyed by workspace id, with the reference shape plus the
+optional sync state:
 
 ```json
-{"id","label","path","file","edit","view","name","built","created"}
+{"id","label","path","file","edit","view","name","built","created","last_sync"?}
 ```
+
+`last_sync` is written only by a successful `sync_status`; its shape is:
+
+```json
+{"commit":"<head at sync start>","at":"<completion time>","map":{"pages":[…],"nodes":[…]}}
+```
+
+A sync updates only `last_sync`; `built`, `file`, `edit`, `view`, and every other field stay as
+they were. Unknown top-level fields are preserved on that write. The store lock and the
+write-temp-then-rename path keep concurrent readers and writers safe.
 
 The edit/view links contain tokens, so the store is written atomically with mode `0600` and links
 are never logged. On first use, if the new store does not exist, records from
 `project/data/projects.json` are imported so an already-published workspace (eisledger) keeps its
-document instead of getting a duplicate. Later imports do not happen.
+document instead of getting a duplicate. Later imports do not happen. Read-only paths (`diff`,
+`Store::last_sync`, `Store::all_readonly`) do not trigger that import.
 
 ## Verification performed
 
+The commands below were run from `service/` with
+`CARGO_HOME=/root/code/mindmap/.cargo-home`.
+
 * `cargo build --release`: clean, no warnings.
-* `cargo test --release`: 37 unit tests pass. The 11 new tests cover comment parsing (optional
-  node/page, blank text, non-string fields, more than 50 comments, oversized content), prompt
-  formatting (with and without a prompt, missing path, page/node combinations, newline/tab/
-  backslash escaping), and prompt size validation. The original 26 tests for target parsing, pick
-  policy, target error reporting, and the pane-cwd fallback still pass.
+* `cargo test --release`: **61 unit tests** and **2 TCP integration tests** pass. The 24 new unit
+  tests cover map-snapshot validation (types, ids, duplicate ids, page references, parent, caps),
+  map diff (first sync, added/removed/changed, field order, removed-page labels), prompt rendering
+  (first/full/empty sections, escaping, 20,000-character cap, omission and note truncation), job
+  transitions (working/blocked/idle/done/gone/error/timeout), git numstat/log parsing, a real
+  temporary repository, a non-repository note, `last_sync` round-trips with unknown fields, and the
+  sync preflight. The original 37 tests still pass.
 * `cargo clippy --release --all-targets`: clean.
+* `cargo fmt --check`: clean.
+* `cargo test --release --test sync_tcp` prints:
+
+  ```text
+  running 2 tests
+  test diff_sync_and_sync_status_over_tcp ... ok
+  test a_fake_agent_finishes_a_sync_and_writes_last_sync ... ok
+
+  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+  ```
+
+  The first test starts its own binary on `MINDMAP_BIND=127.0.0.1:47899` with scratch
+  `MINDMAP_DATA`/`MINDMAP_LEGACY_DATA`, resolves real `wX` from Herdr (read-only), runs `diff` with
+  a two-node map, rejects a zero node id, rejects `sync` with `pane:wX:p999999`, and rejects an
+  unknown `sync_status` job. The scratch directory stayed empty: no `projects.json`, no agent
+  prompt. The second test creates a disposable two-commit git repository, replaces `MINDMAP_HERDR`
+  with a shell stub, seeds a scratch record with the older commit and an unknown `future_field`,
+  and drives the full path: `diff` reported the design and code changes, `sync` returned
+  `in_flight` and the fake agent received the prompt, a `working` poll kept the job in flight, and
+  an `idle` poll finished it. The store then had the new `last_sync` commit and the exact start
+  snapshot, with `future_field`, `file`, and `edit` untouched. No real Herdr call and no real
+  record was involved.
+* A manual scratch instance on `127.0.0.1:47899` (scratch data, stopped after the calls, live
+  service on 47821 untouched) returned:
+
+  ```text
+  {"id":1,"ok":true,"server":"100.104.9.15:47910","service":"mindmap-service","version":"0.1.0"}
+  {"code":{"commits":[],"files":[],"from":null,"head":"ce9d2b2cf8270cc5c5ddeb5d8d59bc166eb27cd7"},"id":2,"last":{"exists":false},"map":{"added":[{"id":36,"name":"heading","page":"Mindmap"},{"id":37,"name":"title","page":"Mindmap"}],"changed":[],"removed":[]},"ok":true}
+  {"error":"pane wX:p999999 is not an agent in workspace wX (mindmap)","id":3,"ok":false}
+  {"error":"unknown sync job \"sync-nope\"","id":4,"ok":false}
+  ```
+
+  The scratch data directory remained empty and the log showed only `health`, `diff`, and the two
+  rejected requests. This is the exact diff response shape the client can render; `head` changes
+  with the repository.
 * `list` from the service directory and from the repository root shows the real workspaces. The
   `wX` (`mindmap`) line now has `/root/code/mindmap`; worktree-backed workspaces still use
   `worktree.checkout_path`.
@@ -360,6 +618,8 @@ document instead of getting a duplicate. Later imports do not happen.
 * The real `service/data/projects.json` was not modified by these tests: every TCP instance used a
   scratch `MINDMAP_DATA` directory, and no document was opened or published.
 * No Herdr tab, pane, workspace, or session was modified during testing.
+* The live service on `47821` was **not** restarted and still runs the previous binary. These
+  changes were built only; the parent rollout integrates them.
 
 ## Not done yet / known gaps
 
@@ -376,9 +636,26 @@ document instead of getting a duplicate. Later imports do not happen.
 * **Adopt trusts the file.** It publishes whatever `.figcraft` path it is given and does not
   validate that the document is a mindmap or that it was produced by the skill. Any workspace
   record can be replaced by `adopt`.
-* **No job lifecycle.** Init submits the prompt and returns; there is no job record, progress,
-  retry, agent stop, or cleanup. If a tab was created and `agent start`/`prompt` then failed, the
-  empty tab is left in place for diagnosis.
+* **Sync jobs are in memory only.** They disappear on restart and have no cancel, retry, progress
+  percentage, per-file log, or push notification; the client must poll `sync_status`. Finished
+  jobs are retained for the life of the process and are not pruned. Init and Send still have no job
+  at all. If a tab was created and `agent start`/`prompt` then failed, the empty tab is left in
+  place for diagnosis.
+* **The map snapshot is client-supplied.** The service never reads the FigCraft document to check
+  it. A client that omits, invents, or mislabels nodes gets a diff for that snapshot. It is used
+  only for the prompt and `last_sync`; it does not edit the map.
+* **Sync needs a project record and a checkout path.** A workspace with no record (never opened)
+  or no `cwd`/`worktree` path is rejected before prompting. There is no code-only sync.
+* **Page renames are not diffed by themselves.** Nodes are compared by id; a page label change with
+  unchanged nodes is invisible. A node that moves pages is reported with `page` in `changed`.
+* **Long sync prompts are truncated.** A section that does not fit the 20,000-character prompt ends
+  with `… and N more`; the agent sees a prefix, not every row. The `diff` response still carries the
+  full map lists (and up to 100 code files/commits) for the client to render.
+* **No semantic design ↔ code mapping.** The two lists are real; which design change should become
+  which code change is the agent's job. The service does not compare snapshots to diffs.
+* **Git is local and synchronous.** The code diff runs `git` in the workspace checkout on the
+  service host, with no remote fetch before the diff. A wedged git process holds that request
+  thread; there is no timeout on the git calls.
 * **Local Herdr only.** Remote Herdr machines / merged multi-host inventory are not implemented,
   and the service does not ensure or start a private Herdr session.
 * **Inter-process publish race.** One `ProjectService` serializes publish-or-reuse with a mutex,

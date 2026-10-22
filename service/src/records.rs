@@ -115,6 +115,17 @@ impl Store {
         Ok(self.all()?.remove(id))
     }
 
+    /// All records from the current store file, without the one-time legacy import.
+    ///
+    /// Used by read-only paths such as `diff`, which must not create or modify the store.
+    pub fn all_readonly(&self) -> Result<BTreeMap<String, ProjectRecord>> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| Error::new("project record lock poisoned"))?;
+        self.read_file(&self.path)
+    }
+
     /// The last successful sync for one workspace, read without importing legacy records.
     ///
     /// `diff` must not write anything, so this only reads the current store file. Python-era
@@ -350,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn last_sync_read_does_not_import_legacy_records() {
+    fn read_only_store_helpers_do_not_import_legacy_records() {
         let dir = unique_dir("read-only");
         let legacy_dir = dir.join("legacy");
         std::fs::create_dir_all(&legacy_dir).unwrap_or(());
@@ -366,9 +377,10 @@ mod tests {
         let data = dir.join("data");
         let store = Store::new(&data, legacy);
         assert_eq!(store.last_sync("wP").unwrap_or_default(), None);
+        assert!(store.all_readonly().unwrap_or_default().is_empty());
         assert!(
             !data.join("projects.json").exists(),
-            "reading last_sync must not create or import the store"
+            "read-only reads must not create or import the store"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

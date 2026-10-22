@@ -345,8 +345,8 @@ fn string_field(object: &Map<String, Value>, field: &str, path: &str) -> Result<
 /// Compare a current snapshot with the last-synced one, by node id.
 ///
 /// With no previous snapshot every node is added and nothing is removed or changed: that is the
-/// honest first-sync answer. Page labels in added/changed rows come from the current snapshot and
-/// in removed rows from the previous one, so a removed card keeps the page name it had.
+/// honest first-sync answer. Page labels in added rows come from the current snapshot and in
+/// removed rows from the previous one, so a removed card keeps the page name it had.
 pub fn diff_maps(current: &MapSnapshot, previous: Option<&MapSnapshot>) -> MapDiff {
     let mut diff = MapDiff::default();
     let current_pages = page_names(&current.pages);
@@ -1248,9 +1248,8 @@ mod tests {
                 reason: None,
             }
         );
-        assert_eq!(
+        assert!(
             transition(false, Some("blocked"), 0).seen_active,
-            true,
             "blocked means the agent is alive"
         );
         assert_eq!(
