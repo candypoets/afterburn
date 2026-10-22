@@ -300,7 +300,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-src/crates/ui-egui/src/canvas.rs
 --- .client-src-orig/crates/ui-egui/src/canvas.rs	2026-10-21 19:19:18.000000000 +0200
-+++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 15:42:38.755552718 +0200
++++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 15:54:53.930027468 +0200
 @@ -242,7 +242,10 @@
          painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
      }
@@ -349,11 +349,11 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
 +            continue;
 +        }
 +        let Some(q) = node_quad(app, &doc, id) else { continue };
-+        let at = app.to_screen(f64::from(q[1].x), f64::from(q[1].y));
-+        let center = pos2(at.x - 12.0, at.y + 12.0);
-+        painter.circle_filled(center, 9.0, Color32::WHITE);
-+        painter.circle_stroke(center, 9.0, stroke(ACCENT, 1.5));
-+        painter.text(center, Align2::CENTER_CENTER, "↗", egui::FontId::proportional(10.0), ACCENT);
++        let center = pos2(q[1].x - 14.0, q[1].y + 14.0);
++        let ink = Color32::from_rgb(0x2F, 0x6F, 0x6A);
++        painter.circle_filled(center, 11.0, ink);
++        painter.circle_stroke(center, 11.0, stroke(Color32::WHITE, 1.5));
++        painter.text(center, Align2::CENTER_CENTER, "↗", egui::FontId::proportional(12.0), Color32::WHITE);
 +    }
 +}
 +
