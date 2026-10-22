@@ -482,8 +482,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client-src/crates/ui-egui/src/compose.rs
 --- .client-src-orig/crates/ui-egui/src/compose.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 15:46:04.624885373 +0200
-@@ -0,0 +1,1090 @@
++++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 17:27:52.461749582 +0200
+@@ -0,0 +1,1113 @@
 +//! The bottom comment composer: one bar that is both the comment box and the prompt box.
 +//!
 +//! The selection tells it what a comment is about. Enter turns the input into a draft on that
@@ -651,10 +651,11 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    let node = node_id.and_then(|id| node_name(app, id));
 +    let page_name = page.and_then(|id| node_name(app, id));
 +    let has_selection = !selection.is_empty();
++    let comments = comment_count(app, node_id, page);
++    let plural = if comments == 1 { "" } else { "s" };
 +    let context = match (node.as_deref(), page_name.as_deref()) {
-+        (Some(node), Some(page)) => format!("COMMENTING ON · {node} · {page}"),
-+        (Some(node), None) => format!("COMMENTING ON · {node}"),
-+        (None, Some(page)) => format!("COMMENTING ON · {page} · whole page"),
++        (Some(node), _) => format!("COMMENTING ON · {node} · {comments} comment{plural} in the tree"),
++        (None, Some(page)) => format!("COMMENTING ON · {page} · whole page · {comments} comment{plural}"),
 +        _ => "COMMENTING ON".to_string(),
 +    };
 +    let included = included_drafts(app, &selection, page);
@@ -678,7 +679,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +                    ui.set_width((width - 32.0).max(40.0));
 +                    ui.set_min_height(74.0);
 +                    let names = Names { node: node.as_deref(), page: page_name.as_deref(), node_id, page_id: page };
-+                    send = body(ui, &mut app.compose, &context, &names, has_selection, active, &included);
++                    send = body(ui, &mut app.compose, &context, &names, has_selection, active, &included, comments);
 +                });
 +        });
 +    if app.compose.page_from_card {
@@ -713,7 +714,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +
 +/// The bar's contents; true when Send was pressed.
 +fn body(ui: &mut Ui, state: &mut State, context: &str, names: &Names<'_>, has_selection: bool,
-+        active: bool, included: &[usize]) -> bool {
++        active: bool, included: &[usize], comments: usize) -> bool {
 +    ui.horizontal(|ui| {
 +        ui.label(egui::RichText::new(context).font(mono(9.0)).color(if has_selection { ACCENT } else { FAINT }));
 +        if let Some(node_id) = names.node_id {
@@ -736,13 +737,15 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    }
 +    ui.add_space(6.0);
 +
-+    // Keys, before the field sees them: the single-line edit may take Enter for itself, so the
-+    // composer checks the keyboard first. Cmd+Enter sends from anywhere on the map; Enter adds a
-+    // draft while the input had the keyboard at the start of the frame.
++    // The field is multiline: Enter belongs to it. Shift+Enter turns the current text into a
++    // draft comment; Cmd+Enter sends the prompt and every draft. Both are consumed before the
++    // field sees them.
 +    let input_focused = ui.memory(|m| m.has_focus(input_id()));
 +    let command_enter = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
-+    let plain_enter = !command_enter && input_focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
-+    if plain_enter && !state.input.trim().is_empty() {
++    let shift_enter = !command_enter
++        && input_focused
++        && ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Enter));
++    if shift_enter && !state.input.trim().is_empty() {
 +        state.drafts.push(Draft {
 +            text: state.input.trim().to_string(),
 +            node: names.node.map(str::to_string),
@@ -766,6 +769,14 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +            } else {
 +                "Comment on the whole page…"
 +            };
++            // Grow with the prompt, up to eight rows; the full text stays reachable by scrolling.
++            let per_line = ((input_w - 20.0) / 6.5).max(12.0);
++            let rows = state
++                .input
++                .split('\n')
++                .map(|line| ((line.chars().count() as f32 / per_line).ceil() as usize).max(1))
++                .sum::<usize>()
++                .clamp(1, 8);
 +            let input_response = egui::Frame::NONE
 +                .fill(SOFT)
 +                .stroke(Stroke::new(1.0, BORDER))
@@ -774,16 +785,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +                .show(ui, |ui| {
 +                    ui.set_width((input_w - 20.0).max(40.0));
 +                    ui.add(
-+                        egui::TextEdit::singleline(&mut state.input)
++                        egui::TextEdit::multiline(&mut state.input)
 +                            .id(input_id())
 +                            .frame(egui::Frame::NONE)
 +                            .font(regular(12.5))
-+                            // Enter is the composer's (add a draft), not the field's (give up the
-+                            // keyboard): keep the focus, and read the key below.
-+                            .return_key(None::<egui::KeyboardShortcut>)
 +                            .hint_text(egui::RichText::new(placeholder).font(regular(12.5)).color(FAINT))
-+                            .desired_width(ui.available_width())
-+                            .vertical_align(egui::Align::Center),
++                            .desired_rows(rows)
++                            .desired_width(ui.available_width()),
 +                    )
 +                })
 +                .inner;
@@ -817,12 +825,26 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    let hint = if !active {
 +        "add the service to send".to_string()
 +    } else {
-+        let drafts = included.len();
-+        let where_ = if has_selection { "in the tree" } else { "on the page" };
-+        format!("⏎ comment · ⌘⏎ send · {drafts} {} {where_}", if drafts == 1 { "comment" } else { "comments" })
++        format!("⏎ new line   ·   ⇧⏎ comment   ·   ⌘⏎ send all   ·   {comments} in the tree")
 +    };
 +    ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
 +    send
++}
++
++/// Open comment threads in the selected card's subtree, or on the page.
++fn comment_count(app: &FigApp, node: Option<NodeId>, page: Option<NodeId>) -> usize {
++    let Ok(doc) = app.session.doc() else { return 0 };
++    if let Some(node) = node {
++        let ids: HashSet<NodeId> = doc.subtree(node).into_iter().collect();
++        doc.comments
++            .iter()
++            .filter(|comment| !comment.resolved && comment.anchor.is_some_and(|anchor| ids.contains(&anchor)))
++            .count()
++    } else if let Some(page) = page {
++        doc.comments.iter().filter(|comment| !comment.resolved && comment.page == page).count()
++    } else {
++        0
++    }
 +}
 +
 +/// The draft chips above the input: the first few, each removable, then `+N`.
@@ -833,9 +855,10 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +        let visible = included.len().min(VISIBLE_DRAFTS);
 +        for &index in included.iter().take(visible) {
 +            let Some(draft) = state.drafts.get(index) else { continue };
++            let text = draft.text.replace('\n', " ");
 +            let label = match draft.node.as_deref() {
-+                Some(node) => format!("{node} · {}", draft.text),
-+                None => format!("Whole page · {}", draft.text),
++                Some(node) => format!("{node} · {text}"),
++                None => format!("Whole page · {text}"),
 +            };
 +            if draft_chip(ui, &label) {
 +                remove = Some(index);
@@ -1102,7 +1125,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +                }
 +            });
 +    });
-+    let outside = ctx.input(|i| i.pointer.any_pressed()) && !area.response.hovered();
++    let outside = ctx.input(|i| i.pointer.any_pressed()) && !area.response.contains_pointer();
 +    if close || outside || ctx.input(|i| i.key_pressed(Key::Escape)) {
 +        app.ui.context_menu = None;
 +    }
@@ -1576,7 +1599,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 16:19:48.986656811 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 16:28:40.527769940 +0200
 @@ -6,6 +6,7 @@
  #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
  
@@ -1675,7 +1698,16 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  
  #[cfg(test)]
  mod theme_startup_tests;
-@@ -643,7 +697,7 @@
+@@ -135,6 +189,8 @@
+ #[cfg(test)]
+ mod gap_handle_tests;
+ #[cfg(test)]
++mod new_page_menu_tests;
++#[cfg(test)]
+ mod gradient_shorthand_tests;
+ #[cfg(test)]
+ mod guide_release_tests;
+@@ -643,7 +699,7 @@
              shortcuts_tab: figcraft_engine::keymap::Group::Essential,
              shortcuts_query: String::new(),
              opacity_digit: None,
@@ -1684,7 +1716,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              home_view: home::Home::default(),
              title_bar: TitleBar::Native,
              icon_gallery: false,
-@@ -717,6 +771,23 @@
+@@ -717,6 +773,23 @@
  pub struct FigApp {
      pub session: Session,
      pub ui: UiState,
@@ -1708,7 +1740,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      pub canvas: canvas::CanvasState,
      pub services: Box<dyn Services>,
      worker: Option<render_worker::Worker>,
-@@ -763,6 +834,14 @@
+@@ -763,6 +836,14 @@
          let pages_height = session.prefs.pages_height;
          Self {
              ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
@@ -1723,7 +1755,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              session,
              canvas: canvas::CanvasState::default(),
              services,
-@@ -1489,7 +1568,13 @@
+@@ -1489,7 +1570,13 @@
              return;
          }
          if !self.has_files() || self.ui.home {
@@ -1738,7 +1770,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1547,90 +1632,196 @@
+@@ -1547,90 +1634,196 @@
                      right::right_panel(self, ui)
                  });
          }
@@ -2024,6 +2056,95 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/menus.rs client-s
      }
      crate::colorpicker::show(app, ctx);
      palette(app, ctx);
+diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page_menu_tests.rs client-src/crates/ui-egui/src/new_page_menu_tests.rs
+--- .client-src-orig/crates/ui-egui/src/new_page_menu_tests.rs	1970-01-01 01:00:00.000000000 +0100
++++ client-src/crates/ui-egui/src/new_page_menu_tests.rs	2026-10-22 16:43:55.971909038 +0200
+@@ -0,0 +1,85 @@
++//! The map's right-click menu: "New page from card" opens the New page dialog.
++//!
++//! Driven through the same frame order the app uses (`new_page::show` before the menu), on a raw
++//! egui context, so it needs no `MINDMAP_CLIENT` and runs in the normal test suite.
++
++use egui::{Modifiers, PointerButton, Pos2, RawInput, Rect, vec2};
++use figcraft_engine::Session;
++use serde_json::json;
++
++use crate::{FigApp, NoServices};
++
++fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
++    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
++        match shape {
++            egui::Shape::Text(text) => out.push((
++                text.galley.text().to_string(),
++                egui::Rect::from_min_size(text.pos, text.galley.size()),
++            )),
++            egui::Shape::Vec(shapes) => {
++                for shape in shapes {
++                    walk(shape, out);
++                }
++            }
++            _ => {}
++        }
++    }
++    let mut out = Vec::new();
++    for clipped in shapes {
++        walk(&clipped.shape, &mut out);
++    }
++    out
++}
++
++#[test]
++fn right_click_new_page_from_card_opens_the_dialog() {
++    let mut session = Session::new();
++    let frame = session
++        .execute("frame.create", &json!({"x": 100, "y": 100, "width": 300, "height": 200, "name": "Card One"}))
++        .unwrap();
++    let card = figcraft_engine::params::id_of(&frame["id"]).unwrap();
++    session.execute("select.set", &json!({"ids": [card]})).unwrap();
++    let mut app = FigApp::new(session, Box::new(NoServices));
++
++    let ctx = egui::Context::default();
++    crate::theme::install_fonts(&ctx, false, 0);
++    let mut time = 0.0f64;
++    let mut run = |app: &mut FigApp, events: Vec<egui::Event>| {
++        time += 1.0 / 60.0;
++        let input = RawInput {
++            events,
++            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
++            time: Some(time),
++            ..Default::default()
++        };
++        let mut out = ctx.run_ui(input, |ui| {
++            let ctx = ui.ctx().clone();
++            crate::new_page::show(app, &ctx);
++            crate::compose::context_menu(app, &ctx, Pos2::new(200.0, 200.0));
++        });
++        out.textures_delta.clear();
++        out
++    };
++    // Let the fonts and the first layout settle before reading the menu's text.
++    run(&mut app, vec![]);
++    run(&mut app, vec![]);
++
++    let anchor = Pos2::new(200.0, 200.0);
++    let out = run(&mut app, vec![egui::Event::PointerMoved(anchor)]);
++    let item = texts(&out.shapes)
++        .into_iter()
++        .find(|(text, _)| text == "New page from card")
++        .expect("the card's menu offers a new page")
++        .1;
++    let item = item.center();
++    let modifiers = Modifiers::default();
++    for pressed in [true, false] {
++        run(&mut app, vec![
++            egui::Event::PointerMoved(item),
++            egui::Event::PointerButton { pos: item, button: PointerButton::Primary, pressed, modifiers },
++        ]);
++    }
++
++    run(&mut app, vec![]);
++    assert!(app.new_page.open, "the dialog opens from the card's menu");
++}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs client-src/crates/ui-egui/src/new_page.rs
 --- .client-src-orig/crates/ui-egui/src/new_page.rs	1970-01-01 01:00:00.000000000 +0100
 +++ client-src/crates/ui-egui/src/new_page.rs	2026-10-22 16:06:59.000633112 +0200
