@@ -305,7 +305,6 @@ def _screen_workspaces():
         _ws_row(96, "mindmap", "/root/code/mindmap", 2, "MAP", selected=True),
         _ws_row(162, "eisledger", "/root/code/eisledger", 1, "INIT"),
         _ws_row(228, "nuts-cash", "/root/code/nuts-cash", 0, "MAP"),
-        _ws_row(294, "worktree-jev", "~/.herdr/worktrees/…/worktree-jev", 3, "MAP"),
         _ui("SELECTED WORKSPACE", 9, K.MONO, "Medium", UI_MUTED, name="eyebrow", ls=3, x=328, y=84),
         _ui("mindmap", 26, K.SANS, "Medium", UI_TEXT, name="title", x=328, y=102),
         _ui("/root/code/mindmap  ·  main  ·  2 agents working", 11, K.MONO, "Regular", UI_MUTED,
@@ -332,7 +331,6 @@ def _screen_empty():
         _ws_row(96, "mindmap", "/root/code/mindmap", 3, "MAP"),
         _ws_row(162, "eisledger", "/root/code/eisledger", 1, "EMPTY", selected=True),
         _ws_row(228, "nuts-cash", "/root/code/nuts-cash", 2, "MAP"),
-        _ws_row(294, "worktree-jev", "~/.herdr/worktrees/…/worktree-jev", 3, "INIT"),
         _ui("NO MAP YET", 9, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=4, x=328, y=84),
         _ui("eisledger", 26, K.SANS, "Medium", UI_TEXT, name="title", x=328, y=102),
         _ui("/root/code/eisledger  ·  main  ·  1 agent · idle", 11, K.MONO, "Regular", UI_MUTED,
@@ -493,20 +491,87 @@ def _screen_page():
     return f
 
 
+def _screen_new_page():
+    f = F("New page dialog", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f.add(
+        _map_header(980, ["Mindmap"], "Mindmap", live=3, sync="7"),
+        _canvas_card(24, 84, 1, "Canvas and layers", "One node tree holds the design.", "Overview", "doc/node.rs:3", w=280, h=130),
+        _canvas_card(336, 84, 2, "Components", "A subtree with identity.", "Components", "components.rs:1", w=280, h=130),
+        F("New page dialog",
+          _ui("NEW PAGE", 9.5, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=3, x=20, y=16),
+          _ui("×", 16, K.SANS, "Regular", UI_MUTED, name="close", x=430, y=10),
+          _ui("Name", 11, K.SANS, "Medium", UI_TEXT, name="name label", x=20, y=52),
+          F("Name field", _ui("Components", 13, K.SANS, "Regular", UI_TEXT, name="name", x=10, y=7),
+            x=20, y=70, w=420, h=30, fill=UI_SOFT, stroke=UI_BORDER, radius=5),
+          _ui("First prompt", 11, K.SANS, "Medium", UI_TEXT, name="prompt label", x=20, y=118),
+          F("Prompt field",
+            _ui("Draw the variant model: slots, overrides, and the rules that survive a rebuild.",
+                12, K.SANS, "Regular", UI_MUTED, w=390, name="prompt", lh=17, x=10, y=8),
+            x=20, y=136, w=420, h=76, fill=UI_SOFT, stroke=UI_BORDER, radius=5),
+          _ui("Agent", 11, K.SANS, "Medium", UI_TEXT, name="agent label", x=20, y=230),
+          F("Agent chip", _ui("kimi · idle", 11.5, K.SANS, "Regular", UI_TEXT, name="agent", x=10, y=7),
+            _ui("▾", 10, K.SANS, "Regular", UI_MUTED, name="chev", x=140, y=8),
+            x=20, y=248, w=160, h=28, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
+          F("Cancel", _ui("Cancel", 11, K.SANS, "Medium", UI_MUTED, name="c", x=16, y=8),
+            x=20, y=300, w=70, h=32, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
+          F("Create", _ui("Create and prompt", 11, K.SANS, "Medium", "#FFFFFF", name="c", x=58, y=8),
+            x=286, y=300, w=154, h=32, fill=UI_ACCENT, radius=5),
+          _ui("The page is blank until the agent draws.", 8.5, K.MONO, "Regular", UI_MUTED,
+              name="note", x=20, y=340),
+          x=252, y=128, w=460, h=368, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
+          effects=[shadow(y=10, blur=30, color="#00000024")]),
+    )
+    return f
+
+
+def _screen_branches():
+    f = F("Branches", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f.add(
+        _workspace_header(980),
+        F("Sidebar", x=0, y=56, w=300, h=564, fill=UI_PANEL, stroke=UI_BORDER),
+        _ui("WORKSPACES · BEFREE", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=16, y=72),
+        _ws_row(96, "alzette", "/root/code/alzette", 1, "INIT"),
+        _ws_row(162, "eisledger", "/root/code/eisledger", 1, "EMPTY", selected=True),
+        _ws_row(228, "mindmap", "/root/code/mindmap", 3, "MAP"),
+        _ws_row(294, "nutscash", "/root/code/nuts-cash", 2, "INIT"),
+        _ws_row(360, "symphony", "/root/code/symphony", 0, "INIT"),
+        _ui("SELECTED WORKSPACE", 9, K.MONO, "Medium", UI_MUTED, name="sel", ls=3, x=328, y=84),
+        _ui("eisledger", 26, K.SANS, "Medium", UI_TEXT, name="title", x=328, y=102),
+        _ui("/root/code/eisledger  ·  main  ·  1 agent · idle", 11, K.MONO, "Regular", UI_MUTED,
+            name="meta", x=328, y=142),
+        _ui("A document exists, but its map is empty. Init asks one agent to read the repository and draw.",
+            12.5, K.SANS, "Regular", UI_MUTED, w=560, name="body", lh=18, x=328, y=168),
+        F("Init with kimi", _ui("Init with kimi", 12, K.SANS, "Medium", "#FFFFFF", name="label", x=16, y=9),
+          x=328, y=214, w=136, h=34, fill=UI_ACCENT, radius=6),
+        _ui("BRANCHES", 9, K.MONO, "Medium", UI_MUTED, name="branches", ls=3, x=328, y=278),
+        F("main branch",
+          _ui("main", 12, K.SANS, "Medium", UI_TEXT, name="branch", x=12, y=8),
+          _ui("EMPTY", 9, K.MONO, "Medium", "#6E6C68", name="state", x=300, y=9),
+          x=328, y=298, w=360, h=34, fill=UI_SOFT, stroke=UI_ACCENT, sw=1, radius=5),
+        F("worktree branch",
+          _ui("worktree-jev", 12, K.SANS, "Regular", UI_TEXT, name="branch", x=12, y=8),
+          _ui("INIT", 9, K.MONO, "Medium", UI_ACCENT, name="state", x=300, y=9),
+          x=328, y=340, w=360, h=34, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
+        _ui("Worktrees are branches of eisledger, not separate workspaces. Switching one opens its map "
+           "or Init; the repository row stays.", 10, K.MONO, "Regular", UI_MUTED, w=560, name="note",
+            lh=15, x=328, y=390)
+    )
+    return f
+
+
 def _screen_pane():
     f = F("Workspace pane", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
         _map_header(980, ["Mindmap"], "Mindmap", live=3, sync="7"),
         F("Pane", x=0, y=44, w=300, h=576, fill=UI_PANEL),
         F("Pane edge", x=300, y=44, w=1, h=576, fill=UI_BORDER),
-        _ui("WORKSPACES 7", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=14, y=58),
+        _ui("WORKSPACES 6", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=14, y=58),
         _ui("Refresh", 10, K.SANS, "Regular", UI_MUTED, name="refresh", x=238, y=58),
         _ws_row(76, "alzette", "/root/code/alzette", 1, "INIT"),
         _ws_row(140, "eisledger", "/root/code/eisledger", 1, "EMPTY"),
         _ws_row(204, "mindmap", "/root/code/mindmap", 3, "MAP", selected=True),
         _ws_row(268, "nutscash", "/root/code/nuts-cash", 2, "INIT"),
         _ws_row(332, "symphony", "/root/code/symphony", 0, "INIT"),
-        _ws_row(396, "worktree-jev", "~/.herdr/worktrees/eisledger/worktree-jev", 3, "INIT"),
         _ws_row(460, "~", "/root", 2, "INIT"),
         _ui("All workspaces", 10.5, K.SANS, "Regular", UI_MUTED, name="all", x=14, y=584),
         _canvas_card(330, 80, 1, "Canvas and layers", "One node tree holds the design.", "Overview", "doc/node.rs:3", w=280, h=130),
@@ -654,7 +719,9 @@ def build_product(doc):
     doc.place(page, _ui("05 · SYNC — drift, diffs to code, agent and note in one widget", 10, K.MONO, "Medium", K.MUTED, name="c5", ls=3), 64, 1582)
     doc.place(page, _ui("06 · IN FLIGHT — the sync runs, the map stays editable", 10, K.MONO, "Medium", K.MUTED, name="c6", ls=3), 1092, 1582)
     doc.place(page, _ui("07 · HEADER + PANE — pages are tabs; the sidebar icon opens Herdr workspaces", 10, K.MONO, "Medium", K.MUTED, name="c7", ls=3), 64, 2262)
-    doc.place(page, _ui("08 · MODEL — sent once, synced by a button", 10, K.MONO, "Medium", K.MUTED, name="c8", ls=3), 64, 2942)
+    doc.place(page, _ui("08 · NEW PAGE — name it and send the first prompt", 10, K.MONO, "Medium", K.MUTED, name="c8", ls=3), 1092, 2262)
+    doc.place(page, _ui("09 · BRANCHES — worktrees are branches under the repository", 10, K.MONO, "Medium", K.MUTED, name="c9", ls=3), 64, 2942)
+    doc.place(page, _ui("10 · MODEL — sent once, synced by a button", 10, K.MONO, "Medium", K.MUTED, name="c10", ls=3), 64, 3622)
     doc.place(page, _screen_workspaces(), 64, 250)
     doc.place(page, _screen_empty(), 1092, 250)
     doc.place(page, _screen_map(), 64, 930)
@@ -662,19 +729,9 @@ def build_product(doc):
     doc.place(page, _screen_sync(), 64, 1610)
     doc.place(page, _screen_flight(), 1092, 1610)
     doc.place(page, _screen_pane(), 64, 2290)
-    doc.place(page, F("Pane note",
-                      _ui("THE PANE", 9, K.MONO, "Medium", UI_MUTED, name="eyebrow", ls=4, x=24, y=22),
-                      _ui("Herdr's list, beside the canvas.", 24, K.SANS, "Medium", UI_TEXT, name="title", x=24, y=46),
-                      _ui("The first screen is still the browser. Once a map is open, the sidebar icon "
-                         "toggles a 300 px pane; a row opens that workspace in place, with the same "
-                         "open-and-join the browser uses. The pane survives the switch, and All "
-                         "workspaces goes back to the browser for Init.", 12, K.SANS, "Regular",
-                         UI_MUTED, w=820, name="body", lh=18, x=24, y=86),
-                      _ui("SIDEBAR ICON  ·  PAGE TABS  ·  + PAGE  ·  N LIVE", 9, K.MONO,
-                          "Medium", "#2F6F6A", name="meta", ls=2, x=24, y=190),
-                      x=1092, y=2290, w=916, h=240, fill=UI_PANEL, stroke=UI_BORDER, radius=10),
-              1092, 2290)
-    doc.place(page, _mode_model(), 64, 2970)
+    doc.place(page, _screen_new_page(), 1092, 2290)
+    doc.place(page, _screen_branches(), 64, 2970)
+    doc.place(page, _mode_model(), 64, 3650)
 
     rules = Vt(
         _ui("FIVE RULES", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=4),
@@ -685,8 +742,8 @@ def build_product(doc):
             "and are sent once.   5  Sync is a button: drift, diffs, agent, note — in flight while "
             "the map stays editable.", 12, K.SANS, "Regular", UI_TEXT, w=1900, name="two", lh=17),
         gap=6, pad=22, w=2008, fill=UI_PANEL, stroke=UI_BORDER, radius=10, name="Rules")
-    doc.place(page, rules, 64, 3450)
-    doc.place(page, F("spacer", x=0, y=0, w=1, h=40, fill=None), 64, 3550)
+    doc.place(page, rules, 64, 4130)
+    doc.place(page, F("spacer", x=0, y=0, w=1, h=40, fill=None), 64, 4230)
     return page
 
 
