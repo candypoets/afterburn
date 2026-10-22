@@ -90,6 +90,194 @@ diff -ruN --exclude target .client-src-orig/apps/figcraft/src/main.rs client-src
      // Files named on the command line are the user's too: their missing fonts are listed.
      fig.ui.font_checks = opened;
      fig.note_recovered(recovered.copies);
+diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-src/crates/ui-egui/src/agents.rs
+--- .client-src-orig/crates/ui-egui/src/agents.rs	1970-01-01 01:00:00.000000000 +0100
++++ client-src/crates/ui-egui/src/agents.rs	2026-10-22 15:00:47.152094169 +0200
+@@ -0,0 +1,184 @@
++//! The agent breakdown: the header count, and a modal with every agent in the workspace.
++
++use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Stroke, vec2};
++
++use crate::FigApp;
++use crate::compose::TargetInfo;
++use crate::theme::{regular, semibold};
++use crate::workspaces::Target;
++
++const PANEL: Color32 = Color32::WHITE;
++const SOFT: Color32 = Color32::from_rgb(0xF8, 0xF6, 0xF3);
++const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
++const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
++const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
++const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
++const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
++const TEAL: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
++const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
++
++/// The modal is open.
++#[derive(Default)]
++pub struct State {
++    pub open: bool,
++    /// The modal was just opened by a click; ignore that same click for outside-close.
++    pub just_opened: bool,
++}
++
++/// Header text: `3 agents · 1 working`, in a colour that says whether anything is busy.
++pub fn summary(targets: &[TargetInfo], error: Option<&str>) -> (String, Color32) {
++    let agents: Vec<&TargetInfo> = targets.iter().filter(|info| !info.new_agent).collect();
++    if agents.is_empty() {
++        if error.is_some() {
++            return ("agents unavailable".to_string(), DANGER);
++        }
++        return ("no agents".to_string(), FAINT);
++    }
++    let working = agents
++        .iter()
++        .filter(|info| matches!(info.status.trim(), "working" | "blocked"))
++        .count();
++    let label = if working > 0 {
++        format!("{} agent{} · {} working", agents.len(), plural(agents.len()), working)
++    } else {
++        format!("{} agent{} · idle", agents.len(), plural(agents.len()))
++    };
++    (label, if working > 0 { ACCENT } else { TEAL })
++}
++
++fn plural(n: usize) -> &'static str {
++    if n == 1 { "" } else { "s" }
++}
++
++fn short_kind(kind: &str) -> &str {
++    match kind {
++        "dsh-tui" | "dsh" => "dsh",
++        other => other,
++    }
++}
++
++fn status_color(status: &str) -> Color32 {
++    match status.trim() {
++        "working" => ACCENT,
++        "blocked" | "error" | "errored" | "failed" => DANGER,
++        "idle" | "done" => TEAL,
++        _ => FAINT,
++    }
++}
++
++/// Draw the breakdown when open.
++pub fn show(app: &mut FigApp, ctx: &egui::Context) {
++    if !app.agents_modal.open {
++        return;
++    }
++    let targets = app.compose.targets.clone();
++    let selected = app.compose.target.clone();
++    let error = app.compose.targets_error.clone();
++    let workspace = app.active_workspace.clone().unwrap_or_default();
++    let agents: Vec<TargetInfo> = targets.iter().filter(|info| !info.new_agent).cloned().collect();
++    let working = agents
++        .iter()
++        .filter(|info| matches!(info.status.trim(), "working" | "blocked"))
++        .count();
++    let mut close = false;
++    let mut pick: Option<Target> = None;
++    let mut refresh = false;
++
++    let area = egui::Area::new(Id::new("agents_modal"))
++        .anchor(Align2::CENTER_CENTER, vec2(0.0, -24.0))
++        .order(egui::Order::Foreground)
++        .show(ctx, |ui| {
++            egui::Frame::NONE
++                .fill(PANEL)
++                .stroke(Stroke::new(1.0, BORDER))
++                .corner_radius(CornerRadius::same(10))
++                .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(46) })
++                .inner_margin(Margin::symmetric(20, 16))
++                .show(ui, |ui| {
++                    ui.set_width(440.0);
++                    ui.horizontal(|ui| {
++                        ui.label(RichText::new("AGENTS").font(FontId::monospace(9.5)).color(ACCENT));
++                        ui.label(RichText::new(workspace).font(FontId::monospace(9.0)).color(MUTED));
++                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                            if ui.add(egui::Button::new(RichText::new("×").size(16.0).color(MUTED)).frame(false)).clicked() {
++                                close = true;
++                            }
++                        });
++                    });
++                    ui.add_space(8.0);
++                    let summary = if agents.is_empty() {
++                        "No agents in this workspace.".to_string()
++                    } else if working > 0 {
++                        format!("{} agent{} · {} working", agents.len(), plural(agents.len()), working)
++                    } else {
++                        format!("{} agent{} · all idle", agents.len(), plural(agents.len()))
++                    };
++                    ui.label(RichText::new(summary).font(regular(12.0)).color(INK));
++                    ui.add_space(10.0);
++                    egui::ScrollArea::vertical()
++                        .id_salt("agents_modal_scroll")
++                        .max_height(360.0)
++                        .auto_shrink([false, true])
++                        .show(ui, |ui| {
++                            if let Some(error) = error.as_deref() {
++                                ui.label(RichText::new(error).font(regular(11.0)).color(DANGER));
++                                ui.add_space(8.0);
++                            }
++                            if agents.is_empty() && error.is_none() {
++                                ui.label(RichText::new("Start an agent from the composer's target picker.")
++                                    .font(regular(11.0)).color(MUTED));
++                            }
++                            for info in &agents {
++                                let chosen = selected.as_ref() == Some(&info.target);
++                                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), egui::Sense::click());
++                                let hot = resp.hovered();
++                                let bg = if chosen { SOFT } else if hot { SOFT } else { PANEL };
++                                ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
++                                if chosen {
++                                    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
++                                }
++                                let (kind, pane) = match &info.target {
++                                    Target::Existing { pane, kind, .. } => (short_kind(kind), pane.clone()),
++                                    Target::New { kind } => (short_kind(kind), "new agent".to_string()),
++                                };
++                                let color = status_color(&info.status);
++                                ui.painter().circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 4.0, color);
++                                ui.painter().text(egui::pos2(rect.left() + 26.0, rect.top() + 17.0), Align2::LEFT_CENTER, kind, semibold(12.5), INK);
++                                ui.painter().text(egui::pos2(rect.left() + 26.0, rect.top() + 35.0), Align2::LEFT_CENTER, pane, FontId::monospace(9.5), MUTED);
++                                let status = if info.focused { format!("{} · focused", info.status) } else { info.status.clone() };
++                                ui.painter().text(egui::pos2(rect.right() - 12.0, rect.top() + 17.0), Align2::RIGHT_CENTER, status, FontId::monospace(9.5), color);
++                                if chosen {
++                                    ui.painter().text(egui::pos2(rect.right() - 12.0, rect.top() + 35.0), Align2::RIGHT_CENTER, "prompt target", FontId::monospace(8.5), ACCENT);
++                                }
++                                if resp.clicked() {
++                                    pick = Some(info.target.clone());
++                                }
++                            }
++                        });
++                    ui.add_space(10.0);
++                    ui.horizontal(|ui| {
++                        if ui.add(egui::Button::new(RichText::new("Refresh").font(regular(11.0)).color(MUTED)).frame(false)).clicked() {
++                            refresh = true;
++                        }
++                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                            ui.label(RichText::new("Click an agent to make it the prompt target.").font(FontId::monospace(8.5)).color(FAINT));
++                        });
++                    });
++                });
++        });
++
++    if let Some(target) = pick {
++        app.compose.target = Some(target);
++    }
++    if refresh {
++        crate::compose::refresh_targets(app, ctx);
++    }
++    let pressed = ctx.input(|input| input.pointer.any_pressed());
++    let pointer = ctx.input(|input| input.pointer.interact_pos());
++    let inside = pointer.is_some_and(|pos| area.response.rect.contains(pos));
++    let just_opened = app.agents_modal.just_opened;
++    app.agents_modal.just_opened = false;
++    if (pressed && !inside && !just_opened) || close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
++        app.agents_modal.open = false;
++    }
++}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-src/crates/ui-egui/src/canvas.rs
 --- .client-src-orig/crates/ui-egui/src/canvas.rs	2026-10-21 19:19:18.000000000 +0200
 +++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 12:11:56.315353931 +0200
@@ -196,8 +384,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client-src/crates/ui-egui/src/compose.rs
 --- .client-src-orig/crates/ui-egui/src/compose.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 14:42:03.214656416 +0200
-@@ -0,0 +1,1015 @@
++++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 14:58:51.909587299 +0200
+@@ -0,0 +1,1021 @@
 +//! The bottom comment composer: one bar that is both the comment box and the prompt box.
 +//!
 +//! The selection tells it what a comment is about. Enter turns the input into a draft on that
@@ -338,7 +526,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    /// The target list's answer while it is in flight.
 +    targets_rx: Option<Receiver<Result<Vec<TargetInfo>, String>>>,
 +    /// Why the target list is empty, when the service could not answer.
-+    targets_error: Option<String>,
++    pub(crate) targets_error: Option<String>,
 +}
 +
 +/// Draw the composer at the bottom of an open map.
@@ -818,6 +1006,12 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +
 +/// Ask the agent list once for the active workspace.
 +#[cfg(not(target_arch = "wasm32"))]
++/// Force the next frame to re-read the agent list (the Agents modal's Refresh).
++pub fn refresh_targets(app: &mut FigApp, ctx: &egui::Context) {
++    app.compose.targets_at = 0.0;
++    ensure_targets(app, ctx);
++}
++
 +fn ensure_targets(app: &mut FigApp, ctx: &egui::Context) {
 +    let Some(workspace) = app.active_workspace.clone() else { return };
 +    let now = ctx.input(|input| input.time);
@@ -1215,8 +1409,16 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 14:22:10.102114952 +0200
-@@ -14,6 +14,7 @@
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 15:00:47.152094169 +0200
+@@ -6,6 +6,7 @@
+ #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+ 
+ pub mod a11y;
++pub mod agents;
+ pub mod assets_panel;
+ pub mod bidi;
+ pub mod branch_ui;
+@@ -14,6 +15,7 @@
  pub mod colorpicker;
  pub mod comments;
  pub mod component_panel;
@@ -1224,7 +1426,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  pub mod control;
  pub mod credits;
  pub mod cursors;
-@@ -57,6 +58,11 @@
+@@ -57,6 +59,11 @@
      if id.starts_with("comment.") || id.starts_with("collab.") || id.starts_with("view.") {
          return true;
      }
@@ -1236,17 +1438,10 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      if id.starts_with("tool.") || id.starts_with("text.edit") {
          return false;
      }
-@@ -66,8 +72,51 @@
+@@ -66,8 +73,44 @@
      }
  }
  
-+fn short_kind(kind: &str) -> &str {
-+    match kind {
-+        "dsh-tui" | "dsh" => "dsh",
-+        other => other,
-+    }
-+}
-+
 +fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
 +    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 30.0), egui::Sense::click());
 +    let hot = resp.hovered();
@@ -1288,7 +1483,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  pub mod online;
  pub mod pending_open;
  pub mod plugins_ui;
-@@ -84,6 +133,7 @@
+@@ -84,6 +127,7 @@
  pub mod shortcuts;
  pub mod shortcuts_panel;
  pub mod style_picker;
@@ -1296,7 +1491,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  pub mod tabs;
  pub mod theme;
  pub mod toolbar;
-@@ -94,6 +144,7 @@
+@@ -94,6 +138,7 @@
  pub mod versions;
  pub mod widgets;
  pub mod windows;
@@ -1304,7 +1499,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  
  #[cfg(test)]
  mod theme_startup_tests;
-@@ -643,7 +694,7 @@
+@@ -643,7 +688,7 @@
              shortcuts_tab: figcraft_engine::keymap::Group::Essential,
              shortcuts_query: String::new(),
              opacity_digit: None,
@@ -1313,10 +1508,12 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              home_view: home::Home::default(),
              title_bar: TitleBar::Native,
              icon_gallery: false,
-@@ -717,6 +768,17 @@
+@@ -717,6 +762,19 @@
  pub struct FigApp {
      pub session: Session,
      pub ui: UiState,
++    /// The agent breakdown modal.
++    pub agents_modal: agents::State,
 +    /// The New page dialog.
 +    pub new_page: new_page::State,
 +    /// The Workspaces screen (map mode's home): the listed Herdr workspaces and its requests.
@@ -1331,19 +1528,20 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      pub canvas: canvas::CanvasState,
      pub services: Box<dyn Services>,
      worker: Option<render_worker::Worker>,
-@@ -763,6 +825,11 @@
+@@ -763,6 +821,12 @@
          let pages_height = session.prefs.pages_height;
          Self {
              ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
 +            ws: workspaces::State::default(),
 +            active_workspace: None,
++            agents_modal: agents::State::default(),
 +            new_page: new_page::State::default(),
 +            compose: compose::State::default(),
 +            sync: sync::State::default(),
              session,
              canvas: canvas::CanvasState::default(),
              services,
-@@ -1489,7 +1556,13 @@
+@@ -1489,7 +1553,13 @@
              return;
          }
          if !self.has_files() || self.ui.home {
@@ -1358,7 +1556,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1547,90 +1620,114 @@
+@@ -1547,90 +1617,105 @@
                      right::right_panel(self, ui)
                  });
          }
@@ -1415,6 +1613,28 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 -                                                .color(if active { accent } else { muted }),
 -                                        )
 -                                        .frame(false),
+-                                    );
+-                                    if active {
+-                                        let r = resp.rect;
+-                                        ui.painter().line_segment(
+-                                            [
+-                                                egui::pos2(r.left(), r.bottom() + 2.0),
+-                                                egui::pos2(r.right(), r.bottom() + 2.0),
+-                                            ],
+-                                            egui::Stroke::new(2.0, accent),
+-                                        );
+-                                    }
+-                                    if resp.clicked() {
+-                                        self.run("page.select", serde_json::json!({"id": id}));
+-                                    }
+-                                }
+-                                ui.separator();
+-                                ui.label(
+-                                    egui::RichText::new(if joined {
+-                                        format!("{people} live")
+-                                    } else {
+-                                        "offline".to_string()
+-                                    })
 +            egui::Panel::top("map_header")
 +                .exact_size(44.0)
 +                .resizable(false)
@@ -1454,50 +1674,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                            ui.add_space(12.0);
 +                            ui.label(
 +                                egui::RichText::new(if joined { format!("{people} live") } else { "offline".to_string() })
-+                                    .size(10.0)
-+                                    .color(if joined { egui::Color32::from_rgb(0x2F, 0x6F, 0x6A) } else { muted }),
-+                            );
-+                            if let Some(info) = self
-+                                .compose
-+                                .target
-+                                .as_ref()
-+                                .and_then(|target| self.compose.targets.iter().find(|info| info.target == *target))
-+                            {
-+                                let status = info.status.trim();
-+                                if !status.is_empty() {
-+                                    ui.add_space(10.0);
-+                                    let color = match status {
-+                                        "working" => egui::Color32::from_rgb(0xB5, 0x45, 0x2F),
-+                                        "blocked" | "error" | "errored" => egui::Color32::from_rgb(0x9E, 0x3B, 0x2C),
-+                                        _ => egui::Color32::from_rgb(0x2F, 0x6F, 0x6A),
-+                                    };
-+                                    ui.label(
-+                                        egui::RichText::new(format!("{} · {}", short_kind(info.target.kind()), status))
-+                                            .size(9.5)
-+                                            .color(color),
-                                     );
--                                    if active {
--                                        let r = resp.rect;
--                                        ui.painter().line_segment(
--                                            [
--                                                egui::pos2(r.left(), r.bottom() + 2.0),
--                                                egui::pos2(r.right(), r.bottom() + 2.0),
--                                            ],
--                                            egui::Stroke::new(2.0, accent),
--                                        );
--                                    }
--                                    if resp.clicked() {
--                                        self.run("page.select", serde_json::json!({"id": id}));
--                                    }
-                                 }
--                                ui.separator();
--                                ui.label(
--                                    egui::RichText::new(if joined {
--                                        format!("{people} live")
--                                    } else {
--                                        "offline".to_string()
--                                    })
--                                    .size(10.0)
+                                     .size(10.0)
 -                                    .color(if joined {
 -                                        egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
 -                                    } else {
@@ -1505,6 +1682,18 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 -                                    }),
 -                                );
 -                            });
++                                    .color(if joined { egui::Color32::from_rgb(0x2F, 0x6F, 0x6A) } else { muted }),
++                            );
++                            let (summary, color) = agents::summary(&self.compose.targets, self.compose.targets_error.as_deref());
++                            ui.add_space(10.0);
++                            let response = ui.add(
++                                egui::Button::new(egui::RichText::new(summary).size(9.5).color(color))
++                                    .frame(false),
++                            );
++                            a11y::button(&response, "Agent breakdown");
++                            if response.on_hover_text("Agent breakdown").clicked() {
++                                self.agents_modal.open = true;
++                                self.agents_modal.just_opened = true;
 +                            }
 +                            ui.add_space(4.0);
                          });
@@ -1538,6 +1727,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +            compose::show(self, &ctx);
 +            // The Sync button and widget, beside the map bar and above the composer.
 +            sync::show(self, &ctx);
++            agents::show(self, &ctx);
 +            new_page::show(self, &ctx);
          }
          // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
