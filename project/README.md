@@ -144,6 +144,22 @@ persisting drafts as shared FigCraft comment threads, the model renderer (the ag
 at `mindmap render`, which does not exist yet), remote hosts, auth on the service socket, and a
 systemd unit.
 
+### What the sync diff can really know
+
+Yes — the list is buildable, but it is two real diffs, not a semantic guess:
+
+- **Design side.** At every successful sync, store a snapshot of the map (page, card name, text,
+  parent). Diff the live map against that snapshot: cards added, renamed, edited, removed. These
+  are the changes about to be implemented as code.
+- **Code side.** Store the repository commit of the last successful sync. `git log` and
+  `git diff --stat <last>..HEAD` give the code changes and commits since then — the drift the map
+  has not caught up with.
+- **In flight.** Start a sync job, record the agent and pane, and poll Herdr's agent state; the
+  widget can honestly say `applying 4 of 7` and `map stays editable`.
+
+What it cannot know by itself is which design change maps to which code change; that is the
+agent's job, using both lists. The UI numbers are derived from snapshots and git, not invented.
+
 **A note on live design updates.** The client and the document server sync correctly (page
 rename/delete and document edits arrive live). The design *pipeline* was the problem: importing a
 multi-page `.figcraft` into a live document flattens its nodes onto the current page and appends

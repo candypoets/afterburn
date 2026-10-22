@@ -206,6 +206,48 @@ def _appbar(w, workspace, tabs=None, active=None, people=("JL", "MK", "TS"), liv
         F("line", x=0, y=55, w=w, h=1, fill=UI_BORDER),
         x=0, y=0, w=w, h=56, fill=UI_PANEL, effects=[shadow(y=2, blur=10, color="#00000010")])
 
+def _workspace_header(w, section="Workspaces", address="100.104.9.15:47821"):
+    """The browser's real header: Mindmap · Workspaces, Refresh, address."""
+    return F("Header",
+             _ui("Mindmap", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=18),
+             _ui("·  " + section, 11, K.MONO, "Regular", UI_MUTED, name="section", x=100, y=21),
+             _ui(address, 9.5, K.MONO, "Regular", UI_MUTED, name="address", x=w - 310, y=22),
+             F("Refresh", _ui("Refresh", 10.5, K.SANS, "Medium", UI_TEXT, name="r", x=12, y=6),
+               x=w - 128, y=14, w=72, h=28, fill=UI_PANEL, stroke=UI_BORDER, radius=6),
+             F("line", x=0, y=55, w=w, h=1, fill=UI_BORDER),
+             x=0, y=0, w=w, h=56, fill=UI_PANEL)
+
+
+def _map_bar(w, tabs, active, live=1, sync=None, sync_label="Sync"):
+    """The app's floating map pill: Workspaces | pages | N live, with the Sync button beside it."""
+    bar_w = 100 + sum(len(t) * 6.8 + 24 for t in tabs) + 74
+    x = (w - bar_w) / 2 - (30 if sync is not None else 0)
+    kids = [
+        _ui("Workspaces", 10.5, K.SANS, "Medium", UI_MUTED, name="ws", x=14, y=10),
+        F("d1", x=88, y=10, w=1, h=14, fill=UI_BORDER),
+    ]
+    tx = 100
+    for t in tabs:
+        kids.append(_ui(t, 10.5, K.SANS, "Medium", UI_ACCENT if t == active else UI_MUTED,
+                        name="tab " + t, x=tx, y=10))
+        if t == active:
+            kids.append(F("u", x=tx, y=28, w=len(t) * 6.2, h=2, fill=UI_ACCENT))
+        tx += len(t) * 6.8 + 24
+    kids.append(F("d2", x=tx, y=10, w=1, h=14, fill=UI_BORDER))
+    kids.append(_ui(f"{live} live", 10, K.MONO, "Medium", "#2F6F6A", name="live", x=tx + 12, y=10))
+    bar = F("Map bar", *kids, x=x, y=10, w=bar_w, h=34, fill=UI_PANEL, stroke=UI_BORDER,
+            radius=10, effects=[shadow(y=3, blur=12, color="#00000016")])
+    if sync is None:
+        return F("Top", bar)
+    btn = F("Sync button",
+            _ui(sync_label, 10.5, K.SANS, "Medium", "#FFFFFF", name="l", x=12, y=7),
+            F("count", _ui(str(sync), 8, K.MONO, "Medium", "#FFFFFF", name="n", x=5, y=3),
+              x=(74 if sync_label == "Sync" else 84), y=6, w=18, h=18, fill="#8F3524", radius=9),
+            x=x + bar_w + 10, y=10, w=(96 if sync_label == "Sync" else 108), h=34,
+            fill=UI_ACCENT, radius=8, effects=[shadow(y=3, blur=12, color="#00000016")])
+    return F("Top", bar, btn)
+
+
 def _ws_row(y, name, path, agents, map_state, selected=False):
     return F(
         "Workspace " + name,
@@ -221,7 +263,7 @@ def _ws_row(y, name, path, agents, map_state, selected=False):
 def _screen_workspaces():
     f = F("Workspaces", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "Workspaces", live=0, people=()),
+        _workspace_header(980),
         F("Sidebar", x=0, y=56, w=300, h=564, fill=UI_PANEL, stroke=UI_BORDER),
         _ui("WORKSPACES · BEFREE", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=16, y=72),
         _ws_row(96, "mindmap", "/root/code/mindmap", 2, "MAP", selected=True),
@@ -248,48 +290,51 @@ def _screen_workspaces():
 def _screen_empty():
     f = F("Empty map", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "eisledger", live=1, people=("JL",)),
-        F("Empty state",
-          _ui("NO MAP YET", 9, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=4, x=28, y=24),
-          _ui("Init the map for eisledger", 24, K.SANS, "Medium", UI_TEXT, name="title", x=28, y=48),
-          _ui("/root/code/eisledger · main · 2 agents in the workspace", 11, K.MONO, "Regular",
-              UI_MUTED, name="meta", x=28, y=86),
-          _ui("Init asks one agent to read the repository, name the areas and draw the first "
-             "overview. Pick who: the agent already here, or a new CLI.", 12.5, K.SANS, "Regular",
-              UI_MUTED, w=456, name="body", lh=18, x=28, y=112),
-          F("Init with kimi", _ui("Init with kimi", 12, K.SANS, "Medium", "#FFFFFF", name="label", x=16, y=9),
-            x=28, y=168, w=136, h=34, fill=UI_ACCENT, radius=6),
-          F("Chevron", _ui("▾", 12, K.SANS, "Medium", "#FFFFFF", name="glyph", x=12, y=8),
-            x=164, y=168, w=34, h=34, fill="#8F3524", radius=6),
-          _ui("kimi is already here · no new process", 10, K.MONO, "Regular", UI_MUTED,
-              name="hint", x=28, y=210),
-          F("Menu",
-            _ui("AGENTS IN THIS WORKSPACE", 9, K.MONO, "Medium", UI_MUTED, name="agents", ls=3, x=14, y=12),
-            F("kimi row",
-              _ui("kimi", 11.5, K.SANS, "Medium", UI_TEXT, name="name", x=10, y=7),
-              _ui("idle", 10, K.MONO, "Regular", UI_MUTED, name="status", x=380, y=8),
-              _ui("✓", 11, K.SANS, "Medium", UI_ACCENT, name="check", x=436, y=7),
-              x=14, y=32, w=452, h=30, fill=UI_SOFT, radius=5),
-            F("claude row",
-              _ui("claude", 11.5, K.SANS, "Regular", UI_TEXT, name="name", x=10, y=7),
-              _ui("done", 10, K.MONO, "Regular", UI_MUTED, name="status", x=380, y=8),
-              x=14, y=64, w=452, h=30, fill=None, radius=5),
-            F("divider", x=14, y=104, w=452, h=1, fill=UI_BORDER),
-            _ui("START A NEW AGENT", 9, K.MONO, "Medium", UI_MUTED, name="new", ls=3, x=14, y=114),
-            F("chips",
-              F("codex", _ui("codex", 10.5, K.MONO, "Regular", UI_TEXT, name="t", x=10, y=6),
-                x=0, y=0, w=86, h=26, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
-              F("claude", _ui("claude", 10.5, K.MONO, "Regular", UI_TEXT, name="t", x=10, y=6),
-                x=94, y=0, w=86, h=26, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
-              F("kimi", _ui("kimi", 10.5, K.MONO, "Regular", UI_TEXT, name="t", x=10, y=6),
-                x=188, y=0, w=86, h=26, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
-              x=14, y=136, w=280, h=26),
-            _ui("The agent reads the repo and draws; 6–12 areas, every card sourced.", 9.5, K.MONO,
-                "Regular", UI_MUTED, w=430, name="note", x=14, y=174),
-            x=28, y=240, w=480, h=196, fill=UI_PANEL, stroke=UI_BORDER, radius=8,
-            effects=[shadow(y=6, blur=18, color="#00000014")]),
-          x=230, y=110, w=536, h=470, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
-          effects=[shadow(y=6, blur=18, color="#00000014")]))
+        _workspace_header(980),
+        F("Sidebar", x=0, y=56, w=300, h=564, fill=UI_PANEL, stroke=UI_BORDER),
+        _ui("WORKSPACES · BEFREE", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=16, y=72),
+        _ws_row(96, "mindmap", "/root/code/mindmap", 3, "MAP"),
+        _ws_row(162, "eisledger", "/root/code/eisledger", 1, "EMPTY", selected=True),
+        _ws_row(228, "nuts-cash", "/root/code/nuts-cash", 2, "MAP"),
+        _ws_row(294, "worktree-jev", "~/.herdr/worktrees/…/worktree-jev", 3, "INIT"),
+        _ui("NO MAP YET", 9, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=4, x=328, y=84),
+        _ui("eisledger", 26, K.SANS, "Medium", UI_TEXT, name="title", x=328, y=102),
+        _ui("/root/code/eisledger  ·  main  ·  1 agent · idle", 11, K.MONO, "Regular", UI_MUTED,
+            name="meta", x=328, y=142),
+        _ui("A document exists, but its map is empty. Init asks one agent to read the repository, "
+           "name the areas and draw the first overview. Pick who: the agent already here, or a new CLI.",
+            12.5, K.SANS, "Regular", UI_MUTED, w=560, name="body", lh=18, x=328, y=168),
+        F("Init with kimi", _ui("Init with kimi", 12, K.SANS, "Medium", "#FFFFFF", name="label", x=16, y=9),
+          x=328, y=230, w=136, h=34, fill=UI_ACCENT, radius=6),
+        F("Chevron", _ui("▾", 12, K.SANS, "Medium", "#FFFFFF", name="glyph", x=12, y=8),
+          x=464, y=230, w=34, h=34, fill="#8F3524", radius=6),
+        _ui("kimi is already here · no new process", 10, K.MONO, "Regular", UI_MUTED,
+            name="hint", x=328, y=272),
+        F("Menu",
+          _ui("AGENTS IN THIS WORKSPACE", 9, K.MONO, "Medium", UI_MUTED, name="agents", ls=3, x=14, y=12),
+          F("kimi row",
+            _ui("kimi", 11.5, K.SANS, "Medium", UI_TEXT, name="name", x=10, y=7),
+            _ui("idle", 10, K.MONO, "Regular", UI_MUTED, name="status", x=390, y=8),
+            _ui("✓", 11, K.SANS, "Medium", UI_ACCENT, name="check", x=452, y=7),
+            x=14, y=32, w=468, h=30, fill=UI_SOFT, radius=5),
+          F("claude row",
+            _ui("claude", 11.5, K.SANS, "Regular", UI_TEXT, name="name", x=10, y=7),
+            _ui("done", 10, K.MONO, "Regular", UI_MUTED, name="status", x=390, y=8),
+            x=14, y=64, w=468, h=30, fill=None, radius=5),
+          F("divider", x=14, y=104, w=468, h=1, fill=UI_BORDER),
+          _ui("START A NEW AGENT", 9, K.MONO, "Medium", UI_MUTED, name="new", ls=3, x=14, y=114),
+          F("codex", _ui("codex", 10.5, K.MONO, "Regular", UI_TEXT, name="t", x=10, y=6),
+            x=14, y=136, w=86, h=26, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
+          F("claude", _ui("claude", 10.5, K.MONO, "Regular", UI_TEXT, name="t", x=10, y=6),
+            x=108, y=136, w=86, h=26, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
+          F("kimi", _ui("kimi", 10.5, K.MONO, "Regular", UI_TEXT, name="t", x=10, y=6),
+            x=202, y=136, w=86, h=26, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
+          _ui("The agent reads the repo and draws; 6–12 areas, every card sourced.", 9.5, K.MONO,
+              "Regular", UI_MUTED, w=440, name="note", x=14, y=174),
+          x=328, y=300, w=496, h=196, fill=UI_PANEL, stroke=UI_BORDER, radius=8,
+          effects=[shadow(y=6, blur=18, color="#00000014")]),
+        _ui("Init is one button with a choice. The selected agent is prompted; with none, the chosen CLI starts.",
+            9, K.MONO, "Regular", UI_MUTED, name="foot", x=328, y=516))
     return f
 
 
@@ -297,7 +342,7 @@ def _screen_empty():
 def _screen_init():
     f = F("Init running", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "eisledger", tabs=["Overview"], active="Overview"),
+        _workspace_header(980),
         _ui("Agent working · codex · reading crates/engine/src", 11, K.MONO, "Regular", UI_TEXT,
             name="status", x=28, y=84),
         F("Ghost 1", _ui("Reading the repository…", 12, K.SANS, "Regular", UI_MUTED, x=16, y=14),
@@ -372,7 +417,7 @@ def _tree_inset(x, y):
 def _screen_map():
     f = F("Comment tree", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "mindmap", tabs=["Overview"], active="Overview", live=3, sync="7", machine=False),
+        _map_bar(980, ["Overview"], "Overview", live=3, sync="7"),
         _canvas_card(24, 84, 1, "Components", "A subtree with identity; an instance remembers what changed.", "Components", "components.rs:1", w=300, h=150),
         _canvas_card(24, 258, 2, "Variants", "A variant is a child component selected by a property.", "Components", "components.rs:7", w=300, h=120),
         _canvas_card(336, 258, 3, "Overrides", "What an instance changes from its main survives a rebuild.", "Components", "components.rs:11", w=300, h=120),
@@ -395,7 +440,7 @@ def _screen_map():
 def _screen_page():
     f = F("Page comment", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "mindmap", tabs=["Overview"], active="Overview", live=2, sync="7", machine=False),
+        _map_bar(980, ["Overview"], "Overview", live=2, sync="7"),
         _canvas_card(24, 84, 1, "Canvas and layers", "One node tree holds the design.", "Overview", "doc/node.rs:3", w=300, h=140),
         _canvas_card(336, 84, 2, "Components", "A subtree with identity.", "Components", "components.rs:1", w=300, h=140),
         _canvas_card(24, 240, 3, "Auto layout", "Frames size themselves; children follow rules.", "Layout", "layout/lib.rs:3", w=300, h=120),
@@ -415,7 +460,7 @@ def _screen_page():
 def _screen_sync():
     f = F("Sync widget", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "mindmap", tabs=["Overview"], active="Overview", live=2, sync="7", machine=False),
+        _map_bar(980, ["Overview"], "Overview", live=2, sync="7"),
         _canvas_card(24, 84, 1, "Canvas and layers", "The map is always editable.", "Overview", "doc/node.rs:3", w=250, h=130),
         _canvas_card(300, 84, 2, "Components", "A subtree with identity.", "Components", "components.rs:1", w=250, h=130),
         F("Badge changed", _ui("~  CHANGED IN CODE", 7.5, K.MONO, "Medium", "#8A6D2B", name="b", ls=1, x=8, y=4),
@@ -460,8 +505,7 @@ def _screen_sync():
 def _screen_flight():
     f = F("Sync in flight", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "mindmap", tabs=["Overview"], active="Overview", live=3, sync="…",
-                sync_label="Syncing…", machine=False),
+        _map_bar(980, ["Overview"], "Overview", live=3, sync="…", sync_label="Syncing…"),
         F("Flight",
           _ui("⟳", 14, K.SANS, "Regular", UI_ACCENT, name="spin", x=16, y=12),
           _ui("SYNC IN FLIGHT  ·  kimi", 8.5, K.MONO, "Medium", UI_ACCENT, name="title", ls=2, x=42, y=12),
