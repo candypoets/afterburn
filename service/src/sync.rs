@@ -47,6 +47,10 @@ const OMISSION_RESERVE: usize = 48;
 /// How long an in-flight job may run before it is reported as failed.
 pub const JOB_TIMEOUT_SECS: u64 = 30 * 60;
 
+/// How long an agent may stay idle without ever being seen working before the job fails. A prompt
+/// that never starts (an auth error, a missing session) would otherwise leave the job in flight.
+pub const IDLE_GRACE_SECS: u64 = 15;
+
 /// One page in the client-supplied map snapshot.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MapPage {
@@ -789,6 +793,15 @@ pub fn transition(seen_active: bool, status: Option<&str>, age_secs: u64) -> Tra
                     seen_active: true,
                     reason: None,
                 }
+            } else if age_secs >= IDLE_GRACE_SECS {
+                Transition {
+                    state: JobState::Failed,
+                    seen_active: false,
+                    reason: Some(
+                        "the agent stayed idle and never started the sync; check its output"
+                            .to_string(),
+                    ),
+                }
             } else {
                 Transition {
                     state: JobState::InFlight,
@@ -1256,6 +1269,19 @@ mod tests {
             transition(false, Some("idle"), 0).state,
             JobState::InFlight,
             "idle before the prompt is observed is not a finished sync"
+        );
+        assert_eq!(
+            transition(false, Some("idle"), IDLE_GRACE_SECS - 1).state,
+            JobState::InFlight
+        );
+        let never_started = transition(false, Some("idle"), IDLE_GRACE_SECS);
+        assert_eq!(never_started.state, JobState::Failed);
+        assert!(
+            never_started
+                .reason
+                .unwrap_or_default()
+                .contains("never started"),
+            "an agent that never left idle must fail, not hang"
         );
         assert_eq!(transition(true, Some("idle"), 0).state, JobState::Done);
         assert_eq!(transition(true, Some("done"), 0).state, JobState::Done);
