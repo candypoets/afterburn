@@ -1543,7 +1543,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 16:06:31.876984542 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 16:16:37.477138097 +0200
 @@ -6,6 +6,7 @@
  #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
  
@@ -1705,7 +1705,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1547,91 +1632,149 @@
+@@ -1547,91 +1632,176 @@
                      right::right_panel(self, ui)
                  });
          }
@@ -1735,30 +1735,16 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                .map(|d| d.pages.iter().filter_map(|p| d.node(*p).map(|n| (*p, n.name.clone()))).collect())
                  .unwrap_or_default();
              let current = self.session.page().ok();
-+            let (pages, current_root, crumb) = match self.session.doc() {
++            let (pages, current_root) = match self.session.doc() {
 +                Ok(doc) => {
 +                    let main: Vec<(figcraft_doc::NodeId, String)> = all_pages
 +                        .iter()
 +                        .filter(|(id, _)| page_tree::parent(doc, *id).is_none())
 +                        .cloned()
 +                        .collect();
-+                    let root = current.map(|page| page_tree::root(doc, page));
-+                    let crumb = current
-+                        .map(|page| {
-+                            let path = page_tree::path(doc, page);
-+                            if path.len() <= 1 {
-+                                String::new()
-+                            } else {
-+                                path.iter()
-+                                    .filter_map(|id| doc.node(*id).map(|node| node.name.clone()))
-+                                    .collect::<Vec<_>>()
-+                                    .join(" › ")
-+                            }
-+                        })
-+                        .unwrap_or_default();
-+                    (main, root, crumb)
++                    (main, current.map(|page| page_tree::root(doc, page)))
 +                }
-+                Err(_) => (all_pages.clone(), current, String::new()),
++                Err(_) => (all_pages.clone(), current),
 +            };
              let (people, joined) = {
                  let live = self.session.live();
@@ -1846,10 +1832,6 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                            }
 +                            ui.add_space(2.0);
 +                        }
-+                        if !crumb.is_empty() {
-+                            ui.label(egui::RichText::new(crumb).size(9.5).color(muted));
-+                            ui.add_space(4.0);
-+                        }
 +                        if ui
 +                            .add(egui::Button::new(egui::RichText::new("+ Page").size(10.5).color(muted)).frame(false))
 +                            .on_hover_text("New page")
@@ -1885,6 +1867,51 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                                self.agents_modal.just_opened = true;
 +                            }
 +                            ui.add_space(4.0);
++                        });
++                    });
++                });
++        }
++        if map_mode {
++            let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
++            // The page path is its own strip below the header, as designed: the breadcrumb is
++            // informational and the only action on this row is the centered page tree.
++            egui::Panel::top("map_breadcrumb")
++                .exact_size(30.0)
++                .resizable(false)
++                .frame(egui::Frame::NONE.fill(t.panel))
++                .show(ui, |ui| {
++                    let rect = ui.max_rect();
++                    ui.painter().line_segment(
++                        [rect.left_bottom(), rect.right_bottom()],
++                        egui::Stroke::new(1.0, t.border),
++                    );
++                    ui.horizontal_centered(|ui| {
++                        ui.add_space(14.0);
++                        let crumb = self
++                            .session
++                            .doc()
++                            .ok()
++                            .zip(self.session.page().ok())
++                            .map(|(doc, page)| {
++                                page_tree::path(doc, page)
++                                    .iter()
++                                    .filter_map(|id| doc.node(*id).map(|node| node.name.clone()))
++                                    .collect::<Vec<_>>()
++                                    .join(" › ")
++                            })
++                            .unwrap_or_default();
++                        ui.label(egui::RichText::new(crumb).font(egui::FontId::monospace(9.5)).color(muted));
++                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                            ui.add_space(12.0);
++                            let response = ui.add(
++                                egui::Button::new(egui::RichText::new("Page tree  ⌄").size(9.5).color(muted))
++                                    .frame(false),
++                            );
++                            a11y::button(&response, "Page tree");
++                            if response.on_hover_text("All pages and subpages (⌘⇧P)").clicked() {
++                                self.page_tree.open = true;
++                                self.page_tree.just_opened = true;
++                            }
                          });
 +                    });
                  });
