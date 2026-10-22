@@ -1189,7 +1189,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 13:33:36.195868836 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 13:41:05.710044739 +0200
 @@ -14,6 +14,7 @@
  pub mod colorpicker;
  pub mod comments;
@@ -1210,7 +1210,49 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      if id.starts_with("tool.") || id.starts_with("text.edit") {
          return false;
      }
-@@ -84,6 +90,7 @@
+@@ -66,6 +72,41 @@
+     }
+ }
+ 
++fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
++    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 30.0), egui::Sense::click());
++    let hot = resp.hovered();
++    let color = if hot { egui::Color32::from_rgb(0xB5, 0x45, 0x2F) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
++    let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 15.0));
++    let p = ui.painter();
++    p.rect_stroke(icon, egui::CornerRadius::same(3), egui::Stroke::new(1.2, color), egui::StrokeKind::Inside);
++    let x = icon.left() + 6.0;
++    p.line_segment([egui::pos2(x, icon.top() + 2.0), egui::pos2(x, icon.bottom() - 2.0)], egui::Stroke::new(1.0, color));
++    for i in 0..3 {
++        let y = icon.top() + 4.0 + i as f32 * 3.5;
++        p.line_segment([egui::pos2(icon.left() + 3.0, y), egui::pos2(x - 2.0, y)], egui::Stroke::new(1.0, color));
++    }
++    a11y::button(&resp, if open { "Hide sidebar" } else { "Show sidebar" });
++    resp.on_hover_text(if open { "Hide sidebar" } else { "Show sidebar" })
++}
++
++fn page_tab(ui: &mut egui::Ui, name: &str, active: bool) -> egui::Response {
++    let font = crate::theme::semibold(11.5);
++    let width = name.chars().count() as f32 * 6.7 + 24.0;
++    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
++    let hot = resp.hovered();
++    let p = ui.painter();
++    if active {
++        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF8, 0xF6, 0xF3));
++        p.line_segment([egui::pos2(rect.left() + 6.0, rect.bottom() - 2.0), egui::pos2(rect.right() - 6.0, rect.bottom() - 2.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(0xB5, 0x45, 0x2F)));
++    } else if hot {
++        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF8, 0xF6, 0xF3));
++    }
++    let color = if active { egui::Color32::from_rgb(0x1A, 0x1A, 0x1A) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
++    p.text(rect.center(), egui::Align2::CENTER_CENTER, name, font, color);
++    a11y::button(&resp, &format!("Open page {name}"));
++    resp
++}
++
+ pub mod menus;
+ pub mod missing_fonts;
+ pub mod online;
+@@ -84,6 +125,7 @@
  pub mod shortcuts;
  pub mod shortcuts_panel;
  pub mod style_picker;
@@ -1218,7 +1260,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  pub mod tabs;
  pub mod theme;
  pub mod toolbar;
-@@ -94,6 +101,7 @@
+@@ -94,6 +136,7 @@
  pub mod versions;
  pub mod widgets;
  pub mod windows;
@@ -1226,7 +1268,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  
  #[cfg(test)]
  mod theme_startup_tests;
-@@ -643,7 +651,7 @@
+@@ -643,7 +686,7 @@
              shortcuts_tab: figcraft_engine::keymap::Group::Essential,
              shortcuts_query: String::new(),
              opacity_digit: None,
@@ -1235,7 +1277,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              home_view: home::Home::default(),
              title_bar: TitleBar::Native,
              icon_gallery: false,
-@@ -717,6 +725,15 @@
+@@ -717,6 +760,15 @@
  pub struct FigApp {
      pub session: Session,
      pub ui: UiState,
@@ -1251,7 +1293,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      pub canvas: canvas::CanvasState,
      pub services: Box<dyn Services>,
      worker: Option<render_worker::Worker>,
-@@ -763,6 +780,10 @@
+@@ -763,6 +815,10 @@
          let pages_height = session.prefs.pages_height;
          Self {
              ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
@@ -1262,7 +1304,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              session,
              canvas: canvas::CanvasState::default(),
              services,
-@@ -1489,7 +1510,13 @@
+@@ -1489,7 +1545,13 @@
              return;
          }
          if !self.has_files() || self.ui.home {
@@ -1277,10 +1319,137 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1547,6 +1574,16 @@
+@@ -1547,91 +1609,91 @@
                      right::right_panel(self, ui)
                  });
          }
+-        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+-            let worker = self.worker.take();
+-            let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
+-            canvas::show(self, ui, &mut worker);
+-            self.worker = Some(worker);
+-            if !hidden && !map_mode {
+-                ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
+-                    a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
+-                    toolbar::show(self, ui);
+-                });
+-            }
+-        });
+         if map_mode {
+             let pages: Vec<(figcraft_doc::NodeId, String)> = self
+                 .session
+                 .doc()
+-                .map(|d| {
+-                    d.pages
+-                        .iter()
+-                        .filter_map(|p| d.node(*p).map(|n| (*p, n.name.clone())))
+-                        .collect()
+-                })
++                .map(|d| d.pages.iter().filter_map(|p| d.node(*p).map(|n| (*p, n.name.clone()))).collect())
+                 .unwrap_or_default();
+             let current = self.session.page().ok();
+             let (people, joined) = {
+                 let live = self.session.live();
+                 (live.peers.len() + 1, matches!(live.status, figcraft_engine::live::Status::Live))
+             };
+-            let accent = egui::Color32::from_rgb(0xB5, 0x45, 0x2F);
+             let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
+-            let ink = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+-            egui::Area::new(egui::Id::new("map_bar"))
+-                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 10.0))
+-                .order(egui::Order::Foreground)
+-                .show(&ctx, |ui| {
+-                    egui::Frame::NONE
+-                        .fill(egui::Color32::from_rgb(0xFF, 0xFF, 0xFF))
+-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0xE3, 0xE2, 0xDF)))
+-                        .corner_radius(egui::CornerRadius::same(10))
+-                        .inner_margin(egui::Margin::symmetric(10, 6))
+-                        .show(ui, |ui| {
+-                            ui.spacing_mut().item_spacing = egui::vec2(14.0, 4.0);
+-                            ui.horizontal(|ui| {
+-                                for (id, name) in &pages {
+-                                    let active = Some(*id) == current;
+-                                    let resp = ui.add(
+-                                        egui::Button::new(
+-                                            egui::RichText::new(name)
+-                                                .size(12.0)
+-                                                .color(if active { accent } else { muted }),
+-                                        )
+-                                        .frame(false),
+-                                    );
+-                                    if active {
+-                                        let r = resp.rect;
+-                                        ui.painter().line_segment(
+-                                            [
+-                                                egui::pos2(r.left(), r.bottom() + 2.0),
+-                                                egui::pos2(r.right(), r.bottom() + 2.0),
+-                                            ],
+-                                            egui::Stroke::new(2.0, accent),
+-                                        );
+-                                    }
+-                                    if resp.clicked() {
+-                                        self.run("page.select", serde_json::json!({"id": id}));
+-                                    }
+-                                }
+-                                ui.separator();
+-                                ui.label(
+-                                    egui::RichText::new(if joined {
+-                                        format!("{people} live")
+-                                    } else {
+-                                        "offline".to_string()
+-                                    })
++            egui::Panel::top("map_header")
++                .exact_size(44.0)
++                .resizable(false)
++                .frame(egui::Frame::NONE.fill(t.panel))
++                .show(ui, |ui| {
++                    let rect = ui.max_rect();
++                    ui.painter().line_segment(
++                        [rect.left_bottom(), rect.right_bottom()],
++                        egui::Stroke::new(1.0, t.border),
++                    );
++                    ui.horizontal_centered(|ui| {
++                        ui.add_space(8.0);
++                        if sidebar_toggle(ui, self.ws.pane_open).clicked() {
++                            self.ws.pane_open = !self.ws.pane_open;
++                            if self.ws.pane_open {
++                                self.ws.refresh(&ctx);
++                            }
++                        }
++                        ui.add_space(6.0);
++                        for (id, name) in &pages {
++                            if page_tab(ui, name, Some(*id) == current).clicked() {
++                                self.run("page.select", serde_json::json!({"id": id}));
++                            }
++                            ui.add_space(2.0);
++                        }
++                        if ui
++                            .add(egui::Button::new(egui::RichText::new("+ Page").size(10.5).color(muted)).frame(false))
++                            .on_hover_text("New page")
++                            .clicked()
++                        {
++                            let name = format!("Page {}", pages.len() + 1);
++                            self.run("page.add", serde_json::json!({"name": name}));
++                        }
++                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                            // Room for the Sync pill floating over the header's right edge.
++                            ui.add_space(92.0);
++                            ui.label(
++                                egui::RichText::new(if joined { format!("{people} live") } else { "offline".to_string() })
+                                     .size(10.0)
+-                                    .color(if joined {
+-                                        egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
+-                                    } else {
+-                                        ink
+-                                    }),
+-                                );
+-                            });
++                                    .color(if joined { egui::Color32::from_rgb(0x2F, 0x6F, 0x6A) } else { muted }),
++                            );
+                         });
++                    });
++                });
++        }
 +        if map_mode && self.ws.pane_open {
 +            egui::Panel::left("workspace_pane")
 +                .exact_size(300.0)
@@ -1289,64 +1458,29 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                .show(ui, |ui| {
 +                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspaces");
 +                    workspaces::pane(self, ui);
-+                });
-+        }
-         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-             let worker = self.worker.take();
-             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
-@@ -1590,6 +1627,22 @@
-                         .show(ui, |ui| {
-                             ui.spacing_mut().item_spacing = egui::vec2(14.0, 4.0);
-                             ui.horizontal(|ui| {
-+                                // Back to the workspace browser (Herdr's projects); the page tabs
-+                                // stay as they are.
-+                                if ui
-+                                    .add(
-+                                        egui::Button::new(egui::RichText::new("Workspaces").size(12.0).color(muted))
-+                                            .frame(false),
-+                                    )
-+                                    .on_hover_text("Workspaces pane")
-+                                    .clicked()
-+                                {
-+                                    self.ws.pane_open = !self.ws.pane_open;
-+                                    if self.ws.pane_open {
-+                                        self.ws.refresh(&ctx);
-+                                    }
-+                                }
-+                                ui.separator();
-                                 for (id, name) in &pages {
-                                     let active = Some(*id) == current;
-                                     let resp = ui.add(
-@@ -1614,6 +1667,18 @@
-                                         self.run("page.select", serde_json::json!({"id": id}));
-                                     }
-                                 }
-+                                if ui
-+                                    .add(
-+                                        egui::Button::new(egui::RichText::new("+ Page").size(10.5).color(muted))
-+                                            .frame(false)
-+                                            .min_size(egui::vec2(52.0, 20.0)),
-+                                    )
-+                                    .on_hover_text("New page")
-+                                    .clicked()
-+                                {
-+                                    let name = format!("Page {}", pages.len() + 1);
-+                                    self.run("page.add", serde_json::json!({"name": name}));
-+                                }
-                                 ui.separator();
-                                 ui.label(
-                                     egui::RichText::new(if joined {
-@@ -1631,6 +1696,10 @@
-                             });
-                         });
                  });
+         }
++        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
++            let worker = self.worker.take();
++            let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
++            canvas::show(self, ui, &mut worker);
++            self.worker = Some(worker);
++            if !hidden && !map_mode {
++                ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
++                    a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
++                    toolbar::show(self, ui);
++                });
++            }
++        });
++        if map_mode {
 +            // The human comment surface: one bar at the bottom of the map.
 +            compose::show(self, &ctx);
 +            // The Sync button and widget, beside the map bar and above the composer.
 +            sync::show(self, &ctx);
-         }
++        }
          // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
          for (name, x, shown, grows) in edges {
+             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/menus.rs client-src/crates/ui-egui/src/menus.rs
 --- .client-src-orig/crates/ui-egui/src/menus.rs	2026-10-19 15:50:23.000000000 +0200
 +++ client-src/crates/ui-egui/src/menus.rs	2026-10-22 12:05:18.916502808 +0200

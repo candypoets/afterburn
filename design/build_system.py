@@ -218,6 +218,38 @@ def _workspace_header(w, section="Workspaces", address="100.104.9.15:47821"):
              x=0, y=0, w=w, h=56, fill=UI_PANEL)
 
 
+def _map_header(w, tabs, active, live=3, sync=None, sync_label="Sync"):
+    """The app's IDE-like header: sidebar toggle, page tabs, + Page, live, Sync."""
+    kids = [
+        F("Sidebar icon", x=14, y=15, w=18, h=15, fill=None, stroke=UI_MUTED, sw=1.2, radius=3),
+        F("Sidebar split", x=20, y=16, w=1, h=13, fill=UI_MUTED),
+        F("Sidebar line 1", x=16, y=18, w=3, h=1, fill=UI_MUTED),
+        F("Sidebar line 2", x=16, y=21, w=3, h=1, fill=UI_MUTED),
+        F("Sidebar line 3", x=16, y=24, w=3, h=1, fill=UI_MUTED),
+    ]
+    tx = 44
+    for t in tabs:
+        tw = len(t) * 6.7 + 24
+        if t == active:
+            kids.append(F("active tab", x=tx, y=7, w=tw, h=30, fill=UI_SOFT, radius=6))
+            kids.append(F("tab underline", x=tx + 6, y=35, w=tw - 12, h=2, fill=UI_ACCENT))
+        kids.append(_ui(t, 11.5, K.SANS, "Medium", UI_TEXT if t == active else UI_MUTED,
+                        name="tab " + t, x=tx + 12, y=15))
+        tx += tw + 2
+    kids.append(_ui("+ Page", 10.5, K.SANS, "Regular", UI_MUTED, name="add page", x=tx + 8, y=16))
+    # The action and the live count, right aligned like the app's header.
+    if sync is not None:
+        kids.append(F("Sync button",
+                      _ui(sync_label, 10.5, K.SANS, "Medium", UI_TEXT, name="sync label", x=12, y=8),
+                      F("count", _ui(str(sync), 8, K.MONO, "Medium", "#FFFFFF", name="n", x=5, y=3),
+                        x=(56 if sync_label == "Sync" else 66), y=7, w=18, h=18, fill=UI_ACCENT, radius=9),
+                      x=w - 86, y=6, w=(78 if sync_label == "Sync" else 90), h=32,
+                      fill=UI_PANEL, stroke=UI_BORDER, radius=8))
+    kids.append(_ui(f"{live} live", 10, K.MONO, "Medium", "#2F6F6A", name="live", x=w - 156, y=16))
+    kids.append(F("header line", x=0, y=43, w=w, h=1, fill=UI_BORDER))
+    return F("Map header", *kids, x=0, y=0, w=w, h=44, fill=UI_PANEL)
+
+
 def _map_bar(w, tabs, active, live=1, sync=None, sync_label="Sync"):
     """The app's floating map pill: Workspaces | pages | N live, with the Sync button beside it."""
     bar_w = 100 + sum(len(t) * 6.8 + 24 for t in tabs) + 74
@@ -417,7 +449,7 @@ def _tree_inset(x, y):
 def _screen_map():
     f = F("Comment tree", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _map_bar(980, ["Overview"], "Overview", live=3, sync="7"),
+        _map_header(980, ["Overview"], "Overview", live=3, sync="7"),
         _canvas_card(24, 84, 1, "Components", "A subtree with identity; an instance remembers what changed.", "Components", "components.rs:1", w=300, h=150),
         _canvas_card(24, 258, 2, "Variants", "A variant is a child component selected by a property.", "Components", "components.rs:7", w=300, h=120),
         _canvas_card(336, 258, 3, "Overrides", "What an instance changes from its main survives a rebuild.", "Components", "components.rs:11", w=300, h=120),
@@ -440,7 +472,7 @@ def _screen_map():
 def _screen_page():
     f = F("Page comment", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _map_bar(980, ["Overview"], "Overview", live=2, sync="7"),
+        _map_header(980, ["Overview"], "Overview", live=2, sync="7"),
         _canvas_card(24, 84, 1, "Canvas and layers", "One node tree holds the design.", "Overview", "doc/node.rs:3", w=300, h=140),
         _canvas_card(336, 84, 2, "Components", "A subtree with identity.", "Components", "components.rs:1", w=300, h=140),
         _canvas_card(24, 240, 3, "Auto layout", "Frames size themselves; children follow rules.", "Layout", "layout/lib.rs:3", w=300, h=120),
@@ -457,10 +489,36 @@ def _screen_page():
     return f
 
 
+def _screen_pane():
+    f = F("Workspace pane", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f.add(
+        _map_header(980, ["Mindmap"], "Mindmap", live=3, sync="7"),
+        F("Pane", x=0, y=44, w=300, h=576, fill=UI_PANEL),
+        F("Pane edge", x=300, y=44, w=1, h=576, fill=UI_BORDER),
+        _ui("WORKSPACES 7", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=14, y=58),
+        _ui("Refresh", 10, K.SANS, "Regular", UI_MUTED, name="refresh", x=238, y=58),
+        _ws_row(76, "alzette", "/root/code/alzette", 1, "INIT"),
+        _ws_row(140, "eisledger", "/root/code/eisledger", 1, "EMPTY"),
+        _ws_row(204, "mindmap", "/root/code/mindmap", 3, "MAP", selected=True),
+        _ws_row(268, "nutscash", "/root/code/nuts-cash", 2, "INIT"),
+        _ws_row(332, "symphony", "/root/code/symphony", 0, "INIT"),
+        _ws_row(396, "worktree-jev", "~/.herdr/worktrees/eisledger/worktree-jev", 3, "INIT"),
+        _ws_row(460, "~", "/root", 2, "INIT"),
+        _ui("All workspaces", 10.5, K.SANS, "Regular", UI_MUTED, name="all", x=14, y=584),
+        _canvas_card(330, 80, 1, "Canvas and layers", "One node tree holds the design.", "Overview", "doc/node.rs:3", w=280, h=130),
+        _canvas_card(330, 230, 2, "Components", "A subtree with identity.", "Components", "components.rs:1", w=280, h=130),
+        _ui("Click a workspace: the map changes, the pane stays.", 9, K.MONO, "Regular", UI_MUTED,
+            name="note", x=330, y=390),
+        _ui("The sidebar icon toggles this pane; All workspaces opens the browser for Init.",
+            9, K.MONO, "Regular", UI_MUTED, name="note2", x=330, y=408)
+    )
+    return f
+
+
 def _screen_sync():
     f = F("Sync widget", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _map_bar(980, ["Overview"], "Overview", live=2, sync="7"),
+        _map_header(980, ["Overview"], "Overview", live=2, sync="7"),
         _canvas_card(24, 84, 1, "Canvas and layers", "The map is always editable.", "Overview", "doc/node.rs:3", w=250, h=130),
         _canvas_card(300, 84, 2, "Components", "A subtree with identity.", "Components", "components.rs:1", w=250, h=130),
         F("Badge changed", _ui("~  CHANGED IN CODE", 7.5, K.MONO, "Medium", "#8A6D2B", name="b", ls=1, x=8, y=4),
@@ -505,7 +563,7 @@ def _screen_sync():
 def _screen_flight():
     f = F("Sync in flight", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _map_bar(980, ["Overview"], "Overview", live=3, sync="…", sync_label="Syncing…"),
+        _map_header(980, ["Overview"], "Overview", live=3, sync="…", sync_label="Syncing…"),
         F("Flight",
           _ui("⟳", 14, K.SANS, "Regular", UI_ACCENT, name="spin", x=16, y=12),
           _ui("SYNC IN FLIGHT  ·  kimi", 8.5, K.MONO, "Medium", UI_ACCENT, name="title", ls=2, x=42, y=12),
@@ -591,14 +649,28 @@ def build_product(doc):
     doc.place(page, _ui("04 · PAGE — no selection carries the page and all its comments", 10, K.MONO, "Medium", K.MUTED, name="c4", ls=3), 1092, 902)
     doc.place(page, _ui("05 · SYNC — drift, diffs to code, agent and note in one widget", 10, K.MONO, "Medium", K.MUTED, name="c5", ls=3), 64, 1582)
     doc.place(page, _ui("06 · IN FLIGHT — the sync runs, the map stays editable", 10, K.MONO, "Medium", K.MUTED, name="c6", ls=3), 1092, 1582)
-    doc.place(page, _ui("07 · MODEL — sent once, synced by a button", 10, K.MONO, "Medium", K.MUTED, name="c7", ls=3), 64, 2262)
+    doc.place(page, _ui("07 · HEADER + PANE — pages are tabs; the sidebar icon opens Herdr workspaces", 10, K.MONO, "Medium", K.MUTED, name="c7", ls=3), 64, 2262)
+    doc.place(page, _ui("08 · MODEL — sent once, synced by a button", 10, K.MONO, "Medium", K.MUTED, name="c8", ls=3), 64, 2942)
     doc.place(page, _screen_workspaces(), 64, 250)
     doc.place(page, _screen_empty(), 1092, 250)
     doc.place(page, _screen_map(), 64, 930)
     doc.place(page, _screen_page(), 1092, 930)
     doc.place(page, _screen_sync(), 64, 1610)
     doc.place(page, _screen_flight(), 1092, 1610)
-    doc.place(page, _mode_model(), 64, 2290)
+    doc.place(page, _screen_pane(), 64, 2290)
+    doc.place(page, F("Pane note",
+                      _ui("THE PANE", 9, K.MONO, "Medium", UI_MUTED, name="eyebrow", ls=4, x=24, y=22),
+                      _ui("Herdr's list, beside the canvas.", 24, K.SANS, "Medium", UI_TEXT, name="title", x=24, y=46),
+                      _ui("The first screen is still the browser. Once a map is open, the sidebar icon "
+                         "toggles a 300 px pane; a row opens that workspace in place, with the same "
+                         "open-and-join the browser uses. The pane survives the switch, and All "
+                         "workspaces goes back to the browser for Init.", 12, K.SANS, "Regular",
+                         UI_MUTED, w=820, name="body", lh=18, x=24, y=86),
+                      _ui("SIDEBAR ICON  ·  PAGE TABS  ·  + PAGE  ·  N LIVE", 9, K.MONO,
+                          "Medium", "#2F6F6A", name="meta", ls=2, x=24, y=190),
+                      x=1092, y=2290, w=916, h=240, fill=UI_PANEL, stroke=UI_BORDER, radius=10),
+              1092, 2290)
+    doc.place(page, _mode_model(), 64, 2970)
 
     rules = Vt(
         _ui("FIVE RULES", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=4),
@@ -609,8 +681,8 @@ def build_product(doc):
             "and are sent once.   5  Sync is a button: drift, diffs, agent, note — in flight while "
             "the map stays editable.", 12, K.SANS, "Regular", UI_TEXT, w=1900, name="two", lh=17),
         gap=6, pad=22, w=2008, fill=UI_PANEL, stroke=UI_BORDER, radius=10, name="Rules")
-    doc.place(page, rules, 64, 2770)
-    doc.place(page, F("spacer", x=0, y=0, w=1, h=40, fill=None), 64, 2870)
+    doc.place(page, rules, 64, 3450)
+    doc.place(page, F("spacer", x=0, y=0, w=1, h=40, fill=None), 64, 3550)
     return page
 
 
