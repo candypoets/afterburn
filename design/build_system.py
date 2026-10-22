@@ -218,7 +218,7 @@ def _workspace_header(w, section="Workspaces", address="100.104.9.15:47821"):
              x=0, y=0, w=w, h=56, fill=UI_PANEL)
 
 
-def _map_header(w, tabs, active, live=3, sync=None, sync_label="Sync"):
+def _map_header(w, tabs, active, live=3, sync=None, sync_label="Sync", agent="dsh · working"):
     """The app's IDE-like header: sidebar toggle, page tabs, + Page, live, Sync."""
     kids = [
         # macOS draws these over the content view; the sidebar icon starts clear of them.
@@ -250,6 +250,8 @@ def _map_header(w, tabs, active, live=3, sync=None, sync_label="Sync"):
                       x=w - 86, y=6, w=(78 if sync_label == "Sync" else 90), h=32,
                       fill=UI_PANEL, stroke=UI_BORDER, radius=8))
     kids.append(_ui(f"{live} live", 10, K.MONO, "Medium", "#2F6F6A", name="live", x=w - 156, y=16))
+    if agent:
+        kids.append(_ui(agent, 9.5, K.MONO, "Medium", UI_ACCENT, name="agent", x=w - 276, y=16))
     kids.append(F("header line", x=0, y=43, w=w, h=1, fill=UI_BORDER))
     return F("Map header", *kids, x=0, y=0, w=w, h=44, fill=UI_PANEL)
 
