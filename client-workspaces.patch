@@ -196,8 +196,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client-src/crates/ui-egui/src/compose.rs
 --- .client-src-orig/crates/ui-egui/src/compose.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 14:22:10.078115264 +0200
-@@ -0,0 +1,1004 @@
++++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 14:42:03.214656416 +0200
+@@ -0,0 +1,1015 @@
 +//! The bottom comment composer: one bar that is both the comment box and the prompt box.
 +//!
 +//! The selection tells it what a comment is about. Enter turns the input into a draft on that
@@ -1026,8 +1026,17 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    }
 +    let comments: Vec<Value> = sending
 +        .iter()
-+        .map(|draft| json!({"text": draft.text, "node": draft.node, "page": draft.page}))
++        .map(|draft| {
++            json!({
++                "text": draft.text,
++                "node": draft.node,
++                "page": draft.page,
++                "node_id": draft.node_id.map(|id| id.0),
++                "page_id": draft.page_id.map(|id| id.0),
++            })
++        })
 +        .collect();
++    let page_id = app.session.page().ok().map(|id| id.0);
 +    let request = json!({
 +        "id": 1,
 +        "method": "send",
@@ -1035,6 +1044,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +        "target": target.line(),
 +        "prompt": prompt,
 +        "comments": comments,
++        "page_id": page_id,
++        "new_page": false,
 +    })
 +    .to_string();
 +    let (tx, rx) = mpsc::channel();
@@ -1555,8 +1566,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/menus.rs client-s
      palette(app, ctx);
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs client-src/crates/ui-egui/src/new_page.rs
 --- .client-src-orig/crates/ui-egui/src/new_page.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/new_page.rs	2026-10-22 14:11:10.974654904 +0200
-@@ -0,0 +1,285 @@
++++ client-src/crates/ui-egui/src/new_page.rs	2026-10-22 14:42:03.226656260 +0200
+@@ -0,0 +1,290 @@
 +//! The New page dialog: a name, a first prompt, and the agent that will design it.
 +//!
 +//! `page.add` selects the new page; if a prompt is given it is sent once to the composer's chosen
@@ -1591,6 +1602,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +    created: bool,
 +    error: Option<String>,
 +    rx: Option<Receiver<Result<SendReply, String>>>,
++    page_id: Option<u64>,
 +    focus: bool,
 +}
 +
@@ -1604,6 +1616,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +        self.created = false;
 +        self.error = None;
 +        self.rx = None;
++        self.page_id = None;
 +        self.focus = true;
 +    }
 +}
@@ -1752,10 +1765,11 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +        return;
 +    }
 +    if !app.new_page.created {
-+        if app.run("page.add", json!({"name": name})).is_none() {
++        let Some(created) = app.run("page.add", json!({"name": name})) else {
 +            app.new_page.error = Some(app.ui.last_error.take().unwrap_or_else(|| "The page could not be created.".to_string()));
 +            return;
-+        }
++        };
++        app.new_page.page_id = created.get("id").and_then(serde_json::Value::as_u64);
 +        app.new_page.created = true;
 +    }
 +    let prompt = app.new_page.prompt.trim().to_string();
@@ -1772,7 +1786,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +        app.new_page.error = Some("Choose an agent for the first prompt.".to_string());
 +        return;
 +    };
-+    let text = format!("Design the new page \"{name}\".\n\n{prompt}");
++    let text = prompt;
 +    let request = json!({
 +        "id": 1,
 +        "method": "send",
@@ -1780,6 +1794,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +        "target": target.line(),
 +        "prompt": text,
 +        "comments": [],
++        "page_id": app.new_page.page_id,
++        "new_page": true,
 +    })
 +    .to_string();
 +    let (tx, rx) = mpsc::channel();

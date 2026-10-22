@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use crate::agent::{self, AgentOutcome, Target};
 use crate::comments::{self, Comment};
 use crate::config::Config;
+use crate::context;
 use crate::error::{Error, Result, ResultExt};
 use crate::herdr::{Agent, Herdr, Pane};
 use crate::link;
@@ -334,14 +335,36 @@ impl ProjectService {
         target: &Target,
         prompt: &str,
         comments: &[Comment],
+        page_id: Option<u64>,
+        new_page: bool,
     ) -> Result<SendResult> {
         let workspace = self.find_workspace(query)?;
         agent::validate_target(&self.herdr, &workspace, target)?;
+        let record = self.store.get(&workspace.id)?;
+        let page_id = page_id.or_else(|| comments.iter().find_map(|comment| comment.page_id));
+        let node_ids: Vec<u64> = comments
+            .iter()
+            .filter_map(|comment| comment.node_id)
+            .collect();
+        let context = context::build(
+            &self.config,
+            &context::Request {
+                label: &workspace.label,
+                id: &workspace.id,
+                path: workspace.path.as_deref(),
+                file: record.as_ref().and_then(|record| record.file.as_deref()),
+                edit: record.as_ref().and_then(|record| record.edit.as_deref()),
+                page_id,
+                new_page,
+                node_ids: &node_ids,
+            },
+        );
         let text = comments::format_prompt(
             &workspace.label,
             workspace.path.as_deref(),
             comments,
             prompt,
+            Some(&context),
         )?;
         let agent = agent::ensure_with_prompt(&self.herdr, &workspace, target, &text);
         Ok(SendResult {

@@ -19,6 +19,17 @@ mindmap render .mindmap/model.json --project <id>
 
 Then look at the rendered PNG the command returns. Iterate on the model, not on the canvas.
 
+## Live comments and Sync
+
+The service also sends comments and new-page prompts against an **existing live FigCraft
+document**. For those jobs:
+
+- Do **not** write `.mindmap/model.json` or re-render the whole map.
+- The context packet names the document, page id, card id, path, text and the owner edit link.
+- Run the FigCraft CLI with `mcp`, `collab.join` the edit link, `get_node` the page/card to read
+  it, then `run_command` to change or add the named cards.
+- Work only on the named page and card; keep card names stable; source every claim.
+
 ## The model
 
 ```json

@@ -180,12 +180,17 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
             let target = request_target(request)?;
             let prompt = request_prompt(request)?;
             let parsed = comments::parse_comments(request.get("comments"))?;
+            let page_id = request.get("page_id").and_then(Value::as_u64);
+            let new_page = request
+                .get("new_page")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             if prompt.trim().is_empty() && parsed.is_empty() {
                 return Err(Error::new(
                     "send needs a prompt or at least one non-empty comment",
                 ));
             }
-            let result = service.send(query, &target, &prompt, &parsed)?;
+            let result = service.send(query, &target, &prompt, &parsed, page_id, new_page)?;
             if !result.agent.prompted {
                 let reason = result
                     .agent

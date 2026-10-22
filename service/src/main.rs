@@ -15,6 +15,7 @@
 mod agent;
 mod comments;
 mod config;
+mod context;
 mod error;
 mod herdr;
 mod link;

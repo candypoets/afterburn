@@ -31,6 +31,10 @@ pub struct Comment {
     pub node: Option<String>,
     /// Page label the comment is attached to, when known.
     pub page: Option<String>,
+    /// Live document node id the comment is attached to.
+    pub node_id: Option<u64>,
+    /// Live document page id the comment belongs to.
+    pub page_id: Option<u64>,
 }
 
 /// Parse the `comments` request field.
@@ -79,10 +83,32 @@ pub fn parse_comments(raw: Option<&Value>) -> Result<Vec<Comment>> {
             text: text.to_string(),
             node: optional_label(object, index, "node")?,
             page: optional_label(object, index, "page")?,
+            node_id: optional_id(object, index, "node_id")?,
+            page_id: optional_id(object, index, "page_id")?,
         });
     }
     validate_comments(&comments)?;
     Ok(comments)
+}
+
+fn optional_id(object: &Map<String, Value>, index: usize, field: &str) -> Result<Option<u64>> {
+    match object.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(value)) => {
+            value
+                .as_u64()
+                .filter(|id| *id > 0)
+                .map(Some)
+                .ok_or_else(|| {
+                    Error::new(format!(
+                        "comments[{index}].{field} must be a positive integer"
+                    ))
+                })
+        }
+        Some(other) => Err(Error::new(format!(
+            "comments[{index}].{field} must be a positive integer, not {other}"
+        ))),
+    }
 }
 
 /// Reject oversized comment sets that were built without [`parse_comments`].
@@ -150,6 +176,7 @@ pub fn format_prompt(
     path: Option<&str>,
     comments: &[Comment],
     prompt: &str,
+    context: Option<&str>,
 ) -> Result<String> {
     validate_comments(comments)?;
     validate_prompt(prompt)?;
@@ -160,11 +187,24 @@ pub fn format_prompt(
             "send needs a prompt or at least one non-empty comment",
         ));
     }
-    if comments.is_empty() {
+    let context = context.map(str::trim).filter(|context| !context.is_empty());
+    if comments.is_empty() && context.is_none() {
         return Ok(prompt.to_string());
     }
 
     let mut out = String::new();
+    if let Some(context) = context {
+        out.push_str(context);
+        out.push_str("\n\n");
+    }
+    if comments.is_empty() {
+        out.push_str("TASK\n");
+        out.push_str(prompt);
+        return Ok(out);
+    }
+    if context.is_some() {
+        out.push_str("COMMENTS\n");
+    }
     out.push_str("Mindmap comments for ");
     out.push_str(&inline(label));
     if let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) {
@@ -256,6 +296,8 @@ mod tests {
             text: text.into(),
             node: node.map(str::to_owned),
             page: page.map(str::to_owned),
+            node_id: None,
+            page_id: None,
         }
     }
 
@@ -364,6 +406,7 @@ mod tests {
             Some("/root/code/mindmap"),
             &comments,
             "Why does this rebuild?",
+            None,
         )
         .unwrap_or_default();
         assert_eq!(
@@ -386,8 +429,14 @@ mod tests {
             Some("Components"),
             Some("Mindmap"),
         )];
-        let formatted = format_prompt("Mindmap", Some("/root/code/mindmap"), &comments, "   ")
-            .unwrap_or_default();
+        let formatted = format_prompt(
+            "Mindmap",
+            Some("/root/code/mindmap"),
+            &comments,
+            "   ",
+            None,
+        )
+        .unwrap_or_default();
         assert_eq!(
             formatted,
             "Mindmap comments for Mindmap (/root/code/mindmap):\n\
@@ -402,14 +451,14 @@ mod tests {
     fn omits_a_missing_path_and_works_without_comments() {
         let comments = vec![comment("Bare comment.", None, None)];
         assert_eq!(
-            format_prompt("Mindmap", None, &comments, "").unwrap_or_default(),
+            format_prompt("Mindmap", None, &comments, "", None).unwrap_or_default(),
             "Mindmap comments for Mindmap:\n\n1. Bare comment.\n\nAddress these comments in the project document."
         );
         assert_eq!(
-            format_prompt("Mindmap", None, &[], " Just answer this. ").unwrap_or_default(),
+            format_prompt("Mindmap", None, &[], " Just answer this. ", None).unwrap_or_default(),
             "Just answer this."
         );
-        assert!(format_prompt("Mindmap", None, &[], "  ").is_err());
+        assert!(format_prompt("Mindmap", None, &[], "  ", None).is_err());
     }
 
     #[test]
@@ -420,12 +469,43 @@ mod tests {
             Some("page\tone"),
         )];
         assert_eq!(
-            format_prompt("Mindmap", None, &comments, "").unwrap_or_default(),
+            format_prompt("Mindmap", None, &comments, "", None).unwrap_or_default(),
             "Mindmap comments for Mindmap:\n\
              \n\
              1. [page\\tone] node\\nname: line one\\nline two\\twith\\\\slash\n\
              \n\
              Address these comments in the project document."
+        );
+    }
+
+    #[test]
+    fn context_precedes_comments_and_tasks() {
+        let comments = vec![comment(
+            "Make this clearer.",
+            Some("Components"),
+            Some("Mindmap"),
+        )];
+        let formatted = format_prompt(
+            "Mindmap",
+            Some("/root/code/mindmap"),
+            &comments,
+            "Keep the tree.",
+            Some("MINDMAP CONTEXT\nPage: Mindmap"),
+        )
+        .unwrap_or_default();
+        assert!(formatted.starts_with("MINDMAP CONTEXT\nPage: Mindmap\n\nCOMMENTS\n"));
+        assert!(formatted.ends_with("Keep the tree."));
+        let page_prompt = format_prompt(
+            "Mindmap",
+            None,
+            &[],
+            "Design the page.",
+            Some("MINDMAP CONTEXT\nPage: backend code"),
+        )
+        .unwrap_or_default();
+        assert_eq!(
+            page_prompt,
+            "MINDMAP CONTEXT\nPage: backend code\n\nTASK\nDesign the page."
         );
     }
 

@@ -4,6 +4,13 @@ A Herdr workspace is a project. This binary lists the workspaces on the host, gi
 FigCraft document the first time it is opened, and, on **Init**, makes sure an agent is working on
 it. **Send** prompts an agent with canvas comments without opening or publishing a document.
 **Diff** compares the client's map snapshot with the last successful sync and with the repository,
+Every `send` is preceded by a **MINDMAP CONTEXT** packet: workspace, repository, document id,
+owner edit link, FigCraft CLI path, page name/id, top-level cards, and for each commented node its
+id, path, type, text and children. The packet also says how to edit the live document (MCP:
+`collab.join`, `get_node`, `run_command`) and never includes the link in a log. The builder joins
+the live document read-only through the FigCraft CLI; if that fails, the static workspace/page
+context is still sent and the failure is named.
+
 **dsh-tui** is detected by Herdr but rejects the agent prompt protocol as an unnamed pane. The
 service falls back to `herdr pane run` (literal text + Enter) for an **idle** dsh; a working dsh is
 refused with a reason rather than silently accepted. `send` now returns `ok:false` when the agent
