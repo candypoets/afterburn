@@ -308,94 +308,86 @@ def _pin(x, y, n):
              effects=[shadow(y=1, blur=4, color="#00000020")])
 
 
+def _draft(x, y, text, w):
+    return F("Draft",
+             _ui(text, 10.5, K.SANS, "Regular", UI_TEXT, w=w - 34, name="text", x=12, y=7),
+             _ui("×", 11, K.SANS, "Medium", UI_MUTED, name="x", x=w - 20, y=6),
+             x=x, y=y, w=w, h=28, fill=UI_PANEL, stroke=UI_BORDER, radius=6)
+
+
+def _composer(x, y, w, context, placeholder, drafts, target="kimi", send=False, menu=False):
+    kids = [
+        _ui("COMMENTING ON  ·  " + context, 8.5, K.MONO, "Medium", UI_ACCENT, name="context", ls=2,
+            x=16, y=12),
+        _ui(placeholder, 12.5, K.SANS, "Regular", "#9A9791" if not send else UI_TEXT, w=w - 250,
+            name="input", x=16, y=34),
+        F("Target", _ui(target + "  ▾", 10.5, K.SANS, "Medium", UI_TEXT, name="name", x=12, y=6),
+          x=w - 188, y=26, w=86, h=30, fill=UI_PANEL, stroke=UI_BORDER, radius=6),
+        F("Send", _ui("↑", 13, K.SANS, "Medium", "#FFFFFF", name="glyph", x=10, y=5),
+          x=w - 92, y=26, w=30, h=30, fill=UI_ACCENT, radius=15),
+        _ui("⏎ comment   ·   ⌘⏎ send the prompt   ·   " + (f"{drafts} attached" if drafts else "no drafts yet"),
+            8.5, K.MONO, "Regular", UI_MUTED, name="hint", x=16, y=64),
+    ]
+    if menu:
+        kids.append(F("Agents",
+          _ui("AGENTS IN THIS WORKSPACE", 8.5, K.MONO, "Medium", UI_MUTED, name="agents", ls=2, x=12, y=10),
+          F("kimi", _ui("kimi", 10.5, K.SANS, "Medium", UI_TEXT, name="n", x=8, y=5),
+            _ui("idle", 9, K.MONO, "Regular", UI_MUTED, name="s", x=118, y=6),
+            _ui("✓", 10, K.SANS, "Medium", UI_ACCENT, name="c", x=150, y=5),
+            x=10, y=30, w=166, h=24, fill=UI_SOFT, radius=4),
+          F("claude", _ui("claude", 10.5, K.SANS, "Regular", UI_TEXT, name="n", x=8, y=5),
+            _ui("done", 9, K.MONO, "Regular", UI_MUTED, name="s", x=118, y=6),
+            x=10, y=56, w=166, h=24, fill=None, radius=4),
+          _ui("START A NEW AGENT", 8.5, K.MONO, "Medium", UI_MUTED, name="new", ls=2, x=12, y=90),
+          _ui("codex", 9.5, K.MONO, "Regular", UI_TEXT, name="a", x=12, y=106),
+          _ui("claude", 9.5, K.MONO, "Regular", UI_TEXT, name="b", x=62, y=106),
+          _ui("kimi", 9.5, K.MONO, "Regular", UI_TEXT, name="c", x=112, y=106),
+          x=w - 210, y=-138, w=188, h=124, fill=UI_PANEL, stroke=UI_BORDER, radius=8,
+          effects=[shadow(y=6, blur=18, color="#00000018")]))
+    return F("Composer", *kids, x=x, y=y, w=w, h=86, fill=UI_PANEL, stroke=UI_BORDER,
+             radius=10, effects=[shadow(y=4, blur=16, color="#00000018")])
+
+
 def _screen_map():
-    f = F("Map and comments", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+    f = F("Map and composer", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
         _appbar(980, "mindmap", tabs=["Overview", "Components", "Handoff"], active="Overview", live=3),
-        F("Selection actions",
-          _ui("Copy", 10.5, K.SANS, "Medium", UI_MUTED, name="copy", x=14, y=6),
-          F("div", x=52, y=9, w=1, h=12, fill=UI_BORDER),
-          _ui("Comment", 10.5, K.SANS, "Medium", UI_ACCENT, name="comment", x=62, y=6),
-          x=24, y=70, w=126, h=28, fill=UI_PANEL, stroke=UI_BORDER, radius=14,
-          effects=[shadow(y=2, blur=8, color="#00000018")]),
-        _canvas_card(24, 112, 1, "Canvas and layers", "One node tree holds the design; the canvas is how you read it.", "Overview", "doc/node.rs:3"),
-        _canvas_card(336, 112, 2, "Components", "A subtree with identity; an instance remembers what changed.", "Components", "components.rs:1"),
-        F("Selection", x=18, y=106, w=312, h=160, fill=None, stroke=UI_ACCENT, sw=2, radius=10),
-        _pin(302, 116, 1),
-        _pin(614, 116, 2),
-        _canvas_card(24, 276, 3, "Auto layout", "Frames size themselves; children follow rules.", "Layout", "layout/lib.rs:3"),
-        _canvas_card(336, 276, 4, "Text", "Fonts, shaping, bidi and line layout.", "Text", "text/lib.rs:3"),
-        _pin(302, 280, 3),
-        F("Thread",
-          F("Avatar", _ui("JL", 9, K.MONO, "Medium", "#FFFFFF", name="initials", x=6, y=5),
-            x=14, y=14, w=22, h=22, fill="#6B4E8C", radius=11),
-          _ui("JL", 11, K.SANS, "Medium", UI_TEXT, name="who", x=44, y=14),
-          _ui("just now", 9, K.MONO, "Regular", UI_MUTED, name="when", x=236, y=16),
-          _ui("Should this say where overrides reset? The source points at the rebuild.",
-              11.5, K.SANS, "Regular", UI_TEXT, w=244, name="body", lh=16, x=44, y=40),
-          F("Rule", x=44, y=96, w=244, h=1, fill=UI_BORDER),
-          _ui("Add a comment…", 11, K.SANS, "Regular", "#9A9791", name="field", x=44, y=106),
-          F("Add comment", _ui("Add comment", 10.5, K.SANS, "Medium", "#FFFFFF", name="label", x=12, y=7),
-            x=44, y=128, w=96, h=28, fill=UI_ACCENT, radius=6),
-          _ui("Draft · not sent", 9, K.MONO, "Regular", UI_MUTED, name="draft", x=152, y=136),
-          x=640, y=90, w=304, h=180, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
-          effects=[shadow(y=6, blur=18, color="#00000018")]),
-        F("Comments button",
-          _ui("Comments", 11, K.SANS, "Medium", UI_TEXT, name="label", x=14, y=7),
-          _ui("3", 9, K.MONO, "Medium", UI_ACCENT, name="count", x=82, y=8),
-          x=24, y=544, w=110, h=30, fill=UI_PANEL, stroke=UI_BORDER, radius=15))
+        _canvas_card(24, 84, 1, "Canvas and layers", "One node tree holds the design; the canvas is how you read it.", "Overview", "doc/node.rs:3"),
+        _canvas_card(336, 84, 2, "Components", "A subtree with identity; an instance remembers what changed.", "Components", "components.rs:1"),
+        _canvas_card(24, 232, 3, "Auto layout", "Frames size themselves; children follow rules.", "Layout", "layout/lib.rs:3"),
+        _canvas_card(336, 232, 4, "Text", "Fonts, shaping, bidi and line layout.", "Text", "text/lib.rs:3"),
+        F("Selection", x=330, y=78, w=312, h=152, fill=None, stroke=UI_ACCENT, sw=2, radius=10),
+        F("Text selection", x=352, y=142, w=156, h=15, fill="#B5452F26", radius=2),
+        _ui("⌘C", 8, K.MONO, "Medium", UI_ACCENT, name="copy", x=650, y=142),
+        _pin(614, 88, 1),
+        _pin(302, 88, 2),
+        _pin(614, 236, 3),
+        _ui("DRAFTS · 1", 8.5, K.MONO, "Medium", UI_MUTED, name="drafts", ls=2, x=24, y=400),
+        _draft(24, 416, "Can the rebuild reuse the instance's layer ids?", 340),
+        _composer(24, 486, 932, "Components · components.rs:1", "Comment on this card…", 1),
+        _ui("Select another card: the input clears, the draft stays.", 9, K.MONO, "Regular", UI_MUTED,
+            name="note", x=24, y=582))
     return f
 
 
-def _comment_row(y, text, context, status="Draft", checked=True):
-    box = F("Check",
-            *([_ui("✓", 9, K.SANS, "Medium", "#FFFFFF", name="check", x=2, y=1)] if checked else []),
-            x=14, y=y + 10, w=14, h=14, fill=UI_ACCENT if checked else UI_PANEL,
-            stroke=UI_ACCENT if checked else UI_BORDER, radius=4)
-    return F("Comment",
-             box,
-             _ui(text, 11.5, K.SANS, "Regular", UI_TEXT, w=244, name="text", lh=15, x=40, y=y + 6),
-             _ui(context, 9, K.MONO, "Regular", UI_MUTED, w=244, name="context", x=40, y=y + 42),
-             _ui(status, 9, K.MONO, "Medium", "#2F6F6A" if status.startswith("Sent") else UI_MUTED,
-                 name="status", x=286, y=y + 8),
-             x=0, y=0, w=336, h=64)
-
-
-def _screen_comments():
-    f = F("Comments tray", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
+def _screen_send():
+    f = F("Send", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _appbar(980, "mindmap", tabs=["Overview"], active="Overview", live=2),
-        _canvas_card(24, 96, 1, "Canvas and layers", "The selected card carries the thread.", "Overview", "doc/node.rs:3", w=260),
-        _canvas_card(320, 96, 2, "Components", "A comment is pinned to what it is about.", "Components", "components.rs:1", w=260),
-        _canvas_card(24, 264, 3, "Auto layout", "Drafts wait here until you send them.", "Layout", "layout/lib.rs:3", w=260),
-        _pin(258, 100, 1),
-        _pin(554, 100, 2),
-        _pin(258, 268, 3),
-        F("Tray",
-          _ui("COMMENTS", 9, K.MONO, "Medium", UI_ACCENT, name="title", ls=4, x=16, y=14),
-          _ui("2 drafts · 1 sent", 9, K.MONO, "Regular", UI_MUTED, name="count", x=258, y=14),
-          _comment_row(40, "This should say where overrides reset.", "Canvas and layers · doc/node.rs:3"),
-          F("rule1", x=16, y=104, w=304, h=1, fill=UI_BORDER),
-          _comment_row(116, "Can the rebuild reuse the instance's layer ids?", "Components · components.rs:5"),
-          F("rule2", x=16, y=180, w=304, h=1, fill=UI_BORDER),
-          _comment_row(192, "Add a source to the layout card.", "Auto layout · layout/lib.rs:3", status="Sent · kimi", checked=False),
-          _ui("kimi · fixed in 2 cards", 9, K.MONO, "Regular", "#2F6F6A", name="reply", x=40, y=248),
-          F("rule3", x=16, y=272, w=304, h=1, fill=UI_BORDER),
-          _ui("SEND TO AGENT", 9, K.MONO, "Medium", UI_MUTED, name="send", ls=3, x=16, y=292),
-          F("Target", _ui("kimi · idle", 11, K.SANS, "Medium", UI_TEXT, name="name", x=10, y=6),
-            _ui("▾", 9, K.SANS, "Medium", UI_MUTED, name="chev", x=122, y=6),
-            x=16, y=312, w=148, h=28, fill=UI_PANEL, stroke=UI_BORDER, radius=6),
-          F("Prompt",
-            _ui("Ask kimi to resolve these comments…", 11, K.SANS, "Regular", "#9A9791",
-                w=292, name="text", lh=15, x=10, y=8),
-            x=16, y=352, w=304, h=58, fill=UI_SOFT, stroke=UI_BORDER, radius=6),
-          _ui("2 comments attached", 9, K.MONO, "Regular", UI_MUTED, name="attached", x=16, y=418),
-          F("Send", _ui("Send", 11, K.SANS, "Medium", "#FFFFFF", name="label", x=17, y=7),
-            x=264, y=414, w=56, h=28, fill=UI_ACCENT, radius=6),
-          _ui("Nothing is sent until you press Send.", 9, K.MONO, "Regular", UI_MUTED,
-              name="note", w=300, x=16, y=458),
-          x=612, y=56, w=368, h=564, fill=UI_PANEL, stroke=UI_BORDER,
-          effects=[shadow(y=2, blur=10, color="#00000010")]))
+        _appbar(980, "mindmap", tabs=["Overview", "Components", "Handoff"], active="Components", live=2),
+        _canvas_card(24, 84, 1, "Canvas and layers", "The selected card is what the prompt is about.", "Overview", "doc/node.rs:3"),
+        _canvas_card(336, 84, 2, "Components", "Two drafts and one prompt, in one send.", "Components", "components.rs:1"),
+        F("Selection", x=330, y=78, w=312, h=152, fill=None, stroke=UI_ACCENT, sw=2, radius=10),
+        _pin(302, 88, 1),
+        _pin(614, 88, 2),
+        _pin(302, 236, 3),
+        _ui("DRAFTS · 2", 8.5, K.MONO, "Medium", UI_MUTED, name="drafts", ls=2, x=24, y=372),
+        _draft(24, 388, "Can the rebuild reuse the instance's layer ids?", 340),
+        _draft(374, 388, "This should say where overrides reset.", 300),
+        _ui("The same input, now the prompt: it sends with both drafts attached.", 9, K.MONO,
+            "Regular", UI_MUTED, name="note", x=24, y=424),
+        _composer(24, 470, 932, "Components · components.rs:1",
+                  "Why does editing a main change every screen?", 2, send=True, menu=True)
+    )
     return f
 
 
@@ -403,45 +395,49 @@ def _screen_notes():
     f = F("Comment model", w=980, h=620, fill=UI_PANEL, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
         _ui("THE COMMENT MODEL", 9, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=4, x=48, y=44),
-        _ui("Drafts, not messages", 30, K.SANS, "Medium", UI_TEXT, name="title", x=48, y=68),
-        _ui("A comment is something you wrote down. It becomes a prompt only when you choose the "
-           "comments and the agent.", 12.5, K.SANS, "Regular", UI_MUTED, w=620, name="lede", lh=18,
-            x=48, y=116),
+        _ui("One input, two verbs", 30, K.SANS, "Medium", UI_TEXT, name="title", x=48, y=68),
+        _ui("The bar at the bottom is the comment box and the prompt box. The selection tells it "
+           "what you are talking about.", 12.5, K.SANS, "Regular", UI_MUTED, w=620, name="lede",
+            lh=18, x=48, y=116),
         _ui("1", 12, K.MONO, "Medium", UI_ACCENT, name="n1", x=48, y=180),
-        _ui("Nothing is auto-sent.", 13, K.SANS, "Medium", UI_TEXT, name="t1", x=72, y=178),
-        _ui("Comment as many cards as you like. They stay drafts until you send a prompt.",
-            11.5, K.SANS, "Regular", UI_MUTED, w=330, name="b1", lh=16, x=72, y=200),
+        _ui("Select.", 13, K.SANS, "Medium", UI_TEXT, name="t1", x=72, y=178),
+        _ui("The chip shows the page, card and source. Text selects; ⌘C copies. Right-click is Copy "
+           "or Comment, nothing else.", 11.5, K.SANS, "Regular", UI_MUTED, w=330, name="b1", lh=16,
+            x=72, y=200),
         _ui("2", 12, K.MONO, "Medium", UI_ACCENT, name="n2", x=520, y=180),
-        _ui("The selection is the context.", 13, K.SANS, "Medium", UI_TEXT, name="t2", x=544, y=178),
-        _ui("Page, card, source and any selected text travel with the comment.",
-            11.5, K.SANS, "Regular", UI_MUTED, w=340, name="b2", lh=16, x=544, y=200),
+        _ui("Comment (⏎).", 13, K.SANS, "Medium", UI_TEXT, name="t2", x=544, y=178),
+        _ui("The input becomes a draft on that selection. Choosing another card clears the input; "
+           "the drafts stay above it.", 11.5, K.SANS, "Regular", UI_MUTED, w=340, name="b2", lh=16,
+            x=544, y=200),
         _ui("3", 12, K.MONO, "Medium", UI_ACCENT, name="n3", x=48, y=272),
-        _ui("Send many at once.", 13, K.SANS, "Medium", UI_TEXT, name="t3", x=72, y=270),
-        _ui("Check the comments, pick an agent, write one prompt. The agent gets the set.",
-            11.5, K.SANS, "Regular", UI_MUTED, w=330, name="b3", lh=16, x=72, y=292),
+        _ui("Send (⌘⏎).", 13, K.SANS, "Medium", UI_TEXT, name="t3", x=72, y=270),
+        _ui("The same input becomes the prompt. Every draft attaches; the target chip picks the "
+           "agent, or a new CLI.", 11.5, K.SANS, "Regular", UI_MUTED, w=330, name="b3", lh=16,
+            x=72, y=292),
         _ui("4", 12, K.MONO, "Medium", UI_ACCENT, name="n4", x=520, y=272),
-        _ui("Copy is the only edit-like action.", 13, K.SANS, "Medium", UI_TEXT, name="t4", x=544, y=270),
-        _ui("Text selects and copies; there are no layer tools, no fills, no effects.",
-            11.5, K.SANS, "Regular", UI_MUTED, w=340, name="b4", lh=16, x=544, y=292),
+        _ui("Nothing else.", 13, K.SANS, "Medium", UI_TEXT, name="t4", x=544, y=270),
+        _ui("No layers panel, no design tools, no auto-send. A draft reaches an agent only when "
+           "you send it.", 11.5, K.SANS, "Regular", UI_MUTED, w=340, name="b4", lh=16, x=544, y=292),
         F("Flow",
           _ui("Select", 11, K.SANS, "Medium", UI_TEXT, name="s1", x=20, y=9),
           _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a1", x=78, y=9),
-          _ui("Comment", 11, K.SANS, "Medium", UI_TEXT, name="s2", x=102, y=9),
-          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a2", x=176, y=9),
-          _ui("3 drafts", 11, K.SANS, "Medium", UI_ACCENT, name="s3", x=200, y=9),
-          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a3", x=266, y=9),
-          _ui("Send to kimi", 11, K.SANS, "Medium", UI_TEXT, name="s4", x=290, y=9),
-          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a4", x=382, y=9),
-          _ui("Reply", 11, K.SANS, "Medium", "#2F6F6A", name="s5", x=406, y=9),
-          x=48, y=390, w=470, h=30, fill=UI_SOFT, radius=15),
+          _ui("⏎ comment", 11, K.SANS, "Medium", UI_TEXT, name="s2", x=102, y=9),
+          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a2", x=196, y=9),
+          _ui("2 drafts", 11, K.SANS, "Medium", UI_ACCENT, name="s3", x=220, y=9),
+          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a3", x=292, y=9),
+          _ui("⌘⏎ send to kimi", 11, K.SANS, "Medium", UI_TEXT, name="s4", x=316, y=9),
+          _ui("→", 11, K.SANS, "Regular", UI_MUTED, name="a4", x=440, y=9),
+          _ui("reply", 11, K.SANS, "Medium", "#2F6F6A", name="s5", x=464, y=9),
+          x=48, y=390, w=520, h=30, fill=UI_SOFT, radius=15),
         F("Right click",
           _ui("Copy", 11, K.SANS, "Regular", UI_TEXT, name="c1", x=14, y=8),
           _ui("Comment", 11, K.SANS, "Medium", UI_ACCENT, name="c2", x=14, y=30),
           _ui("nothing else", 9, K.MONO, "Regular", UI_MUTED, name="c3", x=14, y=52),
-          x=548, y=386, w=120, h=74, fill=UI_PANEL, stroke=UI_BORDER, radius=8,
+          x=712, y=386, w=120, h=74, fill=UI_PANEL, stroke=UI_BORDER, radius=8,
           effects=[shadow(y=4, blur=12, color="#00000014")]),
-        _ui("Select a card → the action is Copy (text only) or Comment. Right-click shows the same two.",
-            10, K.MONO, "Regular", UI_MUTED, w=700, name="foot", x=48, y=474))
+        _ui("One selection, one input. Comment as often as you like; the drafts wait above the "
+           "bar until you send them.", 10, K.MONO, "Regular", UI_MUTED, w=760, name="foot",
+            x=48, y=474))
     return f
 
 
@@ -455,14 +451,14 @@ def build_product(doc):
     doc.place(page, _ui("01 · WORKSPACES — every Herdr workspace, with or without a map", 10, K.MONO, "Medium", K.MUTED, name="c1", ls=3), 64, 222)
     doc.place(page, _ui("02 · EMPTY — Init asks which agent, existing or new", 10, K.MONO, "Medium", K.MUTED, name="c2", ls=3), 1092, 222)
     doc.place(page, _ui("03 · INIT — pages appear as the agent renders them", 10, K.MONO, "Medium", K.MUTED, name="c3", ls=3), 64, 902)
-    doc.place(page, _ui("04 · MAP — select, copy, comment; a thread is a draft", 10, K.MONO, "Medium", K.MUTED, name="c4", ls=3), 1092, 902)
-    doc.place(page, _ui("05 · COMMENTS — drafts become one prompt to one agent", 10, K.MONO, "Medium", K.MUTED, name="c5", ls=3), 64, 1582)
-    doc.place(page, _ui("06 · MODEL — no auto-send, no layer tools", 10, K.MONO, "Medium", K.MUTED, name="c6", ls=3), 1092, 1582)
+    doc.place(page, _ui("04 · COMMENT — one input at the bottom; a draft on the selection", 10, K.MONO, "Medium", K.MUTED, name="c4", ls=3), 1092, 902)
+    doc.place(page, _ui("05 · SEND — the same input becomes the prompt; drafts attach", 10, K.MONO, "Medium", K.MUTED, name="c5", ls=3), 64, 1582)
+    doc.place(page, _ui("06 · MODEL — select, comment, send; nothing else", 10, K.MONO, "Medium", K.MUTED, name="c6", ls=3), 1092, 1582)
     doc.place(page, _screen_workspaces(), 64, 250)
     doc.place(page, _screen_empty(), 1092, 250)
     doc.place(page, _screen_init(), 64, 930)
     doc.place(page, _screen_map(), 1092, 930)
-    doc.place(page, _screen_comments(), 64, 1610)
+    doc.place(page, _screen_send(), 64, 1610)
     doc.place(page, _screen_notes(), 1092, 1610)
 
     rules = Vt(

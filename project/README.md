@@ -143,16 +143,18 @@ unit.
 
 ### Comments (designed)
 
-The Product page (six screens, merged: there is no separate Screens page) fixes the comment model:
+One input at the bottom, two verbs. The Product page fixes it:
 
-- Select a card: the only actions are **Copy** (text only) and **Comment**; the layer panel and the
-  editor right-click menu are gone. Right-click shows the same two.
-- A comment is a **draft** anchored to the selection (page, card, source, selected text). Nothing is
-  sent when you write it.
-- The **Comments tray** lists drafts across pages; check any number, choose an agent (or a new CLI),
-  write one prompt; `Send` attaches the comments and prompts the agent. Sent comments show the
-  agent's reply.
-- The map screen keeps a thread on the card; the tray is where sends happen.
+- **Select** anything. The composer shows what it is (`COMMENTING ON · Components · components.rs:1`).
+  Text selects in place; ⌘C copies, right-click is `Copy` / `Comment` and nothing else. No layers
+  panel, no design tools.
+- **Comment (⏎)** turns the input into a draft on that selection. The draft appears in a small
+  strip above the bar. Selecting another card clears the input; the drafts stay.
+- **Send (⌘⏎)** uses the same input as the prompt. Every draft attaches; the target chip picks an
+  agent already in the workspace or a new CLI. Nothing is sent before that.
+- No separate comments tray and no auto-send: a comment is a draft until one prompt carries it to
+  an agent, and the reply comes back on the card.
+
 
 ## Milestones
 
