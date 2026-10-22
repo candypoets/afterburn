@@ -196,8 +196,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client-src/crates/ui-egui/src/compose.rs
 --- .client-src-orig/crates/ui-egui/src/compose.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 12:38:55.566374240 +0200
-@@ -0,0 +1,987 @@
++++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 13:34:23.799252063 +0200
+@@ -0,0 +1,989 @@
 +//! The bottom comment composer: one bar that is both the comment box and the prompt box.
 +//!
 +//! The selection tells it what a comment is about. Enter turns the input into a draft on that
@@ -369,11 +369,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    };
 +    let included = included_drafts(app, &selection, page);
 +    let active = app.active_workspace.is_some();
-+    let width = (ctx.content_rect().width() - PANEL_SIDE).clamp(PANEL_MIN_W, PANEL_MAX_W);
++    // The workspace pane takes the left edge; the composer belongs to the canvas, not the pane.
++    let pane = if app.ws.pane_open { 300.0 } else { 0.0 };
++    let width = (ctx.content_rect().width() - pane - PANEL_SIDE).clamp(PANEL_MIN_W, PANEL_MAX_W);
 +
 +    let mut send = false;
 +    egui::Area::new(Id::new("map_composer"))
-+        .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -PANEL_BOTTOM))
++        .anchor(Align2::CENTER_BOTTOM, vec2(pane / 2.0, -PANEL_BOTTOM))
 +        .order(egui::Order::Foreground)
 +        .show(ctx, |ui| {
 +            egui::Frame::NONE
