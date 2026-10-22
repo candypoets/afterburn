@@ -18,6 +18,7 @@ use crate::comments;
 use crate::config::Config;
 use crate::error::{Error, Result, ResultExt};
 use crate::project::ProjectService;
+use crate::sync;
 
 /// Refuse a request line larger than this instead of growing a String without bound.
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -217,8 +218,56 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
                 "name": adopted.name,
             }))
         }
+        "diff" => {
+            let query =
+                workspace.ok_or_else(|| Error::new("diff needs a \"workspace\" id or label"))?;
+            let map = request_map(request)?;
+            let result = service.diff(query, &map)?;
+            Ok(json!({
+                "id": id,
+                "ok": true,
+                "last": sync::last_json(result.last.as_ref()),
+                "map": result.map,
+                "code": result.code,
+            }))
+        }
+        "sync" => {
+            let query =
+                workspace.ok_or_else(|| Error::new("sync needs a \"workspace\" id or label"))?;
+            let target = request_target(request)?;
+            let prompt = request_prompt(request)?;
+            let map = request_map(request)?;
+            let result = service.start_sync(query, &target, &prompt, &map)?;
+            Ok(json!({
+                "id": id,
+                "ok": true,
+                "job": result.job,
+                "agent": result.agent,
+            }))
+        }
+        "sync_status" => {
+            let job = request
+                .get("job")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::new("sync_status needs a \"job\" string"))?;
+            let result = service.sync_status(job)?;
+            Ok(json!({
+                "id": id,
+                "ok": true,
+                "job": result.job,
+                "last": sync::last_json(result.last.as_ref()),
+            }))
+        }
         other => Err(Error::new(format!("unknown method {other:?}"))),
     }
+}
+
+/// Read the required `map` snapshot request field and validate it.
+fn request_map(request: &Value) -> Result<sync::MapSnapshot> {
+    let raw = request
+        .get("map")
+        .ok_or_else(|| Error::new("request has no \"map\" object"))?;
+    sync::parse_snapshot(raw)
 }
 
 /// Read the optional `target` request field, rejecting non-string values.

@@ -196,8 +196,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client-src/crates/ui-egui/src/compose.rs
 --- .client-src-orig/crates/ui-egui/src/compose.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 12:11:45.107499147 +0200
-@@ -0,0 +1,909 @@
++++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 12:38:55.566374240 +0200
+@@ -0,0 +1,987 @@
 +//! The bottom comment composer: one bar that is both the comment box and the prompt box.
 +//!
 +//! The selection tells it what a comment is about. Enter turns the input into a draft on that
@@ -208,10 +208,11 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +//! Map mode's right-click menu lives here too: the human gets Copy and Comment, never the
 +//! editor's tools.
 +
++use std::collections::HashSet;
 +use std::sync::mpsc::{self, Receiver};
 +
 +use egui::{Align2, Color32, CornerRadius, FontId, Id, Key, Margin, Modifiers, Pos2, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-+use figcraft_doc::NodeId;
++use figcraft_doc::{Document, NodeId};
 +use serde::Deserialize;
 +use serde_json::{Value, json};
 +
@@ -272,6 +273,10 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    pub node: Option<String>,
 +    /// The page's name when the draft was written.
 +    pub page: Option<String>,
++    /// The card the comment is attached to; `None` for the whole page.
++    pub node_id: Option<NodeId>,
++    /// The page it belongs to.
++    pub page_id: Option<NodeId>,
 +}
 +
 +/// One choice in the target chip: an agent already in the workspace, or a CLI to start.
@@ -308,6 +313,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    pub input: String,
 +    /// Comments waiting to be sent; they survive selection changes.
 +    pub drafts: Vec<Draft>,
++    /// The drafts the in-flight send carries; they leave the bar when it succeeds.
++    pub sending: Vec<Draft>,
 +    /// The agent the send addresses.
 +    pub target: Option<Target>,
 +    /// The target menu is open.
@@ -350,14 +357,17 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +        app.compose.last_page = page;
 +    }
 +
-+    let node = selection.first().copied().and_then(|id| node_name(app, id));
++    let node_id = selection.first().copied();
++    let node = node_id.and_then(|id| node_name(app, id));
 +    let page_name = page.and_then(|id| node_name(app, id));
 +    let has_selection = !selection.is_empty();
 +    let context = match (node.as_deref(), page_name.as_deref()) {
 +        (Some(node), Some(page)) => format!("COMMENTING ON · {node} · {page}"),
 +        (Some(node), None) => format!("COMMENTING ON · {node}"),
-+        _ => "SELECT A CARD TO COMMENT".to_string(),
++        (None, Some(page)) => format!("COMMENTING ON · {page} · whole page"),
++        _ => "COMMENTING ON".to_string(),
 +    };
++    let included = included_drafts(app, &selection, page);
 +    let active = app.active_workspace.is_some();
 +    let width = (ctx.content_rect().width() - PANEL_SIDE).clamp(PANEL_MIN_W, PANEL_MAX_W);
 +
@@ -375,8 +385,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +                .show(ui, |ui| {
 +                    ui.set_width((width - 32.0).max(40.0));
 +                    ui.set_min_height(74.0);
-+                    let names = Names { node: node.as_deref(), page: page_name.as_deref() };
-+                    send = body(ui, &mut app.compose, &context, &names, has_selection, active);
++                    let names = Names { node: node.as_deref(), page: page_name.as_deref(), node_id, page_id: page };
++                    send = body(ui, &mut app.compose, &context, &names, has_selection, active, &included);
 +                });
 +        });
 +    if send {
@@ -388,15 +398,18 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +struct Names<'a> {
 +    node: Option<&'a str>,
 +    page: Option<&'a str>,
++    node_id: Option<NodeId>,
++    page_id: Option<NodeId>,
 +}
 +
 +/// The bar's contents; true when Send was pressed.
-+fn body(ui: &mut Ui, state: &mut State, context: &str, names: &Names<'_>, has_selection: bool, active: bool) -> bool {
++fn body(ui: &mut Ui, state: &mut State, context: &str, names: &Names<'_>, has_selection: bool,
++        active: bool, included: &[usize]) -> bool {
 +    ui.label(egui::RichText::new(context).font(mono(9.0)).color(if has_selection { ACCENT } else { FAINT }));
 +
-+    if !state.drafts.is_empty() {
++    if !included.is_empty() {
 +        ui.add_space(4.0);
-+        draft_strip(ui, state);
++        draft_strip(ui, state, included);
 +    }
 +    ui.add_space(6.0);
 +
@@ -406,11 +419,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    let input_focused = ui.memory(|m| m.has_focus(input_id()));
 +    let command_enter = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
 +    let plain_enter = !command_enter && input_focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
-+    if plain_enter && has_selection && !state.input.trim().is_empty() {
++    if plain_enter && !state.input.trim().is_empty() {
 +        state.drafts.push(Draft {
 +            text: state.input.trim().to_string(),
 +            node: names.node.map(str::to_string),
 +            page: names.page.map(str::to_string),
++            node_id: names.node_id,
++            page_id: names.page_id,
 +        });
 +        state.input.clear();
 +    }
@@ -423,7 +438,11 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +            let chip_w = (text_width(ui, &chip_label, regular(10.5)) + 34.0).min(150.0);
 +            let input_w = (available - chip_w - SEND_D - 18.0).max(90.0);
 +
-+            let placeholder = if has_selection { "Comment on this card…" } else { "Select a card to comment" };
++            let placeholder = if names.node.is_some() {
++                "Comment on this card and its children…"
++            } else {
++                "Comment on the whole page…"
++            };
 +            let input_response = egui::Frame::NONE
 +                .fill(SOFT)
 +                .stroke(Stroke::new(1.0, BORDER))
@@ -460,7 +479,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +            }
 +
 +            ui.add_space(8.0);
-+            let can_send = active && state.target.is_some() && (!state.input.trim().is_empty() || !state.drafts.is_empty()) && !state.busy;
++            let can_send = active && state.target.is_some()
++                && (!state.input.trim().is_empty() || !included.is_empty()) && !state.busy;
 +            if send_button(ui, state.busy, can_send) {
 +                send = true;
 +            }
@@ -474,25 +494,31 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    let hint = if !active {
 +        "add the service to send".to_string()
 +    } else {
-+        let drafts = state.drafts.len();
-+        format!("⏎ comment · ⌘⏎ send the prompt · {drafts} draft{}", if drafts == 1 { "" } else { "s" })
++        let drafts = included.len();
++        let where_ = if has_selection { "in the tree" } else { "on the page" };
++        format!("⏎ comment · ⌘⏎ send · {drafts} {} {where_}", if drafts == 1 { "comment" } else { "comments" })
 +    };
 +    ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
 +    send
 +}
 +
 +/// The draft chips above the input: the first few, each removable, then `+N`.
-+fn draft_strip(ui: &mut Ui, state: &mut State) {
++fn draft_strip(ui: &mut Ui, state: &mut State, included: &[usize]) {
 +    let mut remove = None;
 +    ui.horizontal(|ui| {
 +        ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-+        let visible = state.drafts.len().min(VISIBLE_DRAFTS);
-+        for (index, draft) in state.drafts.iter().take(visible).enumerate() {
-+            if draft_chip(ui, &draft.text) {
++        let visible = included.len().min(VISIBLE_DRAFTS);
++        for &index in included.iter().take(visible) {
++            let Some(draft) = state.drafts.get(index) else { continue };
++            let label = match draft.node.as_deref() {
++                Some(node) => format!("{node} · {}", draft.text),
++                None => format!("Whole page · {}", draft.text),
++            };
++            if draft_chip(ui, &label) {
 +                remove = Some(index);
 +            }
 +        }
-+        let hidden = state.drafts.len().saturating_sub(visible);
++        let hidden = included.len().saturating_sub(visible);
 +        if hidden > 0 {
 +            ui.label(egui::RichText::new(format!("+{hidden}")).font(mono(9.0)).color(MUTED));
 +        }
@@ -924,6 +950,38 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    status.trim().eq_ignore_ascii_case("blocked")
 +}
 +
++/// The drafts a send from this selection would carry: the subtree for a card, the page for no
++/// selection. Detached drafts on other cards and pages stay behind.
++fn included_drafts(app: &FigApp, selection: &[NodeId], page: Option<NodeId>) -> Vec<usize> {
++    let Ok(doc) = app.session.doc() else { return Vec::new() };
++    let root = selection.first().copied();
++    let mut ids = HashSet::new();
++    if let Some(root) = root {
++        collect_subtree(doc, root, &mut ids);
++    }
++    app.compose
++        .drafts
++        .iter()
++        .enumerate()
++        .filter(|(_, draft)| match root {
++            Some(_) => draft.node_id.is_some_and(|id| ids.contains(&id)),
++            None => draft.page_id.is_some() && draft.page_id == page,
++        })
++        .map(|(index, _)| index)
++        .collect()
++}
++
++fn collect_subtree(doc: &Document, id: NodeId, out: &mut HashSet<NodeId>) {
++    if !out.insert(id) {
++        return;
++    }
++    if let Some(node) = doc.node(id) {
++        for child in &node.children {
++            collect_subtree(doc, *child, out);
++        }
++    }
++}
++
 +/// Send the input as the prompt, with every draft attached, on a thread of its own.
 +#[cfg(not(target_arch = "wasm32"))]
 +fn start_send(app: &mut FigApp, ctx: &egui::Context) {
@@ -939,10 +997,20 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +        return;
 +    };
 +    let prompt = app.compose.input.trim().to_string();
-+    if prompt.is_empty() && app.compose.drafts.is_empty() {
++    let selection = app.session.selection();
++    let page = app.session.page().ok();
++    let included = included_drafts(app, &selection, page);
++    let sending: Vec<Draft> = included
++        .iter()
++        .filter_map(|index| app.compose.drafts.get(*index).cloned())
++        .collect();
++    if prompt.is_empty() && sending.is_empty() {
 +        return;
 +    }
-+    let comments: Vec<Value> = app.compose.drafts.iter().map(|draft| json!({"text": draft.text, "node": draft.node, "page": draft.page})).collect();
++    let comments: Vec<Value> = sending
++        .iter()
++        .map(|draft| json!({"text": draft.text, "node": draft.node, "page": draft.page}))
++        .collect();
 +    let request = json!({
 +        "id": 1,
 +        "method": "send",
@@ -954,6 +1022,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    .to_string();
 +    let (tx, rx) = mpsc::channel();
 +    app.compose.busy = true;
++    app.compose.sending = sending;
 +    app.compose.rx = Some(rx);
 +    let address = workspaces::service_addr();
 +    let context = ctx.clone();
@@ -966,6 +1035,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    if let Err(e) = spawned {
 +        app.compose.busy = false;
 +        app.compose.rx = None;
++        app.compose.sending.clear();
 +        app.toast(format!("Could not send the comment: {e}"));
 +    }
 +}
@@ -984,6 +1054,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +        Some(Err(mpsc::TryRecvError::Disconnected)) => {
 +            app.compose.rx = None;
 +            app.compose.busy = false;
++            app.compose.sending.clear();
 +            app.toast("The comment request ended without an answer.");
 +            return;
 +        }
@@ -992,24 +1063,31 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    app.compose.busy = false;
 +    match received {
 +        Ok(reply) if reply.ok => {
-+            let drafts = app.compose.drafts.len();
-+            let sent = if reply.sent > 0 {
-+                reply.sent
-+            } else {
-+                (drafts as u64) + u64::from(!app.compose.input.trim().is_empty())
-+            };
++            let sent = if reply.sent > 0 { reply.sent } else { app.compose.sending.len() as u64 };
 +            let agent = reply
 +                .agent
 +                .as_ref()
 +                .and_then(agent_kind)
 +                .or_else(|| app.compose.target.as_ref().map(|target| kind_label(target.kind()).to_string()))
 +                .unwrap_or_else(|| "the agent".to_string());
-+            app.compose.drafts.clear();
++            let sending = std::mem::take(&mut app.compose.sending);
++            app.compose.drafts.retain(|draft| !sending.contains(draft));
 +            app.compose.input.clear();
-+            app.toast(format!("Sent {sent} comment{} to {agent}", if sent == 1 { "" } else { "s" }));
++            let what = if sent == 0 {
++                "the prompt".to_string()
++            } else {
++                format!("{sent} comment{}", if sent == 1 { "" } else { "s" })
++            };
++            app.toast(format!("Sent {what} to {agent}"));
 +        }
-+        Ok(reply) => app.toast(reply.error.unwrap_or_else(|| "The project service refused the comment.".to_string())),
-+        Err(error) => app.toast(error),
++        Ok(reply) => {
++            app.compose.sending.clear();
++            app.toast(reply.error.unwrap_or_else(|| "The project service refused the comment.".to_string()));
++        }
++        Err(error) => {
++            app.compose.sending.clear();
++            app.toast(error);
++        }
 +    }
 +}
 +

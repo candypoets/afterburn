@@ -128,6 +128,52 @@ pub fn validate_target(herdr: &Herdr, workspace: &WorkspaceView, target: &Target
     }
 }
 
+/// Check that a target can be prompted for a Sync before any side effect.
+///
+/// [`validate_target`] covers the pane/kind syntax; a sync additionally needs a checkout path and
+/// a source that can actually be prompted: an existing agent in the workspace for `auto`, or an
+/// installed CLI for `auto` and `kind`. A failure here must be returned as a request error, before
+/// a tab is created or a prompt is submitted.
+pub fn preflight(herdr: &Herdr, workspace: &WorkspaceView, target: &Target) -> Result<()> {
+    validate_target(herdr, workspace, target)?;
+    let has_path = workspace
+        .path
+        .as_deref()
+        .is_some_and(|path| !path.trim().is_empty());
+    if !has_path {
+        return Err(Error::new(format!(
+            "workspace {} ({}) has no checkout path; cannot prompt an agent",
+            workspace.id, workspace.label
+        )));
+    }
+    match target {
+        Target::Auto => {
+            let agents = herdr.agents()?;
+            let existing = agents
+                .iter()
+                .any(|agent| agent.workspace_id == workspace.id && agent.pane_id.is_some());
+            if existing || detect_kind().is_some() {
+                Ok(())
+            } else {
+                Err(Error::new(format!(
+                    "no supported agent CLI found on PATH (tried {})",
+                    AGENT_ORDER.join(", ")
+                )))
+            }
+        }
+        Target::Kind(kind) => {
+            if find_in_path(kind).is_some() {
+                Ok(())
+            } else {
+                Err(Error::new(format!(
+                    "agent CLI {kind:?} is not installed on PATH"
+                )))
+            }
+        }
+        Target::Pane(_) => Ok(()),
+    }
+}
+
 /// What happened to the agent part of Init.
 #[derive(Clone, Debug, Serialize)]
 pub struct AgentOutcome {

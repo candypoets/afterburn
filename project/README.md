@@ -137,9 +137,10 @@ in `client-workspaces.patch`.
   System, Screens and Product pages (including this picker design).
 - **TCP API** on `47821`: `health`, `workspaces`, `open`, `init` (newline JSON).
 
-The composer and the send path are implemented end to end: drafts become one prompt to the chosen
-agent (`send` over the TCP API), and Herdr receives the formatted bundle. The comment tree,
-sent-once removal and the Sync widget are designed above, not implemented yet. Still to come:
+The composer, the comment tree and sent-once removal are implemented: a draft remembers its node,
+a send carries the selected card's subtree (or the whole page with no selection), only those
+drafts leave the bar on success, and a page-level comment works with no selection. The Sync
+widget/backend is in progress; the model renderer, remote hosts, auth and a systemd unit remain. Still to come:
 persisting drafts as shared FigCraft comment threads, the model renderer (the agent prompt points
 at `mindmap render`, which does not exist yet), remote hosts, auth on the service socket, and a
 systemd unit.

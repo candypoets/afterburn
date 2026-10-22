@@ -7,11 +7,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The current UTC time as `YYYY-MM-DDTHH:MM:SSZ`.
 pub fn now_iso() -> String {
-    let seconds = SystemTime::now()
+    format_iso(now_secs())
+}
+
+/// Seconds since the Unix epoch.
+pub fn now_secs() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    format_iso(seconds)
+        .unwrap_or(0)
 }
 
 /// Format seconds since the Unix epoch as an ISO-8601 UTC timestamp.

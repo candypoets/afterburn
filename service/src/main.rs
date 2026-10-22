@@ -5,7 +5,9 @@
 //! edit link; `init` additionally ensures an agent and prompts it; `adopt` publishes an
 //! already-built map file without touching an agent; `serve` exposes the same operations on a
 //! newline-delimited JSON TCP socket. The TCP API also has `send`, which submits canvas comments
-//! to an agent without opening or publishing a document.
+//! to an agent without opening or publishing a document, and `diff`/`sync`/`sync_status`, which
+//! compare the client's map snapshot with the last successful sync and the repository, prompt an
+//! agent with both diffs, and report the job until Herdr shows the agent finished.
 //!
 //! The edit links are stored in `service/data/projects.json` and never printed by the server. The
 //! Python reference (`project/service.py`) remains the behavioral spec for inventory and publish.
@@ -20,6 +22,7 @@ mod mcp;
 mod project;
 mod records;
 mod server;
+mod sync;
 mod time;
 
 use std::env;

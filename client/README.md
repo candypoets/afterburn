@@ -55,6 +55,11 @@ In map mode the canvas has a single bottom composer, as designed:
   tools, and selection no longer draws resize handles or the `W × H` badge.
 - **Enter** turns the input into a draft chip; the input clears and the selection stays. Choosing
   another card clears the input, never the drafts.
+- **Drafts follow the tree.** A draft remembers its node; the strip shows only the drafts a send
+  from the current selection would carry — the selected card's subtree, or the whole page with no
+  selection. Selecting a sibling hides the others; selecting the parent brings them back.
+- **Sent once.** A successful send removes exactly those drafts and keeps the rest; they are not
+  shown again and cannot be sent twice. A failed send keeps them.
 - **The target chip** lists the agents already in the open workspace (`kimi · idle`) and the CLIs
   that can be started (`codex`, `claude`, `kimi`). The default is the focused or first non-blocked
   agent.

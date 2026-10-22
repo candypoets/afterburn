@@ -17,7 +17,8 @@ use crate::error::{Error, Result, ResultExt};
 use crate::herdr::{Agent, Herdr, Pane};
 use crate::link;
 use crate::mcp::FigcraftSession;
-use crate::records::{ProjectRecord, Store};
+use crate::records::{LastSync, ProjectRecord, Store};
+use crate::sync::{self, CodeDiff, JobState, MapDiff, MapSnapshot, SyncJob, SyncJobView};
 use crate::time;
 
 /// The publish poll interval and budget from the product contract.
@@ -114,6 +115,35 @@ pub struct SendResult {
     pub sent: usize,
 }
 
+/// The result of Diff: the last-sync metadata and both diffs.
+#[derive(Clone, Debug)]
+pub struct DiffResult {
+    /// Last successful sync, when there was one.
+    pub last: Option<LastSync>,
+    /// Design changes between the supplied snapshot and the last-synced one.
+    pub map: MapDiff,
+    /// Code changes since the last sync's commit.
+    pub code: CodeDiff,
+}
+
+/// The result of starting a Sync: the in-flight job and the prompted agent.
+#[derive(Clone, Debug)]
+pub struct SyncStarted {
+    /// The job the client polls with `sync_status`.
+    pub job: SyncJobView,
+    /// The agent that accepted the prompt.
+    pub agent: AgentOutcome,
+}
+
+/// The result of one `sync_status` poll.
+#[derive(Clone, Debug)]
+pub struct SyncStatusResult {
+    /// The job as it is now.
+    pub job: SyncJobView,
+    /// The workspace's last successful sync, including one just written.
+    pub last: Option<LastSync>,
+}
+
 /// The stateful project service shared by the CLI and the TCP server.
 #[derive(Debug)]
 pub struct ProjectService {
@@ -121,6 +151,7 @@ pub struct ProjectService {
     herdr: Herdr,
     store: Store,
     create_lock: Mutex<()>,
+    jobs: Mutex<BTreeMap<String, SyncJob>>,
 }
 
 impl ProjectService {
@@ -137,6 +168,7 @@ impl ProjectService {
             herdr,
             store,
             create_lock: Mutex::new(()),
+            jobs: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -311,6 +343,209 @@ impl ProjectService {
         })
     }
 
+    /// Compare a map snapshot with the last successful sync and with the repository.
+    ///
+    /// This is a read-only request: it reads the last snapshot through [`Store::last_sync`] (no
+    /// legacy import and no write) and runs `git` without touching the repository. With no last
+    /// sync every node is reported as added and the code lists stay empty.
+    pub fn diff(&self, query: &str, map: &MapSnapshot) -> Result<DiffResult> {
+        let workspace = self.find_workspace(query)?;
+        let last = self.store.last_sync(&workspace.id)?;
+        let map_diff = sync::diff_maps(map, last.as_ref().map(|last| &last.map));
+        let last_commit = last.as_ref().map(|last| last.commit.as_str());
+        let code = sync::code_diff(workspace.path.as_deref(), last_commit);
+        Ok(DiffResult {
+            last,
+            map: map_diff,
+            code,
+        })
+    }
+
+    /// Prompt an agent to apply the design diff and catch up with the code diff.
+    ///
+    /// The target is preflighted before anything is prompted or started, so an unusable agent is
+    /// an `ok:false` request and creates no job. The map snapshot and repository head are captured
+    /// before the prompt; the returned job keeps them until [`Self::sync_status`] sees the agent
+    /// finish. Nothing is written to the project record here.
+    pub fn start_sync(
+        &self,
+        query: &str,
+        target: &Target,
+        note: &str,
+        map: &MapSnapshot,
+    ) -> Result<SyncStarted> {
+        let workspace = self.find_workspace(query)?;
+        agent::preflight(&self.herdr, &workspace, target)?;
+        let record = self.store.get(&workspace.id)?.ok_or_else(|| {
+            Error::new(format!(
+                "workspace {} ({}) has no project record; open it before syncing",
+                workspace.id, workspace.label
+            ))
+        })?;
+        let last = record.last_sync;
+        let map_diff = sync::diff_maps(map, last.as_ref().map(|last| &last.map));
+        let last_commit = last.as_ref().map(|last| last.commit.as_str());
+        let code = sync::code_diff(workspace.path.as_deref(), last_commit);
+        let prompt = sync::format_prompt(
+            &workspace.label,
+            workspace.path.as_deref(),
+            &map_diff,
+            &code,
+            last.is_some(),
+            note,
+        );
+
+        let agent = agent::ensure_with_prompt(&self.herdr, &workspace, target, &prompt);
+        if !agent.prompted {
+            let reason = agent
+                .reason
+                .clone()
+                .unwrap_or_else(|| "the agent did not accept the prompt".to_string());
+            return Err(Error::new(format!(
+                "sync could not prompt an agent: {reason}"
+            )));
+        }
+        let pane = agent
+            .pane
+            .clone()
+            .ok_or_else(|| Error::new("sync agent outcome has no pane"))?;
+
+        let job = SyncJob {
+            id: sync::new_job_id(),
+            workspace: workspace.id,
+            started: time::now_iso(),
+            started_secs: time::now_secs(),
+            head: code.head.clone(),
+            map_snapshot: map.clone(),
+            pane,
+            agent: agent.clone(),
+            state: JobState::InFlight,
+            seen_active: false,
+            reason: None,
+        };
+        let view = job.view();
+        self.insert_job(job)?;
+        Ok(SyncStarted { job: view, agent })
+    }
+
+    /// Poll one in-flight sync job against Herdr and finish it when the agent settles.
+    ///
+    /// A job is done only after Herdr has reported the agent as `working` or `blocked` and then
+    /// `idle` or `done`. Finishing writes only `last_sync` (commit, completion time, start
+    /// snapshot) through the store; a gone/errored agent or a job older than
+    /// [`sync::JOB_TIMEOUT_SECS`] is failed with a reason and writes nothing.
+    pub fn sync_status(&self, job_id: &str) -> Result<SyncStatusResult> {
+        let job_id = job_id.trim();
+        if job_id.is_empty() {
+            return Err(Error::new("sync_status needs a non-empty \"job\" id"));
+        }
+        let mut job = self.get_job(job_id)?;
+        if job.state != JobState::InFlight {
+            return self.job_status_result(job);
+        }
+
+        let age = time::now_secs().saturating_sub(job.started_secs);
+        if age >= sync::JOB_TIMEOUT_SECS {
+            return self.fail_job(
+                job,
+                format!(
+                    "sync timed out after {} minutes",
+                    sync::JOB_TIMEOUT_SECS / 60
+                ),
+            );
+        }
+
+        let agents = self
+            .herdr
+            .agents()
+            .context("read the agent list for sync_status")?;
+        let status = agents
+            .iter()
+            .find(|agent| {
+                agent.workspace_id == job.workspace
+                    && agent.pane_id.as_deref() == Some(job.pane.as_str())
+            })
+            .map(|agent| agent.agent_status.as_deref().unwrap_or("unknown"));
+        let next = sync::transition(job.seen_active, status, age);
+        job.seen_active = next.seen_active;
+
+        match next.state {
+            JobState::InFlight => {
+                self.save_job(&job)?;
+                self.job_status_result(job)
+            }
+            JobState::Failed => {
+                let reason = next.reason.unwrap_or_else(|| "sync failed".to_string());
+                self.fail_job(job, reason)
+            }
+            JobState::Done => {
+                let last = LastSync {
+                    commit: job.head.clone().unwrap_or_default(),
+                    at: time::now_iso(),
+                    map: job.map_snapshot.clone(),
+                };
+                match self.store.set_last_sync(&job.workspace, last)? {
+                    Some(record) => {
+                        job.state = JobState::Done;
+                        job.reason = None;
+                        self.save_job(&job)?;
+                        Ok(SyncStatusResult {
+                            job: job.view(),
+                            last: record.last_sync,
+                        })
+                    }
+                    None => self.fail_job(job, "project record no longer exists".to_string()),
+                }
+            }
+        }
+    }
+
+    fn get_job(&self, id: &str) -> Result<SyncJob> {
+        let jobs = self
+            .jobs
+            .lock()
+            .map_err(|_| Error::new("sync job lock poisoned"))?;
+        jobs.get(id)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("unknown sync job {id:?}")))
+    }
+
+    fn insert_job(&self, job: SyncJob) -> Result<()> {
+        let mut jobs = self
+            .jobs
+            .lock()
+            .map_err(|_| Error::new("sync job lock poisoned"))?;
+        jobs.insert(job.id.clone(), job);
+        Ok(())
+    }
+
+    fn save_job(&self, job: &SyncJob) -> Result<()> {
+        let mut jobs = self
+            .jobs
+            .lock()
+            .map_err(|_| Error::new("sync job lock poisoned"))?;
+        jobs.insert(job.id.clone(), job.clone());
+        Ok(())
+    }
+
+    fn fail_job(&self, mut job: SyncJob, reason: String) -> Result<SyncStatusResult> {
+        job.state = JobState::Failed;
+        job.reason = Some(reason);
+        self.save_job(&job)?;
+        self.job_status_result(job)
+    }
+
+    fn job_status_result(&self, job: SyncJob) -> Result<SyncStatusResult> {
+        let last = self
+            .store
+            .get(&job.workspace)?
+            .and_then(|record| record.last_sync);
+        Ok(SyncStatusResult {
+            job: job.view(),
+            last,
+        })
+    }
+
     /// Publish an already-built `.figcraft` file as a workspace's map.
     ///
     /// Unlike [`Self::init`], this never touches an agent: it is the path for seeding a workspace
@@ -451,6 +686,8 @@ impl ProjectService {
             name: Some(published_name.unwrap_or(name)),
             built,
             created: time::now_iso(),
+            last_sync: None,
+            extra: BTreeMap::new(),
         };
         eprintln!("mindmap-service: published {} as {}", workspace.label, file);
         Ok(record)
