@@ -14,6 +14,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::agent;
+use crate::comments;
 use crate::config::Config;
 use crate::error::{Error, Result, ResultExt};
 use crate::project::ProjectService;
@@ -172,6 +173,25 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
                 "agent": init.agent,
             }))
         }
+        "send" => {
+            let query =
+                workspace.ok_or_else(|| Error::new("send needs a \"workspace\" id or label"))?;
+            let target = request_target(request)?;
+            let prompt = request_prompt(request)?;
+            let parsed = comments::parse_comments(request.get("comments"))?;
+            if prompt.trim().is_empty() && parsed.is_empty() {
+                return Err(Error::new(
+                    "send needs a prompt or at least one non-empty comment",
+                ));
+            }
+            let result = service.send(query, &target, &prompt, &parsed)?;
+            Ok(json!({
+                "id": id,
+                "ok": true,
+                "agent": result.agent,
+                "sent": result.sent,
+            }))
+        }
         "adopt" => {
             let query =
                 workspace.ok_or_else(|| Error::new("adopt needs a \"workspace\" id or label"))?;
@@ -208,6 +228,20 @@ fn request_target(request: &Value) -> Result<agent::Target> {
         Some(Value::String(target)) => agent::parse_target(Some(target)),
         Some(other) => Err(Error::new(format!(
             "\"target\" must be a string, not {other}"
+        ))),
+    }
+}
+
+/// Read the optional `prompt` request field, rejecting non-string and oversized values.
+fn request_prompt(request: &Value) -> Result<String> {
+    match request.get("prompt") {
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::String(prompt)) => {
+            comments::validate_prompt(prompt)?;
+            Ok(prompt.clone())
+        }
+        Some(other) => Err(Error::new(format!(
+            "\"prompt\" must be a string, not {other}"
         ))),
     }
 }

@@ -2,9 +2,10 @@
 
 A Herdr workspace is a project. This binary lists the workspaces on the host, gives each one a
 FigCraft document the first time it is opened, and, on **Init**, makes sure an agent is working on
-it. `adopt` attaches a map that was already drawn, without prompting an agent. The edit link (with
-its token) stays in the service; callers get a link and a file id they can hand to a client that
-knows how to join.
+it. **Send** prompts an agent with canvas comments without opening or publishing a document.
+`adopt` attaches a map that was already drawn, without prompting an agent. The edit link (with its
+token) stays in the service; callers get a link and a file id they can hand to a client that knows
+how to join.
 
 This is the Rust port of the behavior in [`../project/service.py`](../project/service.py), with the
 product shape from [`../project/README.md`](../project/README.md). The Python file is unchanged.
@@ -14,12 +15,13 @@ product shape from [`../project/README.md`](../project/README.md). The Python fi
 | File | Role |
 |---|---|
 | `src/main.rs` | CLI: `list`, `open`, `init`, `adopt`, `serve`, help. |
-| `src/project.rs` | Workspace inventory, publish-or-reuse, Init orchestration, adopt. |
+| `src/project.rs` | Workspace inventory, publish-or-reuse, Init/Send orchestration, adopt. |
 | `src/herdr.rs` | Typed wrapper over `herdr workspace/agent/tab/pane`; always `HERDR_ENV=1`. |
 | `src/mcp.rs` | Newline-delimited JSON-RPC client for `figcraft-cli mcp`. |
-| `src/agent.rs` | Agent detection, tab creation, start, prompt, in-band failure. |
+| `src/agent.rs` | Agent detection, tab creation, start, prompt (Init and Send), in-band failure. |
+| `src/comments.rs` | Canvas-comment validation and prompt rendering for `send`. |
 | `src/records.rs` | `service/data/projects.json` store (atomic writes, mode 0600). |
-| `src/server.rs` | Newline-delimited JSON TCP API. |
+| `src/server.rs` | Newline-delimited JSON TCP API (`health`, `workspaces`, `open`, `init`, `send`, `adopt`). |
 | `src/link.rs` | Rewrites the join link's `host` parameter to the public address. |
 | `src/config.rs` | Paths and environment overrides. |
 | `src/time.rs`, `src/error.rs` | UTC timestamps and the small error type. |
@@ -191,6 +193,70 @@ Success states are `started` (new CLI) or `existing` (prompted), with `target`, 
 `pane`, `tab`, and `prompted: true` when known. A workspace with no checkout path and no pane with
 a `cwd` gets an error outcome rather than an agent in the wrong directory.
 
+## Sending canvas comments
+
+`send` is the no-document path: a client submits the comments collected on the canvas plus an
+optional prompt to an agent in a workspace. It resolves the workspace, validates the target,
+renders the comments, and submits one prompt. It never publishes, opens, or edits a document and
+never writes the project store.
+
+```json
+{"id":1,"method":"send","workspace":"wX","target":"pane:wX:p2","prompt":"Why does this rebuild?","comments":[{"text":"This should say where overrides reset.","node":"Components","page":"Mindmap"}]}
+```
+
+* `workspace` (required): id or label, resolved like every other method (exact id or label first,
+  then case-insensitive; prefer the id when labels collide).
+* `target` (optional): `auto`, `pane:<pane-id>`, or `kind:<agent-kind>`, exactly as Init. It is
+  validated against the live agent list before any prompt or tab, so an unknown pane, unsupported
+  kind, or malformed target returns `ok:false` without mutations.
+* `prompt` (optional string, may be empty): free-form instructions.
+* `comments` (optional list, at most 50): objects with a required string `text` and optional string
+  `node` and `page`. Blank text, non-string fields, more than 50 comments, or more than 20,000
+  characters of comment content are `ok:false`. Payload validation happens before the workspace is
+  resolved, so a bad request cannot touch Herdr.
+
+The prompt submitted to the agent is:
+
+```text
+Mindmap comments for <workspace label> (<checkout path>):
+
+1. [<page>] <node>: <text>
+2. ...
+
+<prompt>
+```
+
+Missing pieces are omitted: the parenthetical when the workspace has no path, `[<page>]` when the
+comment has no page, `<node>: ` when it has no node, and the blank line when `prompt` is empty. An
+empty prompt is replaced with the one-line instruction
+`Address these comments in the project document.` Without any comments the method submits the
+prompt alone (so a prompt-only request still needs a prompt). Newlines, tabs, and backslashes in
+`text`, `node`, and `page` are escaped (`\n`, `\t`, `\\`) so each comment stays on one numbered
+line. Comment content above the cap is rejected rather than truncated.
+
+Agent handling is shared with Init: a `pane:` target prompts that agent, `auto` reuses an existing
+agent (focused first, avoiding blocked ones) or starts the first installed CLI, and `kind:` starts
+a new agent of that kind in a background tab. First-run folder trust is accepted the same way.
+Agent failures are in-band, like Init:
+
+```json
+{
+  "id": 1,
+  "ok": true,
+  "sent": 1,
+  "agent": {
+    "state": "error",
+    "target": "pane:wX:p2",
+    "pane": "wX:p2",
+    "reason": "…"
+  }
+}
+```
+
+`sent` is the number of comments included in the prompt; `agent.prompted` is true only when Herdr
+accepted it. Like Init, the agent stage needs a checkout path; without one the request still
+returns `ok:true` with the error in `agent`.
+
 ## Adopting a built map
 
 `adopt` seeds a workspace whose map was already drawn, without prompting any agent:
@@ -230,10 +296,13 @@ Requests:
 | `workspaces` | `{"id":2,"method":"workspaces"}` | `{"id":2,"ok":true,"workspaces":[…]}` |
 | `open` | `{"id":3,"method":"open","workspace":"wP"}` | `{"id":3,"ok":true,"link":"figcraft://…","file":"…","name":"…"}` |
 | `init` | `{"id":4,"method":"init","workspace":"wP","target":"pane:wX:p2"}` | same as `open` plus `"agent":{…}` |
-| `adopt` | `{"id":5,"method":"adopt","workspace":"wX","path":"build/mindmap-system.figcraft","name":"Mindmap · mindmap"}` | `{"id":5,"ok":true,"file":"…","link":"figcraft://…","name":"…"}` |
+| `send` | `{"id":5,"method":"send","workspace":"wX","target":"pane:wX:p2","prompt":"Why does this rebuild?","comments":[{"text":"…","node":"Components","page":"Mindmap"}]}` | `{"id":5,"ok":true,"agent":{…},"sent":1}` |
+| `adopt` | `{"id":6,"method":"adopt","workspace":"wX","path":"build/mindmap-system.figcraft","name":"Mindmap · mindmap"}` | `{"id":6,"ok":true,"file":"…","link":"figcraft://…","name":"…"}` |
 
 `target` is optional: absent or `"auto"`, `"pane:<pane-id>"`, or `"kind:<agent-kind>"`. `name` is
-optional for `adopt` and defaults to `Mindmap · <label>`.
+optional for `adopt` and defaults to `Mindmap · <label>`. `send` never returns a link: it only
+prompts an agent, and its `comments`/`prompt` rules and prompt format are described in
+[Send](#sending-canvas-comments).
 
 `workspace` accepts the Herdr id (`wP`) or label (`eisledger`), case-insensitively as a fallback.
 Errors are `{"id":N,"ok":false,"error":"…"}`. Invalid JSON gets `id: null`; the connection stays
@@ -255,10 +324,11 @@ document instead of getting a duplicate. Later imports do not happen.
 ## Verification performed
 
 * `cargo build --release`: clean, no warnings.
-* `cargo test --release`: 26 unit tests pass, including the original 15. The new tests cover
-  target parsing (`auto`, `pane:`, `kind:`, invalid), pick policy (pane selection, kind always
-  starts new, auto reuse/fallback/blocked avoidance), target error reporting, and the pane-cwd
-  fallback.
+* `cargo test --release`: 37 unit tests pass. The 11 new tests cover comment parsing (optional
+  node/page, blank text, non-string fields, more than 50 comments, oversized content), prompt
+  formatting (with and without a prompt, missing path, page/node combinations, newline/tab/
+  backslash escaping), and prompt size validation. The original 26 tests for target parsing, pick
+  policy, target error reporting, and the pane-cwd fallback still pass.
 * `cargo clippy --release --all-targets`: clean.
 * `list` from the service directory and from the repository root shows the real workspaces. The
   `wX` (`mindmap`) line now has `/root/code/mindmap`; worktree-backed workspaces still use
@@ -270,12 +340,25 @@ document instead of getting a duplicate. Later imports do not happen.
   non-string target, a missing `adopt` path, and a non-existent adopt file. All returned
   `ok: false`; the scratch store stayed empty and `wX` kept its 3 agents and 3 tabs, so no agent
   was started or prompted.
+* A scratch TCP instance on `127.0.0.1:47899` (scratch `MINDMAP_DATA`, stopped afterwards)
+  rejected 15 invalid `send` requests with `ok:false`: unknown workspace, missing/non-string
+  workspace, missing/bad/non-string target, unknown pane, unsupported kind, empty comment text,
+  empty prompt plus empty comments, non-list comments, non-object comment, non-string comment
+  node, and 51 comments. `wX` stayed at 3 tabs, 3 panes, and agent panes `wX:p1`–`wX:p3`; the
+  scratch store had no `projects.json`; no agent was started or prompted. Formatting is asserted
+  exactly by the unit tests above, and the live service on 47821 was not touched.
 * `adopt` was exercised with the scratch store: the CLI adopted `build/mindmap-system.figcraft`
   for `w11` and the TCP method adopted it for `wZ` with the default name. Both published through
   the MCP path, rewrote the link host, stored `built: true`, and made the inventory show `map`
   with the new file id.
-* The real `service/data/projects.json` was not modified: it still contains only the `wP`
-  record.
+* A fake `MINDMAP_HERDR` stub (not the live Herdr) drove the full TCP `send` path. The response was
+  `{"id":1,"ok":true,"agent":{"state":"existing","kind":"claude","name":"mindmap","pane":"wX:p2","tab":"wX:t2","target":"pane:wX:p2","prompted":true},"sent":2}`
+  and the stub received exactly the formatted prompt shown above. Only `workspace list`,
+  `agent list`, `pane list`, and `agent prompt` were called; there were no `tab create`,
+  `agent start`, or `agent send-keys` calls, no document was opened, and the scratch store stayed
+  empty.
+* The real `service/data/projects.json` was not modified by these tests: every TCP instance used a
+  scratch `MINDMAP_DATA` directory, and no document was opened or published.
 * No Herdr tab, pane, workspace, or session was modified during testing.
 
 ## Not done yet / known gaps

@@ -45,6 +45,26 @@ open -a ~/Applications/Mindmap.app --args --map-mode --control 49125 \
   exist, and the document is still writable — the next step is to refuse mutating commands in map
   mode rather than only hiding their entry points.
 
+
+## Comments (implemented)
+
+In map mode the canvas has a single bottom composer, as designed:
+
+- **Select** a card; the composer shows `COMMENTING ON · <layer> · <page>`. Text selects in place;
+  `⌘C` works, and the right-click menu is exactly **Copy** and **Comment** — no layer or design
+  tools, and selection no longer draws resize handles or the `W × H` badge.
+- **Enter** turns the input into a draft chip; the input clears and the selection stays. Choosing
+  another card clears the input, never the drafts.
+- **The target chip** lists the agents already in the open workspace (`kimi · idle`) and the CLIs
+  that can be started (`codex`, `claude`, `kimi`). The default is the focused or first non-blocked
+  agent.
+- **⌘Enter** sends: the current input is the prompt, every draft attaches, and the service formats
+  one message with page/layer context and prompts the chosen agent through Herdr. Success clears
+  the drafts and toasts how many comments went to which agent.
+
+Drafts are held by the client for now (not yet FigCraft comment annotations), so they are not
+shared with other viewers until sent to an agent. The map itself stays read-only.
+
 ## Known gaps (the next slice)
 
 - **Opening a project.** The client now opens on the Herdr workspace list (map mode) and opens or
@@ -52,8 +72,8 @@ open -a ~/Applications/Mindmap.app --args --map-mode --control 49125 \
 - **The map itself.** Init starts and prompts the chosen agent, but the model renderer
   (`mindmap render`) is still missing, so the agent cannot draw a new overview yet. One workspace
   (`mindmap`) has a ready map through `adopt`, not through Init.
-- **Comments surface.** The guard allows comments, but the panel that creates and reads a thread
-  is still hidden with the old chrome.
+- **Persisted comments.** Drafts live in the client session; writing them as shared FigCraft
+  comment threads is the next step.
 - **In-canvas links.** Cards show "Open →" in the design, but clicking one still selects it rather
   than moving the canvas. The next step is: a click on a card with a navigate interaction selects
   its destination page and zooms to the target — no prototype player.

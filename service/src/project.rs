@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::agent::{self, AgentOutcome, Target};
+use crate::comments::{self, Comment};
 use crate::config::Config;
 use crate::error::{Error, Result, ResultExt};
 use crate::herdr::{Agent, Herdr, Pane};
@@ -102,6 +103,15 @@ pub struct Adopted {
     pub link: String,
     /// Document name.
     pub name: String,
+}
+
+/// The result of Send: the agent outcome and how many comments were handed to it.
+#[derive(Clone, Debug)]
+pub struct SendResult {
+    /// What happened when ensuring an agent and submitting the comments.
+    pub agent: AgentOutcome,
+    /// Number of canvas comments included in the prompt.
+    pub sent: usize,
 }
 
 /// The stateful project service shared by the CLI and the TCP server.
@@ -270,6 +280,35 @@ impl ProjectService {
             target,
         );
         Ok(InitResult { opened, agent })
+    }
+
+    /// Prompt an agent with canvas comments, without opening or publishing a document.
+    ///
+    /// The target is validated against Herdr's live agent list before any prompt or tab is
+    /// created, so a bad `pane:` or `kind:` choice cannot mutate the session. The comments are
+    /// rendered with the workspace label and path, then submitted through the same agent policy
+    /// as [`Self::init`] (reuse an existing agent or start one). Agent failures are reported
+    /// in-band in the returned outcome, exactly like Init.
+    pub fn send(
+        &self,
+        query: &str,
+        target: &Target,
+        prompt: &str,
+        comments: &[Comment],
+    ) -> Result<SendResult> {
+        let workspace = self.find_workspace(query)?;
+        agent::validate_target(&self.herdr, &workspace, target)?;
+        let text = comments::format_prompt(
+            &workspace.label,
+            workspace.path.as_deref(),
+            comments,
+            prompt,
+        )?;
+        let agent = agent::ensure_with_prompt(&self.herdr, &workspace, target, &text);
+        Ok(SendResult {
+            agent,
+            sent: comments.len(),
+        })
     }
 
     /// Publish an already-built `.figcraft` file as a workspace's map.

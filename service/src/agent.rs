@@ -204,7 +204,34 @@ pub fn ensure(
     file: Option<&str>,
     target: &Target,
 ) -> AgentOutcome {
-    match ensure_inner(config, herdr, workspace, file, target) {
+    let prompt = workspace
+        .path
+        .as_deref()
+        .map(|path| prompt_text(config, workspace, path, file));
+    finish(herdr, workspace, target, prompt.as_deref())
+}
+
+/// Ensure an agent exists in `workspace` and submit a caller-supplied prompt.
+///
+/// This is the Send path: the caller has already rendered the comments and validated the target,
+/// so no document is opened or published. Reusing an existing agent, starting the chosen kind,
+/// first-run trust handling, and in-band failures are the same as [`ensure`].
+pub fn ensure_with_prompt(
+    herdr: &Herdr,
+    workspace: &WorkspaceView,
+    target: &Target,
+    prompt: &str,
+) -> AgentOutcome {
+    finish(herdr, workspace, target, Some(prompt))
+}
+
+fn finish(
+    herdr: &Herdr,
+    workspace: &WorkspaceView,
+    target: &Target,
+    prompt: Option<&str>,
+) -> AgentOutcome {
+    match ensure_inner(herdr, workspace, target, prompt) {
         Ok(outcome) => outcome,
         Err(error) => AgentOutcome::error_for(target, error),
     }
@@ -254,11 +281,10 @@ fn choose_source<'a>(
 }
 
 fn ensure_inner(
-    config: &Config,
     herdr: &Herdr,
     workspace: &WorkspaceView,
-    file: Option<&str>,
     target: &Target,
+    prompt: Option<&str>,
 ) -> Result<AgentOutcome> {
     let path = workspace.path.as_deref().ok_or_else(|| {
         Error::new(format!(
@@ -266,13 +292,13 @@ fn ensure_inner(
             workspace.id
         ))
     })?;
+    let prompt = prompt.ok_or_else(|| Error::new("send has no prompt text to submit"))?;
 
     let all_agents = herdr.agents()?;
     let workspace_agents: Vec<&Agent> = all_agents
         .iter()
         .filter(|agent| agent.workspace_id == workspace.id)
         .collect();
-    let prompt = prompt_text(config, workspace, path, file);
 
     let auto_kind = match target {
         Target::Auto => detect_kind(),
@@ -293,7 +319,7 @@ fn ensure_inner(
                     workspace.id
                 ))
             })?;
-            prompt_when_ready(herdr, pane, &prompt)?;
+            prompt_when_ready(herdr, pane, prompt)?;
             Ok(AgentOutcome {
                 state: AgentState::Existing,
                 target: Some(target_request),
@@ -321,7 +347,7 @@ fn ensure_inner(
                     return Err(error);
                 }
             }
-            prompt_when_ready(herdr, &created.pane_id, &prompt)?;
+            prompt_when_ready(herdr, &created.pane_id, prompt)?;
 
             Ok(AgentOutcome {
                 state: AgentState::Started,

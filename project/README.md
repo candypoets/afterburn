@@ -137,9 +137,18 @@ in `client-workspaces.patch`.
   System, Screens and Product pages (including this picker design).
 - **TCP API** on `47821`: `health`, `workspaces`, `open`, `init` (newline JSON).
 
-Still to come: the model renderer (the agent prompt points at `mindmap render`, which does not
-exist yet), the comments implementation, remote hosts, auth on the service socket, and a systemd
-unit.
+Comments are implemented end to end: the client composer adds drafts and sends them with one
+prompt to the chosen agent (`send` over the TCP API), and Herdr receives the formatted comment
+bundle. Still to come: persisting those drafts as shared FigCraft comment threads, the model
+renderer (the agent prompt points at `mindmap render`, which does not exist yet), remote hosts,
+auth on the service socket, and a systemd unit.
+
+**A note on live design updates.** The client and the document server sync correctly (page
+rename/delete and document edits arrive live). The design *pipeline* was the problem: importing a
+multi-page `.figcraft` into a live document flattens its nodes onto the current page and appends
+empty pages, so an importer replacing all pages can leave the viewer on an empty page. The
+workspace map is now one page (`Mindmap`) with the latest design, and that is the page to keep
+updating in place; a page-aware sync is the next tooling fix.
 
 ### Comments (designed)
 

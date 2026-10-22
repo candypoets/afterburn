@@ -4,12 +4,14 @@
 //! has a map document; `open` publishes a one-page skeleton on first use and returns the internal
 //! edit link; `init` additionally ensures an agent and prompts it; `adopt` publishes an
 //! already-built map file without touching an agent; `serve` exposes the same operations on a
-//! newline-delimited JSON TCP socket.
+//! newline-delimited JSON TCP socket. The TCP API also has `send`, which submits canvas comments
+//! to an agent without opening or publishing a document.
 //!
 //! The edit links are stored in `service/data/projects.json` and never printed by the server. The
 //! Python reference (`project/service.py`) remains the behavioral spec for inventory and publish.
 
 mod agent;
+mod comments;
 mod config;
 mod error;
 mod herdr;
