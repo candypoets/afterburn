@@ -92,8 +92,8 @@ diff -ruN --exclude target .client-src-orig/apps/figcraft/src/main.rs client-src
      fig.note_recovered(recovered.copies);
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-src/crates/ui-egui/src/agents.rs
 --- .client-src-orig/crates/ui-egui/src/agents.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/agents.rs	2026-10-22 15:00:47.152094169 +0200
-@@ -0,0 +1,184 @@
++++ client-src/crates/ui-egui/src/agents.rs	2026-10-22 15:08:28.402118021 +0200
+@@ -0,0 +1,204 @@
 +//! The agent breakdown: the header count, and a modal with every agent in the workspace.
 +
 +use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Stroke, vec2};
@@ -132,10 +132,10 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +    }
 +    let working = agents
 +        .iter()
-+        .filter(|info| matches!(info.status.trim(), "working" | "blocked"))
++        .filter(|info| info.status.trim() == "working")
 +        .count();
 +    let label = if working > 0 {
-+        format!("{} agent{} · {} working", agents.len(), plural(agents.len()), working)
++        format!("{} agent{} · {} running", agents.len(), plural(agents.len()), working)
 +    } else {
 +        format!("{} agent{} · idle", agents.len(), plural(agents.len()))
 +    };
@@ -146,9 +146,23 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +    if n == 1 { "" } else { "s" }
 +}
 +
-+fn short_kind(kind: &str) -> &str {
++fn harness(kind: &str) -> &'static str {
 +    match kind {
-+        "dsh-tui" | "dsh" => "dsh",
++        "dsh-tui" | "dsh" => "DSH",
++        "claude" => "CLAUDE",
++        "codex" => "CODEX",
++        "kimi" => "KIMI",
++        _ => "AGENT",
++    }
++}
++
++fn state(status: &str) -> &str {
++    match status.trim() {
++        "working" => "running",
++        "error" | "errored" | "failed" => "failed",
++        "idle" => "idle",
++        "done" => "done",
++        "blocked" => "blocked",
 +        other => other,
 +    }
 +}
@@ -174,7 +188,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +    let agents: Vec<TargetInfo> = targets.iter().filter(|info| !info.new_agent).cloned().collect();
 +    let working = agents
 +        .iter()
-+        .filter(|info| matches!(info.status.trim(), "working" | "blocked"))
++        .filter(|info| info.status.trim() == "working")
 +        .count();
 +    let mut close = false;
 +    let mut pick: Option<Target> = None;
@@ -205,7 +219,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +                    let summary = if agents.is_empty() {
 +                        "No agents in this workspace.".to_string()
 +                    } else if working > 0 {
-+                        format!("{} agent{} · {} working", agents.len(), plural(agents.len()), working)
++                        format!("{} agent{} · {} running", agents.len(), plural(agents.len()), working)
 +                    } else {
 +                        format!("{} agent{} · all idle", agents.len(), plural(agents.len()))
 +                    };
@@ -234,17 +248,23 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +                                    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
 +                                }
 +                                let (kind, pane) = match &info.target {
-+                                    Target::Existing { pane, kind, .. } => (short_kind(kind), pane.clone()),
-+                                    Target::New { kind } => (short_kind(kind), "new agent".to_string()),
++                                    Target::Existing { pane, kind, .. } => (harness(kind), pane.clone()),
++                                    Target::New { kind } => (harness(kind), "new agent".to_string()),
 +                                };
 +                                let color = status_color(&info.status);
 +                                ui.painter().circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 4.0, color);
-+                                ui.painter().text(egui::pos2(rect.left() + 26.0, rect.top() + 17.0), Align2::LEFT_CENTER, kind, semibold(12.5), INK);
-+                                ui.painter().text(egui::pos2(rect.left() + 26.0, rect.top() + 35.0), Align2::LEFT_CENTER, pane, FontId::monospace(9.5), MUTED);
-+                                let status = if info.focused { format!("{} · focused", info.status) } else { info.status.clone() };
++                                ui.painter().text(egui::pos2(rect.left() + 26.0, rect.top() + 17.0), Align2::LEFT_CENTER, pane, semibold(12.0), INK);
++                                ui.painter().text(egui::pos2(rect.left() + 108.0, rect.top() + 17.0), Align2::LEFT_CENTER, kind, FontId::monospace(9.5), MUTED);
++                                let status = state(&info.status);
 +                                ui.painter().text(egui::pos2(rect.right() - 12.0, rect.top() + 17.0), Align2::RIGHT_CENTER, status, FontId::monospace(9.5), color);
-+                                if chosen {
-+                                    ui.painter().text(egui::pos2(rect.right() - 12.0, rect.top() + 35.0), Align2::RIGHT_CENTER, "prompt target", FontId::monospace(8.5), ACCENT);
++                                let sub = match (info.focused, chosen) {
++                                    (true, true) => "focused · prompt target".to_string(),
++                                    (true, false) => "focused".to_string(),
++                                    (false, true) => "prompt target".to_string(),
++                                    (false, false) => String::new(),
++                                };
++                                if !sub.is_empty() {
++                                    ui.painter().text(egui::pos2(rect.left() + 26.0, rect.top() + 35.0), Align2::LEFT_CENTER, sub, FontId::monospace(8.5), ACCENT);
 +                                }
 +                                if resp.clicked() {
 +                                    pick = Some(info.target.clone());

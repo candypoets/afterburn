@@ -218,7 +218,7 @@ def _workspace_header(w, section="Workspaces", address="100.104.9.15:47821"):
              x=0, y=0, w=w, h=56, fill=UI_PANEL)
 
 
-def _map_header(w, tabs, active, live=3, sync=None, sync_label="Sync", agent="3 agents · 1 working"):
+def _map_header(w, tabs, active, live=3, sync=None, sync_label="Sync", agent="3 agents · 1 running"):
     """The app's IDE-like header: sidebar toggle, page tabs, + Page, live, Sync."""
     kids = [
         # macOS draws these over the content view; the sidebar icon starts clear of them.
@@ -503,24 +503,24 @@ def _screen_agents():
           _ui("AGENTS", 9.5, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=3, x=20, y=16),
           _ui("wX", 9, K.MONO, "Regular", UI_MUTED, name="ws", x=84, y=17),
           _ui("×", 16, K.SANS, "Regular", UI_MUTED, name="close", x=430, y=10),
-          _ui("3 agents · 1 working", 12, K.SANS, "Regular", UI_TEXT, name="summary", x=20, y=52),
+          _ui("3 agents · 1 running", 12, K.SANS, "Regular", UI_TEXT, name="summary", x=20, y=52),
           F("dsh row",
             F("dot", x=12, y=24, w=7, h=7, fill=UI_ACCENT, radius=4),
-            _ui("dsh", 12.5, K.SANS, "Medium", UI_TEXT, name="kind", x=28, y=10),
-            _ui("wX:p1", 9.5, K.MONO, "Regular", UI_MUTED, name="pane", x=28, y=28),
-            _ui("working · focused", 9.5, K.MONO, "Regular", UI_ACCENT, name="status", x=300, y=10),
-            _ui("prompt target", 8.5, K.MONO, "Regular", UI_ACCENT, name="target", x=300, y=28),
+            _ui("wX:p1", 12, K.MONO, "Medium", UI_TEXT, name="pane", x=28, y=10),
+            _ui("DSH", 9.5, K.MONO, "Regular", UI_MUTED, name="harness", x=100, y=11),
+            _ui("running", 9.5, K.MONO, "Regular", UI_ACCENT, name="status", x=340, y=10),
+            _ui("focused · prompt target", 8.5, K.MONO, "Regular", UI_ACCENT, name="target", x=28, y=28),
             x=20, y=80, w=420, h=52, fill=UI_SOFT, stroke=UI_ACCENT, sw=1, radius=6),
           F("claude row",
             F("dot", x=12, y=24, w=7, h=7, fill="#2F6F6A", radius=4),
-            _ui("claude", 12.5, K.SANS, "Medium", UI_TEXT, name="kind", x=28, y=10),
-            _ui("wX:p2", 9.5, K.MONO, "Regular", UI_MUTED, name="pane", x=28, y=28),
+            _ui("wX:p2", 12, K.MONO, "Medium", UI_TEXT, name="pane", x=28, y=10),
+            _ui("CLAUDE", 9.5, K.MONO, "Regular", UI_MUTED, name="harness", x=100, y=11),
             _ui("idle", 9.5, K.MONO, "Regular", "#2F6F6A", name="status", x=376, y=10),
             x=20, y=138, w=420, h=52, fill=UI_PANEL, radius=6),
           F("dsh done row",
             F("dot", x=12, y=24, w=7, h=7, fill="#2F6F6A", radius=4),
-            _ui("dsh", 12.5, K.SANS, "Medium", UI_TEXT, name="kind", x=28, y=10),
-            _ui("wX:p3", 9.5, K.MONO, "Regular", UI_MUTED, name="pane", x=28, y=28),
+            _ui("wX:p3", 12, K.MONO, "Medium", UI_TEXT, name="pane", x=28, y=10),
+            _ui("DSH", 9.5, K.MONO, "Regular", UI_MUTED, name="harness", x=100, y=11),
             _ui("done", 9.5, K.MONO, "Regular", "#2F6F6A", name="status", x=376, y=10),
             x=20, y=196, w=420, h=52, fill=UI_PANEL, radius=6),
           _ui("Refresh", 10.5, K.SANS, "Regular", UI_MUTED, name="refresh", x=20, y=272),
@@ -762,7 +762,7 @@ def build_product(doc):
     doc.place(page, _ui("07 · HEADER + PANE — pages are tabs; the sidebar icon opens Herdr workspaces", 10, K.MONO, "Medium", K.MUTED, name="c7", ls=3), 64, 2262)
     doc.place(page, _ui("08 · NEW PAGE — name it and send the first prompt", 10, K.MONO, "Medium", K.MUTED, name="c8", ls=3), 1092, 2262)
     doc.place(page, _ui("09 · BRANCHES — worktrees are branches under the repository", 10, K.MONO, "Medium", K.MUTED, name="c9", ls=3), 64, 2942)
-    doc.place(page, _ui("10 · AGENTS — the header count opens the full breakdown", 10, K.MONO, "Medium", K.MUTED, name="c10", ls=3), 1092, 2942)
+    doc.place(page, _ui("10 · AGENTS — pane, harness, state; the header count opens it", 10, K.MONO, "Medium", K.MUTED, name="c10", ls=3), 1092, 2942)
     doc.place(page, _ui("11 · MODEL — sent once, synced by a button", 10, K.MONO, "Medium", K.MUTED, name="c11", ls=3), 64, 3622)
     doc.place(page, _screen_workspaces(), 64, 250)
     doc.place(page, _screen_empty(), 1092, 250)
