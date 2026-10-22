@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -55,6 +56,8 @@ pub struct WorkspaceView {
     pub repo: Option<String>,
     /// Whether the checkout is a linked git worktree.
     pub worktree: bool,
+    /// The checked-out branch, when the path is a git checkout.
+    pub branch: Option<String>,
     /// Number of recognized agents.
     pub agents: usize,
     /// Sorted, deduplicated agent kinds.
@@ -243,11 +246,13 @@ impl ProjectService {
                     pane_path(&panes)
                 }
             };
+            let branch = path.as_deref().and_then(git_branch);
             views.push(WorkspaceView {
                 id: workspace.workspace_id.clone(),
                 label: workspace.label.clone(),
                 path,
                 repo: worktree.and_then(|tree| tree.repo_name.clone()),
+                branch,
                 worktree: worktree
                     .and_then(|tree| tree.is_linked_worktree)
                     .unwrap_or(false),
@@ -798,4 +803,18 @@ mod tests {
         assert_eq!(pane_path(&panes).as_deref(), Some("/root/code/mindmap"));
         assert_eq!(pane_path(&[]), None);
     }
+}
+
+
+/// The checked-out branch of `path`, or `None` when it is not a git checkout.
+fn git_branch(path: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!branch.is_empty() && branch != "HEAD").then_some(branch)
 }

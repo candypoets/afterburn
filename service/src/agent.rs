@@ -550,6 +550,7 @@ mod tests {
             path: path.map(str::to_owned),
             repo: Some("eisledger".into()),
             worktree: false,
+            branch: Some("main".into()),
             agents: 0,
             agent_names: Vec::new(),
             agent_status: "unknown".into(),

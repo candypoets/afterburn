@@ -196,7 +196,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client-src/crates/ui-egui/src/compose.rs
 --- .client-src-orig/crates/ui-egui/src/compose.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 13:34:23.799252063 +0200
++++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 14:09:32.367932501 +0200
 @@ -0,0 +1,989 @@
 +//! The bottom comment composer: one bar that is both the comment box and the prompt box.
 +//!
@@ -1104,7 +1104,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 +
 +#[cfg(not(target_arch = "wasm32"))]
-+fn send_request(address: &str, request: &str) -> Result<SendReply, String> {
++pub(crate) fn send_request(address: &str, request: &str) -> Result<SendReply, String> {
 +    let line = ask(address, request, SEND_TIMEOUT)?;
 +    serde_json::from_str(&line).map_err(|e| format!("The project service sent a reply this app can't read: {e}"))
 +}
@@ -1189,7 +1189,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 13:47:35.092999708 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 14:09:32.383932294 +0200
 @@ -14,6 +14,7 @@
  pub mod colorpicker;
  pub mod comments;
@@ -1210,7 +1210,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      if id.starts_with("tool.") || id.starts_with("text.edit") {
          return false;
      }
-@@ -66,6 +72,41 @@
+@@ -66,8 +72,44 @@
      }
  }
  
@@ -1251,8 +1251,11 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +
  pub mod menus;
  pub mod missing_fonts;
++pub mod new_page;
  pub mod online;
-@@ -84,6 +125,7 @@
+ pub mod pending_open;
+ pub mod plugins_ui;
+@@ -84,6 +126,7 @@
  pub mod shortcuts;
  pub mod shortcuts_panel;
  pub mod style_picker;
@@ -1260,7 +1263,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  pub mod tabs;
  pub mod theme;
  pub mod toolbar;
-@@ -94,6 +136,7 @@
+@@ -94,6 +137,7 @@
  pub mod versions;
  pub mod widgets;
  pub mod windows;
@@ -1268,7 +1271,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  
  #[cfg(test)]
  mod theme_startup_tests;
-@@ -643,7 +686,7 @@
+@@ -643,7 +687,7 @@
              shortcuts_tab: figcraft_engine::keymap::Group::Essential,
              shortcuts_query: String::new(),
              opacity_digit: None,
@@ -1277,10 +1280,12 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              home_view: home::Home::default(),
              title_bar: TitleBar::Native,
              icon_gallery: false,
-@@ -717,6 +760,15 @@
+@@ -717,6 +761,17 @@
  pub struct FigApp {
      pub session: Session,
      pub ui: UiState,
++    /// The New page dialog.
++    pub new_page: new_page::State,
 +    /// The Workspaces screen (map mode's home): the listed Herdr workspaces and its requests.
 +    pub ws: workspaces::State,
 +    /// The Herdr workspace whose map is open: the composer sends its comments there. `None` when
@@ -1293,18 +1298,19 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      pub canvas: canvas::CanvasState,
      pub services: Box<dyn Services>,
      worker: Option<render_worker::Worker>,
-@@ -763,6 +815,10 @@
+@@ -763,6 +818,11 @@
          let pages_height = session.prefs.pages_height;
          Self {
              ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
 +            ws: workspaces::State::default(),
 +            active_workspace: None,
++            new_page: new_page::State::default(),
 +            compose: compose::State::default(),
 +            sync: sync::State::default(),
              session,
              canvas: canvas::CanvasState::default(),
              services,
-@@ -1489,7 +1545,13 @@
+@@ -1489,7 +1549,13 @@
              return;
          }
          if !self.has_files() || self.ui.home {
@@ -1319,7 +1325,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1547,91 +1609,94 @@
+@@ -1547,91 +1613,94 @@
                      right::right_panel(self, ui)
                  });
          }
@@ -1429,8 +1435,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                            .on_hover_text("New page")
 +                            .clicked()
 +                        {
-+                            let name = format!("Page {}", pages.len() + 1);
-+                            self.run("page.add", serde_json::json!({"name": name}));
++                            self.new_page.start(pages.len() + 1);
 +                        }
 +                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 +                            ui.add_space(8.0);
@@ -1480,6 +1485,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +            compose::show(self, &ctx);
 +            // The Sync button and widget, beside the map bar and above the composer.
 +            sync::show(self, &ctx);
++            new_page::show(self, &ctx);
 +        }
          // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
          for (name, x, shown, grows) in edges {
@@ -1506,6 +1512,295 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/menus.rs client-s
      }
      crate::colorpicker::show(app, ctx);
      palette(app, ctx);
+diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs client-src/crates/ui-egui/src/new_page.rs
+--- .client-src-orig/crates/ui-egui/src/new_page.rs	1970-01-01 01:00:00.000000000 +0100
++++ client-src/crates/ui-egui/src/new_page.rs	2026-10-22 14:11:10.974654904 +0200
+@@ -0,0 +1,285 @@
++//! The New page dialog: a name, a first prompt, and the agent that will design it.
++//!
++//! `page.add` selects the new page; if a prompt is given it is sent once to the composer's chosen
++//! agent with the service's `send` method. The page exists even if the prompt later fails, so a
++//! retry never creates a second page.
++
++use std::sync::mpsc::{self, Receiver};
++
++use egui::{Align2, Color32, CornerRadius, Id, Margin, RichText, Stroke, vec2};
++use serde_json::json;
++
++use crate::FigApp;
++use crate::compose::{SendReply, send_request};
++use crate::theme::{regular, semibold};
++use crate::workspaces;
++
++const PANEL: Color32 = Color32::WHITE;
++const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
++const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
++const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
++const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
++const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
++
++/// The dialog's state.
++#[derive(Default)]
++pub struct State {
++    pub open: bool,
++    name: String,
++    prompt: String,
++    busy: bool,
++    /// The page was created; a retry only sends the prompt again.
++    created: bool,
++    error: Option<String>,
++    rx: Option<Receiver<Result<SendReply, String>>>,
++    focus: bool,
++}
++
++impl State {
++    /// Open with a suggested name.
++    pub fn start(&mut self, number: usize) {
++        self.open = true;
++        self.name = format!("Page {number}");
++        self.prompt.clear();
++        self.busy = false;
++        self.created = false;
++        self.error = None;
++        self.rx = None;
++        self.focus = true;
++    }
++}
++
++/// Draw the dialog (map mode). It owns its own send thread so the composer is untouched.
++pub fn show(app: &mut FigApp, ctx: &egui::Context) {
++    poll(app);
++    if !app.new_page.open {
++        return;
++    }
++    let targets = app.compose.targets.clone();
++    let mut selected = app.compose.target.clone();
++    let mut close = false;
++    let mut create = false;
++    let busy = app.new_page.busy;
++    let created = app.new_page.created;
++
++    egui::Area::new(Id::new("new_page_modal"))
++        .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0))
++        .order(egui::Order::Foreground)
++        .show(ctx, |ui| {
++            egui::Frame::NONE
++                .fill(PANEL)
++                .stroke(Stroke::new(1.0, BORDER))
++                .corner_radius(CornerRadius::same(10))
++                .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(46) })
++                .inner_margin(Margin::symmetric(20, 16))
++                .show(ui, |ui| {
++                    ui.set_width(420.0);
++                    ui.horizontal(|ui| {
++                        ui.label(RichText::new("NEW PAGE").font(egui::FontId::monospace(9.5)).color(ACCENT));
++                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                            if ui.add(egui::Button::new(RichText::new("×").size(16.0).color(MUTED)).frame(false)).clicked() {
++                                close = true;
++                            }
++                        });
++                    });
++                    ui.add_space(10.0);
++                    ui.label(RichText::new("Name").font(semibold(11.0)).color(INK));
++                    ui.add_space(4.0);
++                    let name = ui.add_enabled(
++                        !created && !busy,
++                        egui::TextEdit::singleline(&mut app.new_page.name)
++                            .font(regular(13.0))
++                            .desired_width(f32::INFINITY)
++                            .hint_text("Page name"),
++                    );
++                    if app.new_page.focus {
++                        name.request_focus();
++                        app.new_page.focus = false;
++                    }
++                    ui.add_space(12.0);
++                    ui.label(RichText::new("First prompt").font(semibold(11.0)).color(INK));
++                    ui.add_space(4.0);
++                    ui.add(
++                        egui::TextEdit::multiline(&mut app.new_page.prompt)
++                            .font(regular(12.5))
++                            .desired_rows(4)
++                            .desired_width(f32::INFINITY)
++                            .hint_text("What should this page become?"),
++                    );
++                    ui.add_space(12.0);
++                    ui.label(RichText::new("Agent").font(semibold(11.0)).color(INK));
++                    ui.add_space(4.0);
++                    if targets.is_empty() {
++                        ui.label(RichText::new("No agent list yet; choose one in the composer.").font(regular(11.0)).color(MUTED));
++                    } else {
++                        let current = selected
++                            .as_ref()
++                            .map(|target| kind_label(target.kind()).to_string())
++                            .unwrap_or_else(|| "Choose an agent".to_string());
++                        egui::ComboBox::from_id_salt("new_page_agent")
++                            .selected_text(RichText::new(current).font(regular(12.0)).color(INK))
++                            .width(260.0)
++                            .show_ui(ui, |ui| {
++                                for info in &targets {
++                                    let label = if info.new_agent {
++                                        format!("start {}", kind_label(info.target.kind()))
++                                    } else if info.status.trim().is_empty() {
++                                        kind_label(info.target.kind()).to_string()
++                                    } else {
++                                        format!("{} · {}", kind_label(info.target.kind()), info.status)
++                                    };
++                                    if ui.selectable_label(selected.as_ref() == Some(&info.target), label).clicked() {
++                                        selected = Some(info.target.clone());
++                                    }
++                                }
++                            });
++                    }
++                    if let Some(error) = app.new_page.error.clone() {
++                        ui.add_space(10.0);
++                        ui.label(RichText::new(error).font(regular(11.0)).color(ACCENT));
++                    }
++                    ui.add_space(16.0);
++                    ui.horizontal(|ui| {
++                        let prompt_missing = app.new_page.prompt.trim().is_empty();
++                        let can_create = !app.new_page.name.trim().is_empty()
++                            && !app.new_page.name.trim().starts_with('-')
++                            && (prompt_missing || selected.is_some())
++                            && !busy;
++                        let label = if busy {
++                            "Sending…"
++                        } else if created {
++                            "Send prompt"
++                        } else if prompt_missing {
++                            "Create page"
++                        } else {
++                            "Create and prompt"
++                        };
++                        let button = egui::Button::new(RichText::new(label).font(semibold(11.5)).color(Color32::WHITE))
++                            .fill(if can_create { ACCENT } else { Color32::from_rgb(0xC9, 0xB7, 0xB2) })
++                            .corner_radius(CornerRadius::same(6))
++                            .min_size(vec2(150.0, 34.0));
++                        if ui.add_enabled(can_create, button).clicked() {
++                            create = true;
++                        }
++                        ui.add_space(8.0);
++                        if ui.add_enabled(!busy, egui::Button::new(RichText::new("Cancel").font(regular(11.5)).color(MUTED)).frame(false)).clicked() {
++                            close = true;
++                        }
++                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                            ui.label(RichText::new("The page is blank until the agent draws.").font(egui::FontId::monospace(8.5)).color(FAINT));
++                        });
++                    });
++                });
++        });
++
++    if selected != app.compose.target {
++        app.compose.target = selected;
++    }
++    if close && !busy {
++        app.new_page.open = false;
++    }
++    if create {
++        submit(app, ctx);
++    }
++    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !busy {
++        app.new_page.open = false;
++    }
++}
++
++fn submit(app: &mut FigApp, ctx: &egui::Context) {
++    let name = app.new_page.name.trim().to_string();
++    if name.is_empty() || name.starts_with('-') {
++        app.new_page.error = Some("Name the page; a leading '-' would make it a divider.".to_string());
++        return;
++    }
++    if !app.new_page.created {
++        if app.run("page.add", json!({"name": name})).is_none() {
++            app.new_page.error = Some(app.ui.last_error.take().unwrap_or_else(|| "The page could not be created.".to_string()));
++            return;
++        }
++        app.new_page.created = true;
++    }
++    let prompt = app.new_page.prompt.trim().to_string();
++    if prompt.is_empty() {
++        app.new_page.open = false;
++        app.toast(format!("Created {name}"));
++        return;
++    }
++    let Some(workspace) = app.active_workspace.clone() else {
++        app.new_page.error = Some("Open a workspace map before prompting an agent.".to_string());
++        return;
++    };
++    let Some(target) = app.compose.target.clone() else {
++        app.new_page.error = Some("Choose an agent for the first prompt.".to_string());
++        return;
++    };
++    let text = format!("Design the new page \"{name}\".\n\n{prompt}");
++    let request = json!({
++        "id": 1,
++        "method": "send",
++        "workspace": workspace,
++        "target": target.line(),
++        "prompt": text,
++        "comments": [],
++    })
++    .to_string();
++    let (tx, rx) = mpsc::channel();
++    app.new_page.busy = true;
++    app.new_page.error = None;
++    app.new_page.rx = Some(rx);
++    let address = workspaces::service_addr();
++    let context = ctx.clone();
++    let spawned = std::thread::Builder::new().name("figcraft-new-page-prompt".into()).spawn(move || {
++        let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| send_request(&address, &request)))
++            .unwrap_or_else(|_| Err("The first prompt failed unexpectedly.".to_string()));
++        let _ = tx.send(reply);
++        context.request_repaint();
++    });
++    if let Err(error) = spawned {
++        app.new_page.busy = false;
++        app.new_page.rx = None;
++        app.new_page.error = Some(format!("Could not send the first prompt: {error}"));
++    }
++}
++
++fn poll(app: &mut FigApp) {
++    let received = app.new_page.rx.as_ref().map(Receiver::try_recv);
++    let received = match received {
++        None => return,
++        Some(Ok(reply)) => reply,
++        Some(Err(mpsc::TryRecvError::Empty)) => return,
++        Some(Err(mpsc::TryRecvError::Disconnected)) => {
++            app.new_page.rx = None;
++            app.new_page.busy = false;
++            app.new_page.error = Some("The first prompt ended without an answer.".to_string());
++            return;
++        }
++    };
++    app.new_page.rx = None;
++    app.new_page.busy = false;
++    match received {
++        Ok(reply) if reply.ok => {
++            app.new_page.open = false;
++            let agent = reply
++                .agent
++                .as_ref()
++                .and_then(|agent| agent.get("kind").and_then(serde_json::Value::as_str))
++                .unwrap_or("the agent");
++            app.toast(format!("Created {}; prompt sent to {agent}", app.new_page.name.trim()));
++        }
++        Ok(reply) => {
++            app.new_page.error = Some(reply.error.unwrap_or_else(|| "The prompt was refused.".to_string()));
++        }
++        Err(error) => app.new_page.error = Some(error),
++    }
++}
++
++fn kind_label(kind: &str) -> &str {
++    match kind {
++        "codex" => "codex",
++        "claude" => "claude",
++        "kimi" => "kimi",
++        "dsh" | "dsh-tui" => "dsh",
++        other => other,
++    }
++}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-src/crates/ui-egui/src/sync.rs
 --- .client-src-orig/crates/ui-egui/src/sync.rs	1970-01-01 01:00:00.000000000 +0100
 +++ client-src/crates/ui-egui/src/sync.rs	2026-10-22 13:47:35.080999864 +0200
@@ -3075,8 +3370,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs client-src/crates/ui-egui/src/workspaces.rs
 --- .client-src-orig/crates/ui-egui/src/workspaces.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/workspaces.rs	2026-10-22 13:27:04.112948830 +0200
-@@ -0,0 +1,1613 @@
++++ client-src/crates/ui-egui/src/workspaces.rs	2026-10-22 14:07:39.681392523 +0200
+@@ -0,0 +1,1688 @@
 +//! The Workspaces screen: every Herdr workspace on the project host, with or without a map.
 +//!
 +//! The screen reads the project service over plain TCP (one JSON object per line) on a thread of
@@ -3084,6 +3379,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +//! never waits on the network. Opening a workspace asks the service to publish its document and
 +//! gets an invite link back; the screen joins that link exactly as if the human had pasted it.
 +
++use std::collections::BTreeMap;
++use std::path::Path;
 +use std::sync::OnceLock;
 +use std::sync::mpsc::{self, Receiver};
 +
@@ -3182,6 +3479,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    /// `"map"`, `"empty"` or `"none"`.
 +    #[serde(default)]
 +    pub map: String,
++    /// The checked-out branch, when the path is a git checkout.
++    #[serde(default)]
++    pub branch: Option<String>,
 +    /// The workspace's document, when it has one.
 +    #[serde(default)]
 +    pub file: Option<String>,
@@ -3793,6 +4093,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    let skin = Skin::of(&Tokens::get(&ctx));
 +    let active = app.active_workspace.clone();
 +    let rows = app.ws.rows.clone();
++    let groups = grouped(&rows);
 +    let busy = app.ws.busy.is_some();
 +    let error = app.ws.error.clone();
 +    let current = active.as_deref();
@@ -3802,7 +4103,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    ui.horizontal(|ui| {
 +        ui.add_space(14.0);
 +        eyebrow(ui, &skin, "WORKSPACES");
-+        ui.label(egui::RichText::new(rows.len().to_string()).font(mono(9.5)).color(skin.faint));
++        ui.label(egui::RichText::new(groups.len().to_string()).font(mono(9.5)).color(skin.faint));
 +        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 +            ui.add_space(12.0);
 +            if ui
@@ -3821,10 +4122,10 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +
 +    egui::ScrollArea::vertical().id_salt("workspace_pane_scroll").show(ui, |ui| {
 +        let mut chosen = None;
-+        for w in &rows {
-+            let is_active = current == Some(w.id.as_str());
-+            let is_busy = busy && app.ws.selected.as_deref() == Some(w.id.as_str());
-+            if let Some(choice) = row(ui, &skin, w, is_active, is_busy) {
++        for (base, branches) in &groups {
++            let is_active = current.is_some_and(|id| branches.iter().any(|b| b.id == id));
++            let is_busy = busy && app.ws.selected.as_deref() == Some(base.id.as_str());
++            if let Some(choice) = row(ui, &skin, base, is_active, is_busy) {
 +                chosen = Some(choice);
 +            }
 +        }
@@ -3930,11 +4231,51 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    }
 +}
 +
++/// The repository a workspace belongs to; linked worktrees share their base repo's key.
++fn repo_key(w: &Workspace) -> String {
++    w.repo
++        .clone()
++        .filter(|repo| !repo.trim().is_empty())
++        .or_else(|| w.path.clone())
++        .unwrap_or_else(|| w.id.clone())
++}
++
++/// One row per repository: the base checkout and its linked worktrees as branches.
++fn grouped(rows: &[Workspace]) -> Vec<(Workspace, Vec<Workspace>)> {
++    let mut buckets: BTreeMap<String, Vec<&Workspace>> = BTreeMap::new();
++    for w in rows {
++        buckets.entry(repo_key(w)).or_default().push(w);
++    }
++    let mut groups = Vec::new();
++    for (_, mut members) in buckets {
++        members.sort_by_key(|w| w.worktree);
++        let base = members.first().map(|w| (*w).clone()).unwrap_or_default();
++        let branches = members.into_iter().cloned().collect();
++        groups.push((base, branches));
++    }
++    groups
++}
++
++/// The branch a workspace represents: git's branch name, else the worktree's short name.
++fn branch_label(w: &Workspace) -> String {
++    w.branch
++        .clone()
++        .filter(|branch| !branch.trim().is_empty())
++        .or_else(|| {
++            w.path
++                .as_deref()
++                .and_then(|path| Path::new(path).file_name())
++                .map(|name| name.to_string_lossy().to_string())
++        })
++        .unwrap_or_else(|| w.name().to_string())
++}
++
 +fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
 +    ui.painter().rect_filled(rect, CornerRadius::ZERO, s.panel);
 +    let head = Rect::from_min_size(rect.min, vec2(rect.width(), 42.0));
 +    ui.painter().text(pos2(head.min.x + 16.0, head.center().y), Align2::LEFT_CENTER, "WORKSPACES", mono(9.5), s.faint);
-+    let count = app.ws.rows.len().to_string();
++    let groups = grouped(&app.ws.rows);
++    let count = groups.len().to_string();
 +    ui.painter().text(pos2(head.max.x - 16.0, head.center().y), Align2::RIGHT_CENTER, count, mono(10.0), s.faint);
 +    ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, s.border));
 +
@@ -3949,9 +4290,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +                empty_list(app, ui, s, &ctx, error.as_deref(), busy, started);
 +            } else {
 +                let mut chosen = None;
-+                for w in &app.ws.rows {
-+                    let selected = app.ws.selected.as_deref() == Some(w.id.as_str());
-+                    if let Some(c) = row(ui, s, w, selected, busy) {
++                for (base, branches) in &groups {
++                    let selected = app
++                        .ws
++                        .selected
++                        .as_deref()
++                        .is_some_and(|id| branches.iter().any(|b| b.id == id));
++                    if let Some(c) = row(ui, s, base, selected, busy) {
 +                        chosen = Some(c);
 +                    }
 +                }
@@ -4239,6 +4584,31 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +        }
 +    }
 +
++    let branches = grouped(&app.ws.rows)
++        .into_iter()
++        .find(|(_, all)| all.iter().any(|b| b.id == w.id))
++        .map(|(_, all)| all)
++        .unwrap_or_default();
++    if branches.len() > 1 {
++        ui.add_space(20.0);
++        eyebrow(ui, s, "BRANCHES");
++        ui.add_space(6.0);
++        for branch in &branches {
++            let active = app.active_workspace.as_deref() == Some(branch.id.as_str());
++            let kind = branch.map_state();
++            let label = format!("{}  ·  {}", branch_label(branch), kind.badge());
++            let enabled = app.ws.busy.is_none();
++            if secondary_button_alloc(ui, s, Id::new(("workspace_branch", &branch.id)), &label, enabled) {
++                if !active {
++                    if kind == MapState::Map {
++                        app.ws.act(&ctx, &branch.id, false);
++                    } else {
++                        app.ws.select(&branch.id);
++                    }
++                }
++            }
++        }
++    }
 +    agents_block(ui, s, w);
 +    details_block(ui, s, w);
 +}
