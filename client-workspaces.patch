@@ -300,7 +300,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-src/crates/ui-egui/src/canvas.rs
 --- .client-src-orig/crates/ui-egui/src/canvas.rs	2026-10-21 19:19:18.000000000 +0200
-+++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 15:56:57.436427261 +0200
++++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 16:20:18.714271646 +0200
 @@ -242,7 +242,10 @@
          painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
      }
@@ -335,15 +335,23 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return false;
      }
      if resp.secondary_clicked() {
-@@ -877,6 +882,43 @@
+@@ -877,6 +882,76 @@
  
  /// Everything drawn over the rendered page; returns the frame labels drawn (frame, corners on the
  /// page) for the engine to hit-test.
-+/// A clickable link badge on every card that has a dedicated detail page.
++/// A clickable subpage marker on every card that has a dedicated page.
++///
++/// It is drawn in page scale inside the card's top-right corner (an elbow and the word), so it
++/// shrinks with the canvas and disappears below 30% zoom. A screen-space badge stays the same
++/// size at every zoom and litters a zoomed-out map.
 +fn detail_badges(app: &mut FigApp, ui: &mut Ui) {
-+    let links: Vec<(NodeId, u64, Pos2)> = match app.session.ds() {
++    let links: Vec<(NodeId, u64, Pos2, f32)> = match app.session.ds() {
 +        Ok(ds) => {
 +            let doc = ds.doc.clone();
++            let zoom = ds.view.zoom as f32;
++            if zoom < 0.3 {
++                return;
++            }
 +            doc.subtree(ds.page)
 +                .into_iter()
 +                .filter_map(|id| {
@@ -354,22 +362,47 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
 +                        .parse::<u64>()
 +                        .ok()?;
 +                    let q = node_quad(app, &doc, id)?;
-+                    Some((id, page_id, pos2(q[1].x - 14.0, q[1].y + 14.0)))
++                    Some((id, page_id, q[1], zoom))
 +                })
 +                .collect()
 +        }
 +        Err(_) => Vec::new(),
 +    };
-+    let painter = ui.painter();
-+    for (id, page_id, center) in links {
-+        let ink = Color32::from_rgb(0x2F, 0x6F, 0x6A);
-+        painter.circle_filled(center, 11.0, ink);
-+        painter.circle_stroke(center, 11.0, stroke(Color32::WHITE, 1.5));
-+        painter.text(center, Align2::CENTER_CENTER, "↗", egui::FontId::proportional(12.0), Color32::WHITE);
-+        let hit = Rect::from_center_size(center, vec2(26.0, 26.0));
++    let painter = ui.painter().clone();
++    let ink = Color32::from_rgb(0xB5, 0x45, 0x2F);
++    for (id, page_id, corner, zoom) in links {
++        let galley = painter.layout_no_wrap(
++            "subpage".to_owned(),
++            egui::FontId::monospace(8.0 * zoom),
++            ink,
++        );
++        let mark = 6.0 * zoom;
++        let gap = 3.0 * zoom;
++        let width = mark + gap + galley.size().x;
++        let top = corner.y + 8.0 * zoom;
++        let left = corner.x - 12.0 * zoom - width;
++        let stroke = Stroke::new((1.2 * zoom).max(0.6), ink);
++        // The elbow: down from the corner, then right into the word (the "↳", drawn not typed).
++        painter.line_segment([pos2(left, top), pos2(left, top + mark)], stroke);
++        painter.line_segment([pos2(left, top + mark), pos2(left + mark, top + mark)], stroke);
++        painter.galley(
++            pos2(left + mark + gap, top + (mark - galley.size().y) / 2.0),
++            galley.clone(),
++            ink,
++        );
++        let hit =
++            Rect::from_min_size(pos2(left, top), vec2(width, mark.max(galley.size().y))).expand(6.0);
 +        let response = ui
 +            .interact(hit, ui.id().with(("detail_link", id)), Sense::click())
-+            .on_hover_text("Open detail page");
++            .on_hover_cursor(egui::CursorIcon::PointingHand)
++            .on_hover_text("Open subpage");
++        if response.hovered() {
++            let underline = top + (mark + galley.size().y) / 2.0 + 1.0;
++            painter.line_segment(
++                [pos2(left + mark + gap, underline), pos2(left + width, underline)],
++                Stroke::new((1.0 * zoom).max(0.5), ink),
++            );
++        }
 +        if response.clicked() {
 +            app.run("page.select", serde_json::json!({"id": page_id}));
 +        }
@@ -379,7 +412,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
  fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [Point; 4])> {
      let mut labels = Vec::new();
      let Ok(ds) = app.session.ds() else { return labels };
-@@ -1045,31 +1087,35 @@
+@@ -1045,31 +1120,35 @@
              } else {
                  4
              };
@@ -438,7 +471,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
              }
          }
      }
-@@ -1195,7 +1241,7 @@
+@@ -1195,7 +1274,7 @@
          painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
          painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
      }
@@ -1543,7 +1576,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 16:16:37.477138097 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 16:19:48.986656811 +0200
 @@ -6,6 +6,7 @@
  #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
  
@@ -1705,7 +1738,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1547,91 +1632,176 @@
+@@ -1547,90 +1632,196 @@
                      right::right_panel(self, ui)
                  });
          }
@@ -1786,8 +1819,6 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 -                                        );
 -                                    }
 -                                    if resp.clicked() {
--                                        self.run("page.select", serde_json::json!({"id": id}));
--                                    }
 +            egui::Panel::top("map_header")
 +                .exact_size(44.0)
 +                .resizable(false)
@@ -1821,14 +1852,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                                    self.page_tree.just_opened = true;
 +                                } else {
 +                                    self.run("page.select", serde_json::json!({"id": id}));
-                                 }
--                                ui.separator();
--                                ui.label(
--                                    egui::RichText::new(if joined {
--                                        format!("{people} live")
--                                    } else {
--                                        "offline".to_string()
--                                    })
++                                }
 +                            }
 +                            ui.add_space(2.0);
 +                        }
@@ -1845,14 +1869,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                            ui.add_space(12.0);
 +                            ui.label(
 +                                egui::RichText::new(if joined { format!("{people} live") } else { "offline".to_string() })
-                                     .size(10.0)
--                                    .color(if joined {
--                                        egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
--                                    } else {
--                                        ink
--                                    }),
--                                );
--                            });
++                                    .size(10.0)
 +                                    .color(if joined { egui::Color32::from_rgb(0x2F, 0x6F, 0x6A) } else { muted }),
 +                            );
 +                            let (summary, color) = agents::summary(&self.compose.targets, self.compose.targets_error.as_deref());
@@ -1872,50 +1889,84 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                });
 +        }
 +        if map_mode {
-+            let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
-+            // The page path is its own strip below the header, as designed: the breadcrumb is
-+            // informational and the only action on this row is the centered page tree.
-+            egui::Panel::top("map_breadcrumb")
-+                .exact_size(30.0)
-+                .resizable(false)
-+                .frame(egui::Frame::NONE.fill(t.panel))
-+                .show(ui, |ui| {
-+                    let rect = ui.max_rect();
-+                    ui.painter().line_segment(
-+                        [rect.left_bottom(), rect.right_bottom()],
-+                        egui::Stroke::new(1.0, t.border),
-+                    );
-+                    ui.horizontal_centered(|ui| {
-+                        ui.add_space(14.0);
-+                        let crumb = self
-+                            .session
-+                            .doc()
-+                            .ok()
-+                            .zip(self.session.page().ok())
-+                            .map(|(doc, page)| {
-+                                page_tree::path(doc, page)
-+                                    .iter()
-+                                    .filter_map(|id| doc.node(*id).map(|node| node.name.clone()))
-+                                    .collect::<Vec<_>>()
-+                                    .join(" › ")
-+                            })
-+                            .unwrap_or_default();
-+                        ui.label(egui::RichText::new(crumb).font(egui::FontId::monospace(9.5)).color(muted));
-+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++            // A root page has no path to show: the strip exists only while a subpage is open.
++            let breadcrumb: Vec<(figcraft_doc::NodeId, String)> = self
++                .session
++                .doc()
++                .ok()
++                .zip(self.session.page().ok())
++                .map(|(doc, page)| {
++                    page_tree::path(doc, page)
++                        .into_iter()
++                        .filter_map(|id| doc.node(id).map(|node| (id, node.name.clone())))
++                        .collect()
++                })
++                .unwrap_or_default();
++            if breadcrumb.len() > 1 {
++                let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
++                let ink = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
++                let last = breadcrumb.len() - 1;
++                let path = breadcrumb.clone();
++                egui::Panel::top("map_breadcrumb")
++                    .exact_size(30.0)
++                    .resizable(false)
++                    .frame(egui::Frame::NONE.fill(t.panel))
++                    .show(ui, |ui| {
++                        let rect = ui.max_rect();
++                        ui.painter().line_segment(
++                            [rect.left_bottom(), rect.right_bottom()],
++                            egui::Stroke::new(1.0, t.border),
++                        );
++                        ui.horizontal_centered(|ui| {
 +                            ui.add_space(12.0);
-+                            let response = ui.add(
-+                                egui::Button::new(egui::RichText::new("Page tree  ⌄").size(9.5).color(muted))
++                            for (index, (id, name)) in path.iter().enumerate() {
++                                if index > 0 {
++                                    ui.label(egui::RichText::new("›").font(egui::FontId::monospace(9.5)).color(muted));
++                                }
++                                let current = index == last;
++                                let response = ui.add(
++                                    egui::Button::new(
++                                        egui::RichText::new(name)
++                                            .font(egui::FontId::monospace(9.5))
++                                            .color(if current { ink } else { muted }),
++                                    )
 +                                    .frame(false),
-+                            );
-+                            a11y::button(&response, "Page tree");
-+                            if response.on_hover_text("All pages and subpages (⌘⇧P)").clicked() {
-+                                self.page_tree.open = true;
-+                                self.page_tree.just_opened = true;
++                                );
++                                if !current {
++                                    if response.on_hover_text(format!("Open {name}")).clicked() {
+                                         self.run("page.select", serde_json::json!({"id": id}));
+                                     }
+                                 }
+-                                ui.separator();
+-                                ui.label(
+-                                    egui::RichText::new(if joined {
+-                                        format!("{people} live")
+-                                    } else {
+-                                        "offline".to_string()
+-                                    })
+-                                    .size(10.0)
+-                                    .color(if joined {
+-                                        egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
+-                                    } else {
+-                                        ink
+-                                    }),
 +                            }
++                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                                ui.add_space(12.0);
++                                let response = ui.add(
++                                    egui::Button::new(egui::RichText::new("Page tree  ⌄").size(9.5).color(muted))
++                                        .frame(false),
+                                 );
++                                a11y::button(&response, "Page tree");
++                                if response.on_hover_text("All pages and subpages (⌘⇧P)").clicked() {
++                                    self.page_tree.open = true;
++                                    self.page_tree.just_opened = true;
++                                }
+                             });
                          });
 +                    });
-                 });
-         }
++            }
++        }
 +        if map_mode && self.ws.pane_open {
 +            egui::Panel::left("workspace_pane")
 +                .exact_size(300.0)
@@ -1935,7 +1986,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
 +                    a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
 +                    toolbar::show(self, ui);
-+                });
+                 });
 +            }
 +        });
 +        if map_mode {
@@ -1948,10 +1999,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +            page_delete::show(self, &ctx);
 +            page_tree::show(self, &ctx);
 +            page_tree::maintain(self, &ctx);
-+        }
+         }
          // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
          for (name, x, shown, grows) in edges {
-             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/menus.rs client-src/crates/ui-egui/src/menus.rs
 --- .client-src-orig/crates/ui-egui/src/menus.rs	2026-10-19 15:50:23.000000000 +0200
 +++ client-src/crates/ui-egui/src/menus.rs	2026-10-22 12:05:18.916502808 +0200
