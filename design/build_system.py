@@ -221,13 +221,17 @@ def _workspace_header(w, section="Workspaces", address="100.104.9.15:47821"):
 def _map_header(w, tabs, active, live=3, sync=None, sync_label="Sync"):
     """The app's IDE-like header: sidebar toggle, page tabs, + Page, live, Sync."""
     kids = [
-        F("Sidebar icon", x=14, y=15, w=18, h=15, fill=None, stroke=UI_MUTED, sw=1.2, radius=3),
-        F("Sidebar split", x=20, y=16, w=1, h=13, fill=UI_MUTED),
-        F("Sidebar line 1", x=16, y=18, w=3, h=1, fill=UI_MUTED),
-        F("Sidebar line 2", x=16, y=21, w=3, h=1, fill=UI_MUTED),
-        F("Sidebar line 3", x=16, y=24, w=3, h=1, fill=UI_MUTED),
+        # macOS draws these over the content view; the sidebar icon starts clear of them.
+        F("Close", x=16, y=15, w=10, h=10, fill="#FF5F57", radius=5),
+        F("Minimise", x=34, y=15, w=10, h=10, fill="#FEBB2E", radius=5),
+        F("Zoom", x=52, y=15, w=10, h=10, fill="#28C840", radius=5),
+        F("Sidebar icon", x=84, y=15, w=18, h=15, fill=None, stroke=UI_MUTED, sw=1.2, radius=3),
+        F("Sidebar split", x=90, y=16, w=1, h=13, fill=UI_MUTED),
+        F("Sidebar line 1", x=86, y=18, w=3, h=1, fill=UI_MUTED),
+        F("Sidebar line 2", x=86, y=21, w=3, h=1, fill=UI_MUTED),
+        F("Sidebar line 3", x=86, y=24, w=3, h=1, fill=UI_MUTED),
     ]
-    tx = 44
+    tx = 114
     for t in tabs:
         tw = len(t) * 6.7 + 24
         if t == active:
