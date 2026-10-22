@@ -1187,7 +1187,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 13:02:43.403874501 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 13:31:00.149890636 +0200
 @@ -14,6 +14,7 @@
  pub mod colorpicker;
  pub mod comments;
@@ -1196,7 +1196,19 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  pub mod control;
  pub mod credits;
  pub mod cursors;
-@@ -84,6 +85,7 @@
+@@ -57,6 +58,11 @@
+     if id.starts_with("comment.") || id.starts_with("collab.") || id.starts_with("view.") {
+         return true;
+     }
++    // Paging is navigation, not drawing: humans may add, rename, duplicate or remove a page even
++    // though they never edit what is on it. The background is design, so it stays with the agent.
++    if id.starts_with("page.") && id != "page.setBackground" {
++        return true;
++    }
+     if id.starts_with("tool.") || id.starts_with("text.edit") {
+         return false;
+     }
+@@ -84,6 +90,7 @@
  pub mod shortcuts;
  pub mod shortcuts_panel;
  pub mod style_picker;
@@ -1204,7 +1216,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  pub mod tabs;
  pub mod theme;
  pub mod toolbar;
-@@ -94,6 +96,7 @@
+@@ -94,6 +101,7 @@
  pub mod versions;
  pub mod widgets;
  pub mod windows;
@@ -1212,7 +1224,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  
  #[cfg(test)]
  mod theme_startup_tests;
-@@ -643,7 +646,7 @@
+@@ -643,7 +651,7 @@
              shortcuts_tab: figcraft_engine::keymap::Group::Essential,
              shortcuts_query: String::new(),
              opacity_digit: None,
@@ -1221,7 +1233,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              home_view: home::Home::default(),
              title_bar: TitleBar::Native,
              icon_gallery: false,
-@@ -717,6 +720,15 @@
+@@ -717,6 +725,15 @@
  pub struct FigApp {
      pub session: Session,
      pub ui: UiState,
@@ -1237,18 +1249,18 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      pub canvas: canvas::CanvasState,
      pub services: Box<dyn Services>,
      worker: Option<render_worker::Worker>,
-@@ -763,6 +775,10 @@
+@@ -763,6 +780,10 @@
          let pages_height = session.prefs.pages_height;
          Self {
              ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
 +            ws: workspaces::State::default(),
-+            active_workspace: std::env::var("MINDMAP_DEBUG_WORKSPACE").ok().filter(|w| !w.is_empty()),
++            active_workspace: None,
 +            compose: compose::State::default(),
 +            sync: sync::State::default(),
              session,
              canvas: canvas::CanvasState::default(),
              services,
-@@ -1489,7 +1505,13 @@
+@@ -1489,7 +1510,13 @@
              return;
          }
          if !self.has_files() || self.ui.home {
@@ -1263,7 +1275,24 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1590,6 +1612,18 @@
+@@ -1547,6 +1574,16 @@
+                     right::right_panel(self, ui)
+                 });
+         }
++        if map_mode && self.ws.pane_open {
++            egui::Panel::left("workspace_pane")
++                .exact_size(300.0)
++                .resizable(false)
++                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
++                .show(ui, |ui| {
++                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspaces");
++                    workspaces::pane(self, ui);
++                });
++        }
+         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+             let worker = self.worker.take();
+             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
+@@ -1590,6 +1627,22 @@
                          .show(ui, |ui| {
                              ui.spacing_mut().item_spacing = egui::vec2(14.0, 4.0);
                              ui.horizontal(|ui| {
@@ -1274,15 +1303,38 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                                        egui::Button::new(egui::RichText::new("Workspaces").size(12.0).color(muted))
 +                                            .frame(false),
 +                                    )
++                                    .on_hover_text("Workspaces pane")
 +                                    .clicked()
 +                                {
-+                                    self.ui.home = true;
++                                    self.ws.pane_open = !self.ws.pane_open;
++                                    if self.ws.pane_open {
++                                        self.ws.refresh(&ctx);
++                                    }
 +                                }
 +                                ui.separator();
                                  for (id, name) in &pages {
                                      let active = Some(*id) == current;
                                      let resp = ui.add(
-@@ -1631,6 +1665,10 @@
+@@ -1614,6 +1667,18 @@
+                                         self.run("page.select", serde_json::json!({"id": id}));
+                                     }
+                                 }
++                                if ui
++                                    .add(
++                                        egui::Button::new(egui::RichText::new("+ Page").size(10.5).color(muted))
++                                            .frame(false)
++                                            .min_size(egui::vec2(52.0, 20.0)),
++                                    )
++                                    .on_hover_text("New page")
++                                    .clicked()
++                                {
++                                    let name = format!("Page {}", pages.len() + 1);
++                                    self.run("page.add", serde_json::json!({"name": name}));
++                                }
+                                 ui.separator();
+                                 ui.label(
+                                     egui::RichText::new(if joined {
+@@ -1631,6 +1696,10 @@
                              });
                          });
                  });
@@ -1317,8 +1369,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/menus.rs client-s
      palette(app, ctx);
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-src/crates/ui-egui/src/sync.rs
 --- .client-src-orig/crates/ui-egui/src/sync.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/sync.rs	2026-10-22 13:07:03.740501452 +0200
-@@ -0,0 +1,1577 @@
++++ client-src/crates/ui-egui/src/sync.rs	2026-10-22 13:22:52.900203668 +0200
+@@ -0,0 +1,1582 @@
 +//! Sync: the map's drift from the last sync, the code drift since it, and one action.
 +//!
 +//! The button is a floating pill at the map's top right, never a mode: it opens a widget with the
@@ -1849,10 +1901,16 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    // The anchored area takes its first frame's size from `default_size`; without it the
 +    // scroll area inherits egui's 400-point default and the widget stops halfway down.
 +    let max_h = (ctx.content_rect().height() - 140.0).max(220.0);
-+    let scroll_h = (max_h - 96.0).max(140.0);
++    // The flight (or failure) card stays above the scroll area so it is visible even when the
++    // human had scrolled to the agent and note.
++    let job_card = app.sync.job.as_ref().is_some_and(|job| job.in_flight() || job.failed());
++    // A fixed, bounded viewport: an anchored Area that grows with its scrollable content would
++    // chase its own height, and shrinking to measured content lets egui's clipping hide the rest.
++    let widget_h = max_h.min(620.0);
++    let scroll_h = (widget_h - 96.0 - if job_card { 86.0 } else { 0.0 }).max(140.0);
 +    let area = egui::Area::new(Id::new("sync_widget"))
 +        .anchor(Align2::RIGHT_TOP, vec2(-EDGE, EDGE + BUTTON_H + 10.0))
-+        .default_size(vec2(WIDGET_W, max_h))
++        .default_size(vec2(WIDGET_W, widget_h))
 +        .order(egui::Order::Foreground)
 +        .show(ctx, |ui| {
 +            egui::Frame::NONE
@@ -1978,6 +2036,16 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    if state.dirty {
 +        ui.label(egui::RichText::new("the map changed since this diff").font(mono(8.5)).color(ACCENT));
 +    }
++    if let Some(job) = state.job.as_ref() {
++        if job.in_flight() {
++            ui.add_space(10.0);
++            flight_card(ui, job, compose);
++        } else if job.failed() {
++            let reason = job.reason.clone().unwrap_or_else(|| "The sync failed.".to_string());
++            ui.add_space(10.0);
++            failed_card(ui, &reason);
++        }
++    }
 +    ui.add_space(10.0);
 +    divider(ui);
 +    ui.add_space(10.0);
@@ -1985,23 +2053,12 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    egui::ScrollArea::vertical()
 +        .id_salt("sync_widget_body")
 +        .max_height(scroll_h)
-+        .auto_shrink([false, true])
++        .auto_shrink([false, false])
 +        .show(ui, |ui| {
 +            ui.set_width(ui.available_width());
 +            if let Some(error) = state.error.clone() {
 +                error_block(ui, &error);
 +                ui.add_space(10.0);
-+            }
-+
-+            if let Some(job) = state.job.as_ref() {
-+                if job.in_flight() {
-+                    flight_card(ui, job, compose);
-+                    ui.add_space(12.0);
-+                } else if job.failed() {
-+                    let reason = job.reason.clone().unwrap_or_else(|| "The sync failed.".to_string());
-+                    failed_card(ui, &reason);
-+                    ui.add_space(12.0);
-+                }
 +            }
 +
 +            match state.diff.as_ref() {
@@ -2024,17 +2081,16 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +                }
 +            }
 +
-+        });
-+
-+    ui.add_space(10.0);
-+    divider(ui);
-+    ui.add_space(12.0);
-+    eyebrow(ui, "AGENT", MUTED);
++            ui.add_space(16.0);
++            divider(ui);
++            ui.add_space(14.0);
++            eyebrow(ui, "AGENT", MUTED);
 +            ui.add_space(6.0);
 +            let picked = target_chip(ui, &compose.targets, compose.target.as_ref(), &mut state.menu_open);
 +            if picked.is_some() {
 +                compose.target = picked;
 +            }
++
 +            ui.add_space(14.0);
 +            eyebrow(ui, "NOTE FOR THIS SYNC", MUTED);
 +            ui.add_space(5.0);
@@ -2071,7 +2127,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +            } else {
 +                "The map stays editable."
 +            };
-+    ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
++            ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
++        });
 +    out
 +}
 +
@@ -2898,8 +2955,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs client-src/crates/ui-egui/src/workspaces.rs
 --- .client-src-orig/crates/ui-egui/src/workspaces.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/workspaces.rs	2026-10-22 12:03:30.681905151 +0200
-@@ -0,0 +1,1519 @@
++++ client-src/crates/ui-egui/src/workspaces.rs	2026-10-22 13:27:04.112948830 +0200
+@@ -0,0 +1,1613 @@
 +//! The Workspaces screen: every Herdr workspace on the project host, with or without a map.
 +//!
 +//! The screen reads the project service over plain TCP (one JSON object per line) on a thread of
@@ -3287,6 +3344,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    retry: Option<Retry>,
 +    /// The list was asked for once, when the screen first showed.
 +    started: bool,
++    /// The workspace pane is open beside the map. It survives a switch between workspaces.
++    pub pane_open: bool,
 +}
 +
 +impl State {
@@ -3599,6 +3658,96 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +    });
 +}
 +
++/// The togglable workspace pane beside an open map. It lists the same Herdr workspaces as the
++/// browser; clicking one switches the map in place instead of leaving the canvas.
++pub fn pane(app: &mut FigApp, ui: &mut Ui) {
++    let ctx = ui.ctx().clone();
++    app.ws.poll();
++    if join_ready(app) {
++        return;
++    }
++    if !app.ws.started {
++        app.ws.started = true;
++        app.ws.refresh(&ctx);
++    }
++    let skin = Skin::of(&Tokens::get(&ctx));
++    let active = app.active_workspace.clone();
++    let rows = app.ws.rows.clone();
++    let busy = app.ws.busy.is_some();
++    let error = app.ws.error.clone();
++    let current = active.as_deref();
++
++    ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
++    ui.add_space(12.0);
++    ui.horizontal(|ui| {
++        ui.add_space(14.0);
++        eyebrow(ui, &skin, "WORKSPACES");
++        ui.label(egui::RichText::new(rows.len().to_string()).font(mono(9.5)).color(skin.faint));
++        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++            ui.add_space(12.0);
++            if ui
++                .add(egui::Button::new(egui::RichText::new("Refresh").font(regular(10.0)).color(skin.muted)).frame(false))
++                .clicked()
++            {
++                app.ws.refresh(&ctx);
++            }
++        });
++    });
++    ui.add_space(8.0);
++    ui.painter().line_segment(
++        [ui.max_rect().left_top() + vec2(0.0, 34.0), ui.max_rect().right_top() + vec2(0.0, 34.0)],
++        Stroke::new(1.0, skin.border),
++    );
++
++    egui::ScrollArea::vertical().id_salt("workspace_pane_scroll").show(ui, |ui| {
++        let mut chosen = None;
++        for w in &rows {
++            let is_active = current == Some(w.id.as_str());
++            let is_busy = busy && app.ws.selected.as_deref() == Some(w.id.as_str());
++            if let Some(choice) = row(ui, &skin, w, is_active, is_busy) {
++                chosen = Some(choice);
++            }
++        }
++        if let Some(choice) = chosen {
++            match choice {
++                Chosen::Select(id) => {
++                    let kind = rows.iter().find(|w| w.id == id).map(|w| w.map_state());
++                    if kind == Some(MapState::Map) {
++                        app.ws.act(&ctx, &id, false);
++                    } else {
++                        app.ws.select(&id);
++                        app.ui.home = true;
++                    }
++                }
++                Chosen::Act { workspace, init } => {
++                    if init {
++                        app.ws.select(&workspace);
++                        app.ui.home = true;
++                    } else {
++                        app.ws.act(&ctx, &workspace, false);
++                    }
++                }
++            }
++        }
++    });
++
++    let foot = egui::Rect::from_min_size(pos2(ui.max_rect().left(), ui.max_rect().bottom() - 56.0), vec2(ui.max_rect().width(), 56.0));
++    ui.painter().rect_filled(foot, CornerRadius::ZERO, skin.panel);
++    ui.painter().line_segment([foot.left_top(), foot.right_top()], Stroke::new(1.0, skin.border));
++    if error.is_some() {
++        ui.painter().text(pos2(foot.left() + 14.0, foot.top() + 14.0), Align2::LEFT_CENTER, "Could not reach the service.", mono(9.0), skin.accent);
++    }
++    if ui
++        .put(
++            egui::Rect::from_min_size(pos2(foot.left() + 12.0, foot.top() + 24.0), vec2(foot.width() - 24.0, 24.0)),
++            egui::Button::new(egui::RichText::new("All workspaces").font(regular(10.5)).color(skin.muted)).frame(false),
++        )
++        .clicked()
++    {
++        app.ui.home = true;
++    }
++}
++
 +/// Join the link the service returned; true when the map is now showing (this frame is done).
 +fn join_ready(app: &mut FigApp) -> bool {
 +    let Some(link) = app.ws.join.take() else { return false };
@@ -3609,7 +3758,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs cli
 +            app.active_workspace = Some(workspace);
 +        }
 +        app.ui.home = false;
++        let pane_open = app.ws.pane_open;
 +        app.ws = State::default();
++        app.ws.pane_open = pane_open;
 +        return true;
 +    }
 +    let detail = app.ui.last_error.take();
