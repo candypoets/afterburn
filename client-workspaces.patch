@@ -300,19 +300,20 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/agents.rs client-
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-src/crates/ui-egui/src/canvas.rs
 --- .client-src-orig/crates/ui-egui/src/canvas.rs	2026-10-21 19:19:18.000000000 +0200
-+++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 12:11:56.315353931 +0200
-@@ -242,7 +242,9 @@
++++ client-src/crates/ui-egui/src/canvas.rs	2026-10-22 15:42:38.755552718 +0200
+@@ -242,7 +242,10 @@
          painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
      }
      app.session.tool.labels = overlays(app, &painter, &t);
 -    crate::frame_labels::rename_field(app, ui);
++    detail_badges(app, &painter);
 +    if !crate::map_mode() {
 +        crate::frame_labels::rename_field(app, ui);
 +    }
      // The zoom tool's area.
      if let (Some(start), Some(p)) = (app.canvas.zoom_drag, ctx.input(|i| i.pointer.hover_pos())) {
          let area = Rect::from_two_pos(start, p);
-@@ -252,8 +254,10 @@
+@@ -252,8 +255,10 @@
          }
      }
      crate::dev_mode::draw(app, &painter);
@@ -325,7 +326,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
      crate::comments::draw(app, &painter);
      crate::live_text::draw(app, &painter);
      crate::live::draw(app, &painter, &ctx);
-@@ -590,7 +594,7 @@
+@@ -590,7 +595,7 @@
      if !app.canvas.dragging && resp.hovered() && crate::guides::input(app, &ctx, pos) {
          return false;
      }
@@ -334,7 +335,32 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return false;
      }
      if resp.secondary_clicked() {
-@@ -1045,31 +1049,35 @@
+@@ -877,6 +882,24 @@
+ 
+ /// Everything drawn over the rendered page; returns the frame labels drawn (frame, corners on the
+ /// page) for the engine to hit-test.
++/// A small link badge on every card that has a dedicated detail page.
++fn detail_badges(app: &FigApp, painter: &egui::Painter) {
++    let Ok(ds) = app.session.ds() else { return };
++    let doc = ds.doc.clone();
++    for id in doc.subtree(ds.page) {
++        let Some(node) = doc.node(id) else { continue };
++        if !node.plugin_data.contains_key(crate::new_page::DETAIL_PAGE_KEY) {
++            continue;
++        }
++        let Some(q) = node_quad(app, &doc, id) else { continue };
++        let at = app.to_screen(f64::from(q[1].x), f64::from(q[1].y));
++        let center = pos2(at.x - 12.0, at.y + 12.0);
++        painter.circle_filled(center, 9.0, Color32::WHITE);
++        painter.circle_stroke(center, 9.0, stroke(ACCENT, 1.5));
++        painter.text(center, Align2::CENTER_CENTER, "↗", egui::FontId::proportional(10.0), ACCENT);
++    }
++}
++
+ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [Point; 4])> {
+     let mut labels = Vec::new();
+     let Ok(ds) = app.session.ds() else { return labels };
+@@ -1045,31 +1068,35 @@
              } else {
                  4
              };
@@ -393,7 +419,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
              }
          }
      }
-@@ -1195,7 +1203,7 @@
+@@ -1195,7 +1222,7 @@
          painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
          painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
      }
@@ -404,8 +430,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/canvas.rs client-
          return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client-src/crates/ui-egui/src/compose.rs
 --- .client-src-orig/crates/ui-egui/src/compose.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 15:36:26.756372529 +0200
-@@ -0,0 +1,1042 @@
++++ client-src/crates/ui-egui/src/compose.rs	2026-10-22 15:46:04.624885373 +0200
+@@ -0,0 +1,1090 @@
 +//! The bottom comment composer: one bar that is both the comment box and the prompt box.
 +//!
 +//! The selection tells it what a comment is about. Enter turns the input into a draft on that
@@ -539,6 +565,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +    pub last_page: Option<NodeId>,
 +    /// Ask the input for the keyboard on the next draw (the context menu's Comment).
 +    pub focus_input: bool,
++    /// The composer's + Page action asked for a page derived from the selected card.
++    page_from_card: bool,
 +    /// The workspace whose targets were asked for (or are being asked for).
 +    targets_for: Option<String>,
 +    /// When the agent list was last requested, for the periodic status refresh.
@@ -601,6 +629,23 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +                    send = body(ui, &mut app.compose, &context, &names, has_selection, active, &included);
 +                });
 +        });
++    if app.compose.page_from_card {
++        app.compose.page_from_card = false;
++        if let (Some(node_id), Some(page_id), Some(node_name), Some(page_name)) =
++            (node_id, page, node.as_deref(), page_name.as_deref())
++        {
++            let number = app.session.doc().map(|doc| doc.pages.len() + 1).unwrap_or(1);
++            app.new_page.start_component(
++                number,
++                crate::new_page::Source {
++                    page_id: page_id.0,
++                    page_name: page_name.to_string(),
++                    node_id: node_id.0,
++                    node_name: node_name.to_string(),
++                },
++            );
++        }
++    }
 +    if send {
 +        start_send(app, ctx);
 +    }
@@ -617,7 +662,21 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +/// The bar's contents; true when Send was pressed.
 +fn body(ui: &mut Ui, state: &mut State, context: &str, names: &Names<'_>, has_selection: bool,
 +        active: bool, included: &[usize]) -> bool {
-+    ui.label(egui::RichText::new(context).font(mono(9.0)).color(if has_selection { ACCENT } else { FAINT }));
++    ui.horizontal(|ui| {
++        ui.label(egui::RichText::new(context).font(mono(9.0)).color(if has_selection { ACCENT } else { FAINT }));
++        if let Some(node_id) = names.node_id {
++            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                if ui
++                    .add(egui::Button::new(egui::RichText::new("+ Page").font(mono(8.5)).color(MUTED)).frame(false))
++                    .on_hover_text("New page from this card")
++                    .clicked()
++                {
++                    state.page_from_card = true;
++                    let _ = node_id;
++                }
++            });
++        }
++    });
 +
 +    if !included.is_empty() {
 +        ui.add_space(4.0);
@@ -955,6 +1014,21 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +                }
 +                let selected = app.session.selection().first().copied();
 +                let page = app.session.page().ok();
++                if let Some(node_id) = selected {
++                    let detail_page = app
++                        .session
++                        .doc()
++                        .ok()
++                        .and_then(|doc| doc.node(node_id))
++                        .and_then(|node| node.plugin_data.get(crate::new_page::DETAIL_PAGE_KEY))
++                        .and_then(|id| id.parse::<u64>().ok());
++                    if let Some(detail_page) = detail_page {
++                        if map_menu_item(ui, "Open detail page", "", true, false) {
++                            app.run("page.select", json!({"id": detail_page}));
++                            close = true;
++                        }
++                    }
++                }
 +                if let Some(node_id) = selected
 +                    && let Some(page_id) = page
 +                    && let Some(page_name) = node_name(app, page_id)
@@ -1450,7 +1524,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 15:00:47.152094169 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 15:43:19.859020161 +0200
 @@ -6,6 +6,7 @@
  #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
  
@@ -1473,13 +1547,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      }
 +    // Adding a page is navigation, not drawing: the human can make a blank page for an agent to
 +    // fill. Renaming, deleting and editing a page stay with the agent.
-+    if id == "page.add" {
++    if id == "page.add" || id == "page.delete" {
 +        return true;
 +    }
      if id.starts_with("tool.") || id.starts_with("text.edit") {
          return false;
      }
-@@ -66,8 +73,44 @@
+@@ -66,8 +73,52 @@
      }
  }
  
@@ -1500,31 +1574,39 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +    resp.on_hover_text(if open { "Hide sidebar" } else { "Show sidebar" })
 +}
 +
-+fn page_tab(ui: &mut egui::Ui, name: &str, active: bool) -> egui::Response {
++fn page_tab(ui: &mut egui::Ui, name: &str, active: bool) -> (egui::Response, bool) {
 +    let font = crate::theme::semibold(11.5);
-+    let width = name.chars().count() as f32 * 6.7 + 24.0;
++    let width = name.chars().count() as f32 * 6.7 + 40.0;
 +    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
 +    let hot = resp.hovered();
 +    let p = ui.painter();
 +    if active {
 +        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF8, 0xF6, 0xF3));
-+        p.line_segment([egui::pos2(rect.left() + 6.0, rect.bottom() - 2.0), egui::pos2(rect.right() - 6.0, rect.bottom() - 2.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(0xB5, 0x45, 0x2F)));
++        p.line_segment([egui::pos2(rect.left() + 6.0, rect.bottom() - 2.0), egui::pos2(rect.right() - 20.0, rect.bottom() - 2.0)], egui::Stroke::new(2.0, egui::Color32::from_rgb(0xB5, 0x45, 0x2F)));
 +    } else if hot {
 +        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF8, 0xF6, 0xF3));
 +    }
 +    let color = if active { egui::Color32::from_rgb(0x1A, 0x1A, 0x1A) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
-+    p.text(rect.center(), egui::Align2::CENTER_CENTER, name, font, color);
++    p.text(egui::pos2(rect.left() + 12.0, rect.center().y), egui::Align2::LEFT_CENTER, name, font, color);
 +    a11y::button(&resp, &format!("Open page {name}"));
-+    resp
++    let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 13.0, rect.center().y), egui::vec2(18.0, 22.0));
++    let close = ui
++        .interact(close_rect, ui.id().with(("close_page", name)), egui::Sense::click())
++        .on_hover_text("Delete page");
++    if active || hot || close.hovered() {
++        p.text(close_rect.center(), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(12.0), if close.hovered() { egui::Color32::from_rgb(0x9E, 0x3B, 0x2C) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) });
++    }
++    (resp, close.clicked())
 +}
 +
  pub mod menus;
  pub mod missing_fonts;
 +pub mod new_page;
++pub mod page_delete;
  pub mod online;
  pub mod pending_open;
  pub mod plugins_ui;
-@@ -84,6 +127,7 @@
+@@ -84,6 +135,7 @@
  pub mod shortcuts;
  pub mod shortcuts_panel;
  pub mod style_picker;
@@ -1532,7 +1614,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  pub mod tabs;
  pub mod theme;
  pub mod toolbar;
-@@ -94,6 +138,7 @@
+@@ -94,6 +146,7 @@
  pub mod versions;
  pub mod widgets;
  pub mod windows;
@@ -1540,7 +1622,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  
  #[cfg(test)]
  mod theme_startup_tests;
-@@ -643,7 +688,7 @@
+@@ -643,7 +696,7 @@
              shortcuts_tab: figcraft_engine::keymap::Group::Essential,
              shortcuts_query: String::new(),
              opacity_digit: None,
@@ -1549,12 +1631,14 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              home_view: home::Home::default(),
              title_bar: TitleBar::Native,
              icon_gallery: false,
-@@ -717,6 +762,19 @@
+@@ -717,6 +770,21 @@
  pub struct FigApp {
      pub session: Session,
      pub ui: UiState,
 +    /// The agent breakdown modal.
 +    pub agents_modal: agents::State,
++    /// A page deletion waiting for confirmation.
++    pub page_delete: Option<figcraft_doc::NodeId>,
 +    /// The New page dialog.
 +    pub new_page: new_page::State,
 +    /// The Workspaces screen (map mode's home): the listed Herdr workspaces and its requests.
@@ -1569,12 +1653,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      pub canvas: canvas::CanvasState,
      pub services: Box<dyn Services>,
      worker: Option<render_worker::Worker>,
-@@ -763,6 +821,12 @@
+@@ -763,6 +831,13 @@
          let pages_height = session.prefs.pages_height;
          Self {
              ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
 +            ws: workspaces::State::default(),
 +            active_workspace: None,
++            page_delete: None,
 +            agents_modal: agents::State::default(),
 +            new_page: new_page::State::default(),
 +            compose: compose::State::default(),
@@ -1582,7 +1667,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              session,
              canvas: canvas::CanvasState::default(),
              services,
-@@ -1489,7 +1553,13 @@
+@@ -1489,7 +1564,13 @@
              return;
          }
          if !self.has_files() || self.ui.home {
@@ -1597,7 +1682,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1547,90 +1617,105 @@
+@@ -1547,90 +1628,109 @@
                      right::right_panel(self, ui)
                  });
          }
@@ -1697,7 +1782,10 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                        }
 +                        ui.add_space(6.0);
 +                        for (id, name) in &pages {
-+                            if page_tab(ui, name, Some(*id) == current).clicked() {
++                            let (response, close) = page_tab(ui, name, Some(*id) == current);
++                            if close {
++                                self.page_delete = Some(*id);
++                            } else if response.clicked() {
 +                                self.run("page.select", serde_json::json!({"id": id}));
 +                            }
 +                            ui.add_space(2.0);
@@ -1770,6 +1858,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +            sync::show(self, &ctx);
 +            agents::show(self, &ctx);
 +            new_page::show(self, &ctx);
++            page_delete::show(self, &ctx);
          }
          // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
          for (name, x, shown, grows) in edges {
@@ -1797,8 +1886,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/menus.rs client-s
      palette(app, ctx);
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs client-src/crates/ui-egui/src/new_page.rs
 --- .client-src-orig/crates/ui-egui/src/new_page.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/new_page.rs	2026-10-22 15:36:09.836591750 +0200
-@@ -0,0 +1,324 @@
++++ client-src/crates/ui-egui/src/new_page.rs	2026-10-22 15:42:26.531711096 +0200
+@@ -0,0 +1,343 @@
 +//! The New page dialog: a name, a first prompt, and the agent that will design it.
 +//!
 +//! `page.add` selects the new page; if a prompt is given it is sent once to the composer's chosen
@@ -1814,6 +1903,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +use crate::compose::{SendReply, send_request};
 +use crate::theme::{regular, semibold};
 +use crate::workspaces;
++
++/// The node metadata key that points a component at its detail page.
++pub const DETAIL_PAGE_KEY: &str = "mindmap.detail_page";
 +
 +const PANEL: Color32 = Color32::WHITE;
 +const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
@@ -1844,6 +1936,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +    rx: Option<Receiver<Result<SendReply, String>>>,
 +    page_id: Option<u64>,
 +    source: Option<Source>,
++    /// The source component was linked to the new page.
++    link_set: bool,
 +    focus: bool,
 +}
 +
@@ -1859,6 +1953,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +        self.rx = None;
 +        self.page_id = None;
 +        self.source = None;
++        self.link_set = false;
 +        self.focus = true;
 +    }
 +
@@ -2035,6 +2130,19 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +        app.new_page.page_id = created.get("id").and_then(serde_json::Value::as_u64);
 +        app.new_page.created = true;
 +    }
++    if !app.new_page.link_set
++        && let (Some(source), Some(page_id)) = (app.new_page.source.clone(), app.new_page.page_id)
++    {
++        let params = json!({
++            "id": source.node_id,
++            "pluginData": { DETAIL_PAGE_KEY: page_id.to_string() },
++        });
++        if let Err(error) = app.session.execute("node.set", &params) {
++            app.new_page.error = Some(format!("The page was created, but the component link failed: {error}"));
++            return;
++        }
++        app.new_page.link_set = true;
++    }
 +    let prompt = app.new_page.prompt.trim().to_string();
 +    if prompt.is_empty() {
 +        app.new_page.open = false;
@@ -2121,6 +2229,83 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/new_page.rs clien
 +        "kimi" => "kimi",
 +        "dsh" | "dsh-tui" => "dsh",
 +        other => other,
++    }
++}
+diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/page_delete.rs client-src/crates/ui-egui/src/page_delete.rs
+--- .client-src-orig/crates/ui-egui/src/page_delete.rs	1970-01-01 01:00:00.000000000 +0100
++++ client-src/crates/ui-egui/src/page_delete.rs	2026-10-22 15:43:19.847020317 +0200
+@@ -0,0 +1,73 @@
++//! Delete-page confirmation. A page's cards and comments are not recoverable from the map UI.
++
++use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Stroke, vec2};
++
++use crate::FigApp;
++use crate::theme::{regular, semibold};
++
++const PANEL: Color32 = Color32::WHITE;
++const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
++const TEXT: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
++const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
++const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
++
++/// Draw the confirmation when a page deletion is pending.
++pub fn show(app: &mut FigApp, ctx: &egui::Context) {
++    let Some(id) = app.page_delete else { return };
++    let name = app
++        .session
++        .doc()
++        .ok()
++        .and_then(|doc| doc.node(id))
++        .map(|node| node.name.clone())
++        .unwrap_or_else(|| "this page".to_string());
++    let mut cancel = false;
++    let mut delete = false;
++    egui::Area::new(Id::new("page_delete_modal"))
++        .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0))
++        .order(egui::Order::Foreground)
++        .show(ctx, |ui| {
++            egui::Frame::NONE
++                .fill(PANEL)
++                .stroke(Stroke::new(1.0, BORDER))
++                .corner_radius(CornerRadius::same(10))
++                .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(46) })
++                .inner_margin(Margin::symmetric(20, 16))
++                .show(ui, |ui| {
++                    ui.set_width(380.0);
++                    ui.label(RichText::new("DELETE PAGE").font(FontId::monospace(9.5)).color(DANGER));
++                    ui.add_space(8.0);
++                    ui.label(RichText::new(format!("Delete “{name}”?")).font(semibold(17.0)).color(TEXT));
++                    ui.add_space(5.0);
++                    ui.label(
++                        RichText::new("Its cards and comments are removed from the live map. This cannot be undone from the app.")
++                            .font(regular(11.5))
++                            .color(MUTED),
++                    );
++                    ui.add_space(16.0);
++                    ui.horizontal(|ui| {
++                        if ui.add(egui::Button::new(RichText::new("Cancel").font(regular(11.5)).color(MUTED)).frame(false)).clicked() {
++                            cancel = true;
++                        }
++                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                            let button = egui::Button::new(RichText::new("Delete page").font(semibold(11.5)).color(Color32::WHITE))
++                                .fill(DANGER)
++                                .corner_radius(CornerRadius::same(6))
++                                .min_size(vec2(110.0, 32.0));
++                            if ui.add(button).clicked() {
++                                delete = true;
++                            }
++                        });
++                    });
++                });
++        });
++    if delete {
++        let page_name = name.clone();
++        if app.run("page.delete", serde_json::json!({"id": id})).is_some() {
++            app.toast(format!("Deleted {page_name}"));
++        }
++        app.page_delete = None;
++    } else if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
++        app.page_delete = None;
 +    }
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-src/crates/ui-egui/src/sync.rs
