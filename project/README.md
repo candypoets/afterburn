@@ -138,7 +138,21 @@ in `client-workspaces.patch`.
 - **TCP API** on `47821`: `health`, `workspaces`, `open`, `init` (newline JSON).
 
 Still to come: the model renderer (the agent prompt points at `mindmap render`, which does not
-exist yet), the comments surface, remote hosts, auth on the service socket, and a systemd unit.
+exist yet), the comments implementation, remote hosts, auth on the service socket, and a systemd
+unit.
+
+### Comments (designed)
+
+The Product page (six screens, merged: there is no separate Screens page) fixes the comment model:
+
+- Select a card: the only actions are **Copy** (text only) and **Comment**; the layer panel and the
+  editor right-click menu are gone. Right-click shows the same two.
+- A comment is a **draft** anchored to the selection (page, card, source, selected text). Nothing is
+  sent when you write it.
+- The **Comments tray** lists drafts across pages; check any number, choose an agent (or a new CLI),
+  write one prompt; `Send` attaches the comments and prompts the agent. Sent comments show the
+  agent's reply.
+- The map screen keeps a thread on the card; the tray is where sends happen.
 
 ## Milestones
 
