@@ -137,25 +137,12 @@ in `client-workspaces.patch`.
   System, Screens and Product pages (including this picker design).
 - **TCP API** on `47821`: `health`, `workspaces`, `open`, `init` (newline JSON).
 
-Comments are implemented end to end: the client composer adds drafts and sends them with one
-prompt to the chosen agent (`send` over the TCP API), and Herdr receives the formatted comment
-bundle. Still to come: persisting those drafts as shared FigCraft comment threads, the model
-renderer (the agent prompt points at `mindmap render`, which does not exist yet), remote hosts,
-auth on the service socket, and a systemd unit.
-
-### Page prompts and two modes (designed)
-
-- **No selection = the whole page.** The composer's context becomes `Mindmap · whole page`; the
-  prompt can ask for page-wide work ("these designs are outdated — remove all outdated design")
-  and the agent sees the page, not a card. Esc or the composer's **×** clears a selection; the
-  input clears and drafts stay.
-- **Edit map** is one mode: the agent edits the map only (add, rename, restructure, remove), and
-  comments attach to a card or the page. Nothing in the repository changes.
-- **Sync** is the other: the agent reads the repository, diffs it against the map, and applies
-  one direction — `Code → map` (the map catches up) or `Map → code` (the repository changes). The
-  sync screen shows the diff (`3 changed`, `2 new in code`, `1 stale`), the direction, and the
-  agent target; applying records a map version.
-- The same bottom input is the comment and the prompt; the mode decides what the agent may touch.
+The composer and the send path are implemented end to end: drafts become one prompt to the chosen
+agent (`send` over the TCP API), and Herdr receives the formatted bundle. The comment tree,
+sent-once removal and the Sync widget are designed above, not implemented yet. Still to come:
+persisting drafts as shared FigCraft comment threads, the model renderer (the agent prompt points
+at `mindmap render`, which does not exist yet), remote hosts, auth on the service socket, and a
+systemd unit.
 
 **A note on live design updates.** The client and the document server sync correctly (page
 rename/delete and document edits arrive live). The design *pipeline* was the problem: importing a
@@ -164,20 +151,26 @@ empty pages, so an importer replacing all pages can leave the viewer on an empty
 workspace map is now one page (`Mindmap`) with the latest design, and that is the page to keep
 updating in place; a page-aware sync is the next tooling fix.
 
-### Comments (designed)
+### Comments and sync (designed)
 
-One input at the bottom, two verbs. The Product page fixes it:
+One composer at the bottom, and a tree behind it.
 
-- **Select** anything. The composer shows what it is (`COMMENTING ON · Components · components.rs:1`).
-  Text selects in place; ⌘C copies, right-click is `Copy` / `Comment` and nothing else. No layers
-  panel, no design tools.
-- **Comment (⏎)** turns the input into a draft on that selection. The draft appears in a small
-  strip above the bar. Selecting another card clears the input; the drafts stay.
-- **Send (⌘⏎)** uses the same input as the prompt. Every draft attaches; the target chip picks an
-  agent already in the workspace or a new CLI. Nothing is sent before that.
-- No separate comments tray and no auto-send: a comment is a draft until one prompt carries it to
-  an agent, and the reply comes back on the card.
+**The tree.** A comment attaches to a card (or the page). A prompt on a card carries every comment
+below it in the design tree; with no selection it carries the page and all its comments. The
+composer shows the tree (`Components · 3 comments in the tree`), the draft chips are indented
+(`Components`, `└ Variants`, `└ Overrides`), and a tree inset says what the prompt includes.
+Esc or the composer's `×` clears a selection; the input clears and drafts stay.
 
+**Sent once.** Sending removes those comments from the map: they are delivered once to the chosen
+agent and cannot be sent again. The history keeps the prompt; the cards go back to clean. The
+model panel shows the before/after (`3 pins → 0 pins`).
+
+**Sync is a button, never a mode.** The map is always editable. `Sync` opens a widget with the
+drift since the last successful sync (`7 changes since v12 · 2h ago`), the diffs about to be
+implemented as code (`TO CODE · 4`) and the code changes not yet in the map (`FROM CODE · 3`), an
+agent picker and an optional note, and one action. While it runs, a flight strip shows
+`SYNC IN FLIGHT · kimi · applying 4 of 7`, a progress bar and a log, and the map stays editable.
+It finishes as `Synced v13 · 7 changes`.
 
 ## Milestones
 
