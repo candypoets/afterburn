@@ -28,19 +28,19 @@ def t(text, size, font=SANS, style="Regular", color=TEXT, x=0, y=0, w=None, lh=N
     return T(text, size, font=font, style=style, color=color, x=x, y=y, w=w, lh=lh, name=name)
 
 
-def card(x, y, eyebrow, title, body, rows):
+def card(x, y, eyebrow, title, body, rows, w=CARD_W, h=CARD_H):
     kids = [
         t(eyebrow, 9, MONO, "Medium", ACCENT, x=24, y=18, name="eyebrow"),
         t(title, 21, SANS, "Medium", TEXT, x=24, y=38, name="title"),
-        t(body, 11.5, SANS, "Regular", MUTED, x=24, y=74, w=CARD_W - 48, lh=16, name="body"),
+        t(body, 11.5, SANS, "Regular", MUTED, x=24, y=74, w=w - 48, lh=16, name="body"),
     ]
     for i, (path, desc) in enumerate(rows):
         yy = 126 + i * 50
-        kids.append(F("divider", x=24, y=yy - 9, w=CARD_W - 48, h=1, fill=BORDER))
+        kids.append(F("divider", x=24, y=yy - 9, w=w - 48, h=1, fill=BORDER))
         kids.append(t(path, 9.5, MONO, "Medium", ACCENT, x=24, y=yy, name="path " + path))
-        kids.append(t(desc, 10.2, SANS, "Regular", MUTED, x=24, y=yy + 14, w=CARD_W - 48, lh=13,
+        kids.append(t(desc, 10.2, SANS, "Regular", MUTED, x=24, y=yy + 14, w=w - 48, lh=13,
                       name="desc " + path))
-    return F("Card " + title, *kids, x=x, y=y, w=CARD_W, h=CARD_H, fill=PANEL, stroke=BORDER,
+    return F("Card " + title, *kids, x=x, y=y, w=w, h=h, fill=PANEL, stroke=BORDER,
              radius=10, effects=[shadow(y=3, blur=10, color="#00000010")])
 
 
@@ -48,8 +48,8 @@ def build(path: Path):
     doc = Doc("backend code")
     page = doc.page("backend code", bg=BG)
     doc.nodes[str(page)]["width"] = W
-    doc.nodes[str(page)]["height"] = 1500
-    doc.place(page, R(W, 1500, fill=BG, name="Page bounds"), 0, 0)
+    doc.nodes[str(page)]["height"] = 1920
+    doc.place(page, R(W, 1920, fill=BG, name="Page bounds"), 0, 0)
     doc.place(page, t("Backend code", 36, DISP, "Regular", TEXT, x=0, y=0, name="title"), 64, 48)
     doc.place(page, t("The Rust service and document engine behind Mindmap. Frontend, UI and the "
                       "Python authoring tooling are deliberately out of scope.", 13, SANS, "Regular",
@@ -103,9 +103,16 @@ def build(path: Path):
                           ("crates/geom · crates/pathops", "Affine geometry, rectangles, paths and boolean operations."),
                           ("crates/color · crates/text · crates/layout", "Color, text shaping and auto-layout."),
                           ("crates/ui-egui · client-src · apps/figcraft-web", "Excluded frontend/UI; listed here only to mark the boundary.")]), X2, Y[2])
+    doc.place(page, card(64, 1460, "07 · PAGE TREE & SUBPAGES", "A page tree stored in document metadata",
+                         "Subpages are not a new document format. They are page nodes with two plugin-data keys; the client derives the tree, breadcrumb and centered switcher, and deletes orphaned subtrees.",
+                         [("pluginData: mindmap.parent_page · mindmap.source_node", "A subpage points at its parent page and the component that owns it; root pages have no parent key."),
+                          ("src/page_tree.rs (client)", "Builds roots/children/path, draws the centered switcher (focused main tab, right-click tab, ⌘⇧O / Ctrl+Shift+O) and the breadcrumb is read-only."),
+                          ("src/new_page.rs · src/page_delete.rs", "A component page is created as a subpage, then linked on the source card; deleting a page deletes its descendants and clears links."),
+                          ("maintenance + server context", "An orphan subpage whose source card or parent page is gone is removed; the new-page context names the source page and component.")],
+                         w=W - 136, h=360), 64, 1460)
     doc.place(page, t("Every module above is backend or shared runtime code. The client's read/comment/sync UI, "
                       "the egui editor and the Python design pipeline never ship in the service.", 9.5, MONO,
-                      "Regular", FAINT, x=0, y=0, w=W - 128, name="foot"), 64, Y[2] + CARD_H + 22)
+                      "Regular", FAINT, x=0, y=0, w=W - 128, name="foot"), 64, 1860)
     doc.save(str(path))
     print(f"wrote {path}")
 
