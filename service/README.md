@@ -4,6 +4,9 @@ A Herdr workspace is a project. This binary lists the workspaces on the host, gi
 FigCraft document the first time it is opened, and, on **Init**, makes sure an agent is working on
 it. **Send** prompts an agent with canvas comments without opening or publishing a document.
 **Diff** compares the client's map snapshot with the last successful sync and with the repository,
+A new page generated from a component also carries `source_page_id`/`source_node_id`; the
+context packet reads that source page and includes the component's path, type, text and children.
+
 Every `send` is preceded by a **MINDMAP CONTEXT** packet: workspace, repository, document id,
 owner edit link, FigCraft CLI path, page name/id, top-level cards, and for each commented node its
 id, path, type, text and children. The packet also says how to edit the live document (MCP:

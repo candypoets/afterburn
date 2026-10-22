@@ -541,25 +541,27 @@ def _screen_new_page():
         F("New page dialog",
           _ui("NEW PAGE", 9.5, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=3, x=20, y=16),
           _ui("×", 16, K.SANS, "Regular", UI_MUTED, name="close", x=430, y=10),
-          _ui("Name", 11, K.SANS, "Medium", UI_TEXT, name="name label", x=20, y=52),
-          F("Name field", _ui("Components", 13, K.SANS, "Regular", UI_TEXT, name="name", x=10, y=7),
-            x=20, y=70, w=420, h=30, fill=UI_SOFT, stroke=UI_BORDER, radius=5),
-          _ui("First prompt", 11, K.SANS, "Medium", UI_TEXT, name="prompt label", x=20, y=118),
+          _ui("From component · Canvas and layers · Page comment", 8.8, K.MONO, "Regular", UI_ACCENT,
+              name="source", x=20, y=42),
+          _ui("Name", 11, K.SANS, "Medium", UI_TEXT, name="name label", x=20, y=64),
+          F("Name field", _ui("Canvas and layers — detail", 13, K.SANS, "Regular", UI_TEXT, name="name", x=10, y=7),
+            x=20, y=82, w=420, h=30, fill=UI_SOFT, stroke=UI_BORDER, radius=5),
+          _ui("First prompt", 11, K.SANS, "Medium", UI_TEXT, name="prompt label", x=20, y=130),
           F("Prompt field",
-            _ui("Draw the variant model: slots, overrides, and the rules that survive a rebuild.",
-                12, K.SANS, "Regular", UI_MUTED, w=390, name="prompt", lh=17, x=10, y=8),
-            x=20, y=136, w=420, h=76, fill=UI_SOFT, stroke=UI_BORDER, radius=5),
-          _ui("Agent", 11, K.SANS, "Medium", UI_TEXT, name="agent label", x=20, y=230),
-          F("Agent chip", _ui("kimi · idle", 11.5, K.SANS, "Regular", UI_TEXT, name="agent", x=10, y=7),
+            _ui("Explain in detail what is inside the \"Canvas and layers\" component on the \"Page comment\" page: its purpose, the parts it is made of, how they connect, and the code that implements it.",
+                11, K.SANS, "Regular", UI_MUTED, w=390, name="prompt", lh=15, x=10, y=8),
+            x=20, y=148, w=420, h=72, fill=UI_SOFT, stroke=UI_BORDER, radius=5),
+          _ui("Agent", 11, K.SANS, "Medium", UI_TEXT, name="agent label", x=20, y=236),
+          F("Agent chip", _ui("claude · idle", 11.5, K.SANS, "Regular", UI_TEXT, name="agent", x=10, y=7),
             _ui("▾", 10, K.SANS, "Regular", UI_MUTED, name="chev", x=140, y=8),
-            x=20, y=248, w=160, h=28, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
+            x=20, y=254, w=160, h=28, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
           F("Cancel", _ui("Cancel", 11, K.SANS, "Medium", UI_MUTED, name="c", x=16, y=8),
-            x=20, y=300, w=70, h=32, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
+            x=20, y=306, w=70, h=32, fill=UI_PANEL, stroke=UI_BORDER, radius=5),
           F("Create", _ui("Create and prompt", 11, K.SANS, "Medium", "#FFFFFF", name="c", x=58, y=8),
-            x=286, y=300, w=154, h=32, fill=UI_ACCENT, radius=5),
-          _ui("The page is blank until the agent draws.", 8.5, K.MONO, "Regular", UI_MUTED,
-              name="note", x=20, y=340),
-          x=252, y=128, w=460, h=368, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
+            x=286, y=306, w=154, h=32, fill=UI_ACCENT, radius=5),
+          _ui("Defaults are inferred from the card; every field stays editable.", 8.5, K.MONO, "Regular", UI_MUTED,
+              name="note", x=20, y=346),
+          x=252, y=118, w=460, h=386, fill=UI_PANEL, stroke=UI_BORDER, radius=10,
           effects=[shadow(y=10, blur=30, color="#00000024")]),
     )
     return f
@@ -760,7 +762,7 @@ def build_product(doc):
     doc.place(page, _ui("05 · SYNC — drift, diffs to code, agent and note in one widget", 10, K.MONO, "Medium", K.MUTED, name="c5", ls=3), 64, 1582)
     doc.place(page, _ui("06 · IN FLIGHT — the sync runs, the map stays editable", 10, K.MONO, "Medium", K.MUTED, name="c6", ls=3), 1092, 1582)
     doc.place(page, _ui("07 · HEADER + PANE — pages are tabs; the sidebar icon opens Herdr workspaces", 10, K.MONO, "Medium", K.MUTED, name="c7", ls=3), 64, 2262)
-    doc.place(page, _ui("08 · NEW PAGE — name it and send the first prompt", 10, K.MONO, "Medium", K.MUTED, name="c8", ls=3), 1092, 2262)
+    doc.place(page, _ui("08 · NEW PAGE — name, prompt, agent; from a card, defaults inferred", 10, K.MONO, "Medium", K.MUTED, name="c8", ls=3), 1092, 2262)
     doc.place(page, _ui("09 · BRANCHES — worktrees are branches under the repository", 10, K.MONO, "Medium", K.MUTED, name="c9", ls=3), 64, 2942)
     doc.place(page, _ui("10 · AGENTS — pane, harness, state; the header count opens it", 10, K.MONO, "Medium", K.MUTED, name="c10", ls=3), 1092, 2942)
     doc.place(page, _ui("11 · MODEL — sent once, synced by a button", 10, K.MONO, "Medium", K.MUTED, name="c11", ls=3), 64, 3622)

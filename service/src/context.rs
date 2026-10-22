@@ -37,6 +37,10 @@ pub struct Request<'a> {
     pub page_id: Option<u64>,
     /// The page was created for this prompt.
     pub new_page: bool,
+    /// The component page a new page was generated from.
+    pub source_page_id: Option<u64>,
+    /// The component node a new page was generated from.
+    pub source_node_id: Option<u64>,
     /// Nodes the comments are attached to.
     pub node_ids: &'a [u64],
 }
@@ -132,6 +136,40 @@ fn inspect(config: &Config, request: &Request<'_>) -> Result<String> {
     let page_cards = card_names(&page);
     if !page_cards.is_empty() {
         out.push_str(&format!("Top-level cards: {page_cards}\n"));
+    }
+    if let (Some(source_page_id), Some(source_node_id)) =
+        (request.source_page_id, request.source_node_id)
+    {
+        if let Ok(source_page) =
+            session.call_tool("get_node", json!({"id": source_page_id, "depth": 3}))
+        {
+            if let Some((node, path)) = find(&source_page, source_node_id, &mut Vec::new()) {
+                out.push_str(&format!(
+                    "\nSource page: {} (id {source_page_id})\n",
+                    label(&source_page)
+                ));
+                out.push_str(&format!(
+                    "Source component: {} (id {source_node_id})\n",
+                    label(node)
+                ));
+                out.push_str(&format!("Source path: {}\n", path.join(" > ")));
+                out.push_str(&format!(
+                    "Source type: {}\n",
+                    node.get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                ));
+                let text = body(node);
+                if !text.is_empty() {
+                    out.push_str(&format!("Source text: {text}\n"));
+                }
+                let children = children(node);
+                if !children.is_empty() {
+                    out.push_str(&format!("Source children: {children}\n"));
+                }
+                out.push_str("The new page should explain this component in detail.\n");
+            }
+        }
     }
     let mut seen = Vec::new();
     for id in request.node_ids {
@@ -311,6 +349,8 @@ mod tests {
             edit: None,
             page_id: Some(7),
             new_page: true,
+            source_page_id: None,
+            source_node_id: None,
             node_ids: &[],
         };
         let text = build(&config, &request);

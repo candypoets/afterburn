@@ -110,6 +110,19 @@ pub struct Adopted {
     pub name: String,
 }
 
+/// The page a send belongs to, and where a new page came from.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SendPage {
+    /// Page the comments/prompt belong to.
+    pub page_id: Option<u64>,
+    /// The page was just created for the prompt.
+    pub new_page: bool,
+    /// Component page a new page was generated from.
+    pub source_page_id: Option<u64>,
+    /// Component node a new page was generated from.
+    pub source_node_id: Option<u64>,
+}
+
 /// The result of Send: the agent outcome and how many comments were handed to it.
 #[derive(Clone, Debug)]
 pub struct SendResult {
@@ -335,13 +348,14 @@ impl ProjectService {
         target: &Target,
         prompt: &str,
         comments: &[Comment],
-        page_id: Option<u64>,
-        new_page: bool,
+        page: SendPage,
     ) -> Result<SendResult> {
         let workspace = self.find_workspace(query)?;
         agent::validate_target(&self.herdr, &workspace, target)?;
         let record = self.store.get(&workspace.id)?;
-        let page_id = page_id.or_else(|| comments.iter().find_map(|comment| comment.page_id));
+        let page_id = page
+            .page_id
+            .or_else(|| comments.iter().find_map(|comment| comment.page_id));
         let node_ids: Vec<u64> = comments
             .iter()
             .filter_map(|comment| comment.node_id)
@@ -355,7 +369,9 @@ impl ProjectService {
                 file: record.as_ref().and_then(|record| record.file.as_deref()),
                 edit: record.as_ref().and_then(|record| record.edit.as_deref()),
                 page_id,
-                new_page,
+                new_page: page.new_page,
+                source_page_id: page.source_page_id,
+                source_node_id: page.source_node_id,
                 node_ids: &node_ids,
             },
         );

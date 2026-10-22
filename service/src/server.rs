@@ -185,12 +185,25 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
                 .get("new_page")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let source_page_id = request.get("source_page_id").and_then(Value::as_u64);
+            let source_node_id = request.get("source_node_id").and_then(Value::as_u64);
             if prompt.trim().is_empty() && parsed.is_empty() {
                 return Err(Error::new(
                     "send needs a prompt or at least one non-empty comment",
                 ));
             }
-            let result = service.send(query, &target, &prompt, &parsed, page_id, new_page)?;
+            let result = service.send(
+                query,
+                &target,
+                &prompt,
+                &parsed,
+                crate::project::SendPage {
+                    page_id,
+                    new_page,
+                    source_page_id,
+                    source_node_id,
+                },
+            )?;
             if !result.agent.prompted {
                 let reason = result
                     .agent
