@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/root/code/mindmap/service
 Environment=HERDR_ENV=1
+# Without HOME, herdr looks for its socket in /tmp/herdr instead of the running server's.
+Environment=HOME=/root
+Environment=HERDR_SOCKET_PATH=/root/.config/herdr/herdr.sock
 # systemd's PATH lacks the user-installed herdr and agent CLIs (claude, codex, kimi).
 Environment=PATH=/root/.local/bin:/root/.volta/bin:/root/.kimi-code/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=MINDMAP_SERVER=100.104.9.15:47910
