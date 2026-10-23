@@ -31,6 +31,8 @@ document**. For those jobs:
 - Work only on the named page and card; keep card names stable; source every claim.
 - A Sync prompt with a `Scope:` line covers one page and its subpages: implement that part of the
   map only. Its `Code scope:` lists the paths the page's cards cite; start there.
+- A Sync is done when you go idle, with no time limit. For large work, plan it and split it across
+  your own harness's sub-agents, and stop only when all of it is implemented.
 
 ## The model
 

@@ -44,8 +44,9 @@ pub const MAX_PROMPT_LINE_CHARS: usize = 240;
 /// Space held back for an "… and N more" line in a prompt section.
 const OMISSION_RESERVE: usize = 48;
 
-/// How long an in-flight job may run before it is reported as failed.
-pub const JOB_TIMEOUT_SECS: u64 = 30 * 60;
+/// The line every sync prompt carries under its first line. There is no time limit, and the job is
+/// done when the agent goes idle, so a large sync must be planned and finished in one go.
+pub const WORK_LINE: &str = "Large work: plan it and split it across sub-agents in your own harness. The sync counts as done when you stop, so finish all of it first.";
 
 /// How long an agent may stay idle without ever being seen working before the job fails. A prompt
 /// that never starts (an auth error, a missing session) would otherwise leave the job in flight.
@@ -172,7 +173,7 @@ pub enum JobState {
     InFlight,
     /// The agent finished; `last_sync` was written.
     Done,
-    /// The agent disappeared, errored, or timed out.
+    /// The agent disappeared or errored.
     Failed,
 }
 
@@ -918,6 +919,8 @@ pub fn format_prompt(
         header.push_str(&format!(" ({})", truncate_chars(&one_line(path), 300)));
     }
     header.push_str(" against the code.\n");
+    header.push_str(WORK_LINE);
+    header.push('\n');
     header.push_str(&scope_lines(scope, code));
 
     let note = note.trim();
@@ -1077,16 +1080,6 @@ fn truncate_chars(value: &str, limit: usize) -> String {
 /// true before `idle`/`done` finishes the job: an agent that has not started working yet is not a
 /// completed sync.
 pub fn transition(seen_active: bool, status: Option<&str>, age_secs: u64) -> Transition {
-    if age_secs >= JOB_TIMEOUT_SECS {
-        return Transition {
-            state: JobState::Failed,
-            seen_active,
-            reason: Some(format!(
-                "sync timed out after {} minutes",
-                JOB_TIMEOUT_SECS / 60
-            )),
-        };
-    }
     let Some(status) = status.map(str::trim).filter(|status| !status.is_empty()) else {
         return Transition {
             state: JobState::Failed,
@@ -1430,6 +1423,7 @@ mod tests {
         assert_eq!(
             prompt,
             "Sync mindmap (/root/code/mindmap) against the code.\n\
+             Large work: plan it and split it across sub-agents in your own harness. The sync counts as done when you stop, so finish all of it first.\n\
              \n\
              DESIGN CHANGES SINCE first sync:\n\
              + heading (Mindmap)\n\
@@ -1482,6 +1476,7 @@ mod tests {
                 " optional note "
             ),
             "Sync mindmap (/root/code/mindmap) against the code.\n\
+             Large work: plan it and split it across sub-agents in your own harness. The sync counts as done when you stop, so finish all of it first.\n\
              \n\
              DESIGN CHANGES SINCE last sync:\n\
              + New card (Mindmap)\n\
@@ -1510,7 +1505,7 @@ mod tests {
         );
         assert_eq!(
             prompt,
-            "Sync mindmap against the code.\n\nNOTE: Only this note."
+            "Sync mindmap against the code.\nLarge work: plan it and split it across sub-agents in your own harness. The sync counts as done when you stop, so finish all of it first.\n\nNOTE: Only this note."
         );
         assert_eq!(
             format_prompt(
@@ -1522,7 +1517,7 @@ mod tests {
                 false,
                 ""
             ),
-            "Sync mindmap against the code."
+            "Sync mindmap against the code.\nLarge work: plan it and split it across sub-agents in your own harness. The sync counts as done when you stop, so finish all of it first."
         );
     }
 
@@ -1585,7 +1580,7 @@ mod tests {
             "",
         );
         assert!(prompt.contains("+ line\\nname (page\\tone)"), "{prompt}");
-        assert_eq!(prompt.lines().count(), 4);
+        assert_eq!(prompt.lines().count(), 5);
     }
 
     #[test]
@@ -1643,13 +1638,15 @@ mod tests {
     }
 
     #[test]
-    fn an_old_job_times_out() {
-        let timed_out = transition(true, Some("working"), JOB_TIMEOUT_SECS);
-        assert_eq!(timed_out.state, JobState::Failed);
-        assert!(timed_out.reason.unwrap_or_default().contains("timed out"));
+    fn a_long_job_never_times_out() {
+        let ten_days = 10 * 24 * 60 * 60;
         assert_eq!(
-            transition(false, Some("working"), JOB_TIMEOUT_SECS - 1).state,
+            transition(true, Some("working"), ten_days).state,
             JobState::InFlight
+        );
+        assert_eq!(
+            transition(true, Some("idle"), ten_days).state,
+            JobState::Done
         );
     }
 
@@ -1998,6 +1995,7 @@ mod tests {
         assert_eq!(
             prompt,
             "Sync mindmap (/repo) against the code.\n\
+             Large work: plan it and split it across sub-agents in your own harness. The sync counts as done when you stop, so finish all of it first.\n\
              Document: 2f2e\n\
              Edit link (owner access; do not share, commit or paste): figcraft://join?file=2f2e&token=t\n\
              Scope: page backend code (id 7) and its subpages Diff engine (id 8). Implement this part of the map only; other pages are out of scope.\n\

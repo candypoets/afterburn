@@ -490,9 +490,9 @@ impl ProjectService {
     /// Poll one in-flight sync job against Herdr and finish it when the agent settles.
     ///
     /// A job is done only after Herdr has reported the agent as `working` or `blocked` and then
-    /// `idle` or `done`. Finishing writes only `last_sync` (commit, completion time, start
-    /// snapshot) through the store; a gone/errored agent or a job older than
-    /// [`sync::JOB_TIMEOUT_SECS`] is failed with a reason and writes nothing.
+    /// `idle` or `done`; there is no time limit. Finishing writes `page_syncs` (and `last_sync` for a
+    /// whole-map sync) through the store; a gone or errored agent fails the job with a reason and
+    /// writes nothing.
     pub fn sync_status(&self, job_id: &str) -> Result<SyncStatusResult> {
         let job_id = job_id.trim();
         if job_id.is_empty() {
@@ -504,15 +504,6 @@ impl ProjectService {
         }
 
         let age = time::now_secs().saturating_sub(job.started_secs);
-        if age >= sync::JOB_TIMEOUT_SECS {
-            return self.fail_job(
-                job,
-                format!(
-                    "sync timed out after {} minutes",
-                    sync::JOB_TIMEOUT_SECS / 60
-                ),
-            );
-        }
 
         let agents = self
             .herdr

@@ -433,6 +433,7 @@ The submitted prompt is built from the two diffs:
 
 ```text
 Sync <label> (<path>) against the code.
+Large work: plan it and split it across sub-agents in your own harness. The sync counts as done when you stop, so finish all of it first.
 Document: <file id>
 Edit link (owner access; do not share, commit or paste): <edit link>
 Scope: page <name> (id N) and its subpages <name> (id M), …. Implement this part of the map only; other pages are out of scope.
@@ -451,6 +452,8 @@ CODE SINCE <commit>:
 NOTE: <prompt>
 ```
 
+* The `Large work:` line is always there: a sync has no time limit and is done when the agent goes
+  idle, so a large one is split across the agent's own sub-agents and finished in one go.
 * `Document:` and the edit link come from the project record, so the agent can read the cards. The
   `Scope:` and `Code scope:` lines are there only for a page sync; a page that cites no repository
   path says `Code scope: the whole repository …` instead.
@@ -497,8 +500,8 @@ workspace and pane:
   observation, idle means the prompt has not started yet; the job stays `in_flight`.
 * A missing agent (the pane no longer appears) or a status such as `error`, `failed`, `exited`,
   `stopped`, `crashed`, or `gone` fails the job with a `job.reason`.
-* A job older than **30 minutes** fails with a timeout before Herdr is polled.
-* Unknown statuses keep the job in flight; the timeout is the backstop.
+* There is no time limit: a job stays in flight for as long as the agent works.
+* Unknown statuses keep the job in flight.
 * If `herdr agent list` itself fails, `sync_status` returns `ok:false` and leaves the job in
   flight; the client can retry the poll.
 
@@ -526,7 +529,6 @@ A finished job is returned as-is on later polls. Unknown or empty job ids are `o
 | Sync prompt | 20,000 characters |
 | Note kept in a prompt | 2,000 characters |
 | Prompt line | 240 characters |
-| In-flight job | 30 minutes |
 
 ## TCP API
 
