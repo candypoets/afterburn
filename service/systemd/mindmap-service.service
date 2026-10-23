@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/root/code/mindmap/service
 Environment=HERDR_ENV=1
+# systemd's PATH lacks the user-installed herdr and agent CLIs (claude, codex, kimi).
+Environment=PATH=/root/.local/bin:/root/.volta/bin:/root/.kimi-code/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=MINDMAP_SERVER=100.104.9.15:47910
 # Bind the tailnet address, not the LAN: the service has no auth yet.
 Environment=MINDMAP_BIND=100.104.9.15:47821
