@@ -321,6 +321,60 @@ fn immutable_merge_plan_uses_git_base_and_explicit_property_picks() {
 }
 
 #[test]
+fn git_plan_merges_grid_items_but_requires_whole_code_links_pick() {
+    let repo = Repo::new();
+    let (mut doc, _, card, _) = design();
+    doc.get_mut(card).unwrap().grids = [10.0, 20.0]
+        .into_iter()
+        .map(|size| figcraft_doc::LayoutGrid {
+            size,
+            ..Default::default()
+        })
+        .collect();
+    doc.get_mut(card).unwrap().code_links = ["react", "vue"]
+        .into_iter()
+        .map(|language| figcraft_doc::CodeLink {
+            language: language.into(),
+            ..Default::default()
+        })
+        .collect();
+    let base = repo.commit(&doc, "Base lists");
+    git(&repo.0, &["checkout", "-b", "feature"]).unwrap();
+    let mut branch = doc.clone();
+    branch.get_mut(card).unwrap().grids[0].size = 11.0;
+    branch.get_mut(card).unwrap().code_links[0].name = "Branch component".into();
+    repo.commit(&branch, "Branch list edits");
+    git(&repo.0, &["checkout", "main"]).unwrap();
+    let mut main = doc;
+    main.get_mut(card).unwrap().grids[1].size = 22.0;
+    main.get_mut(card).unwrap().code_links[1].name = "Main component".into();
+    let main_commit = repo.commit(&main, "Main list edits");
+    let disk_bytes = fs::read(repo.0.join(DESIGN_PATH)).unwrap();
+
+    let plan = plan_merge(&repo.0, "feature", "main").unwrap();
+    assert_eq!(plan.base, base);
+    let response = plan.json();
+    let conflicts = response["conflicts"].as_array().unwrap();
+    assert_eq!(conflicts.len(), 1, "{response}");
+    let key = conflicts[0]["key"].as_str().unwrap();
+    assert_eq!(key, format!("{card}/codeLinks"));
+    assert!(resolve_merge(&plan, &BTreeMap::new()).is_err());
+    // Picks come from the node's JSON plan, and select a whole code-links property.
+    for (side, expected) in [(merge::Side::Branch, &branch), (merge::Side::Main, &main)] {
+        let picks = BTreeMap::from([(key.to_owned(), side)]);
+        let merged = resolve_merge(&plan, &picks).unwrap();
+        let node = merged.node(card).unwrap();
+        assert_eq!(
+            node.grids.iter().map(|g| g.size).collect::<Vec<_>>(),
+            [11.0, 22.0]
+        );
+        assert_eq!(node.code_links, expected.node(card).unwrap().code_links);
+    }
+    assert_eq!(fs::read(repo.0.join(DESIGN_PATH)).unwrap(), disk_bytes);
+    assert_eq!(head(&repo.0).unwrap().unwrap(), main_commit);
+}
+
+#[test]
 fn git_merge_code_conflicts_are_explicit_and_commit_has_both_parents() {
     let repo = Repo::new();
     let (doc, _, card, _) = design();

@@ -13,7 +13,7 @@ use crate::error::Result;
 /// Everything the node needs to find its tools.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// `server/figcraft/target/release/figcraft-cli`, used only by `migrate`.
+    /// `target/release/figcraft-cli`, used only by `migrate`.
     pub figcraft_cli: PathBuf,
     /// `herdr` or an override.
     pub herdr_bin: PathBuf,
@@ -47,7 +47,7 @@ impl Config {
 
         Ok(Self {
             figcraft_cli: env_path("MINDMAP_FIGCRAFT_CLI")
-                .unwrap_or_else(|| root.join("server/figcraft/target/release/figcraft-cli")),
+                .unwrap_or_else(|| root.join("target/release/figcraft-cli")),
             herdr_bin: env_path("MINDMAP_HERDR").unwrap_or_else(|| PathBuf::from("herdr")),
         })
     }

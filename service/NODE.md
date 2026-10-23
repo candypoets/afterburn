@@ -6,10 +6,14 @@ or an SSH tunnel. The Docker document server is the only legacy migration source
 `mindmap-service` binary has been removed (it is in Git history before the node cleanup).
 
 ```sh
-CARGO_HOME="$PWD/.cargo-home" cargo +1.95.0 build --release \
-  --manifest-path service/Cargo.toml --bin mindmap-node
-service/target/release/mindmap-node serve --bind 127.0.0.1:47822
+cargo build -p mindmap-node --release --locked
+./target/release/mindmap-node serve --bind 127.0.0.1:47822
 ```
+
+Run these commands at the repository root. `rust-toolchain.toml` pins Rust 1.97.1.
+Selecting `mindmap-node` builds only the backend and its engine dependencies, without the
+desktop GUI or a display server. The root workspace also contains the app (`figcraft`); both
+share `server/figcraft/`, `Cargo.lock`, and `target/`.
 
 The listener refuses non-loopback addresses. SSH authenticates remote access. Protocol 1 carries
 newline JSON requests with `id`, `version: 1`, `method`, and method parameters at the top level.
@@ -66,12 +70,17 @@ the existing agent lifecycle adapter. `worktree.create` uses explicit workspace/
 The node subscribes to Herdr's socket events, resynchronizes after reconnect, and publishes
 agent/inventory updates. Reading the Mac's saved remote machine shows those same agents.
 
-The Mac app starts its bundled local node as needed. Adding an SSH host detects its platform,
-copies the matching bundled node, starts it, forwards one loopback port, and registers the shared
-Herdr session in the Mac's saved machines. Binaries live under
-`Mindmap.app/Contents/Resources/node/{darwin-arm64,linux-x64}/mindmap-node` for this deployment.
-Other platforms require a corresponding native build. Herdr installation approval is shown by
-the app only when needed.
+The app's explicit host setup invokes its bundled portable installer. A full Mac install ships
+its native node from the same Cargo invocation as the app; optional remote platform nodes must
+carry matching build provenance. Launchd owns the Mac helper; systemd owns Linux installations.
+The app does not spawn a competing helper during ordinary reconnect. A build mismatch requires
+an explicit approved update, and a missing companion platform must be built natively or installed
+separately. Herdr installation approval is shown only when needed.
+
+`mindmap-node build-info` prints `{build_id,version,protocol}`. The source SHA256 is calculated by
+the shared `mindmap-build` crate, consistently across native platforms. `hello` reports the same
+identity and the running PID. Binary sidecars also record platform and executable SHA256, so
+packaging can validate a foreign companion without executing it.
 
 ## Git-backed Sync
 
@@ -108,8 +117,80 @@ markers remain the baselines.
 
 ## Deployment and migration
 
-Install `service/systemd/mindmap-node.service` on the Linux host. Install the matching node binaries
-with the Mac client; `service/install-mac-node.sh` registers the native node with launchd.
+The portable installer requires Python 3.9+ and copies a native binary to an immutable versioned
+directory. A CLI symlink points to that copy. The app and headless installers use the same entry
+point, `service/install-node.sh`, with `install-node.py` beside it. Neither needs a GUI on Linux.
+
+```sh
+# Linux: build the native headless package, without building the app.
+./service/build-node.sh
+NODE="$PWD/target/release/mindmap-node"
+BUILD_ID="$("$NODE" build-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["build_id"])')"
+
+# Normal Linux user: requires a running systemd user manager.
+./service/install-node.sh --binary "$NODE" --build-id "$BUILD_ID" --scope user
+# A root operator can instead choose a system service (the script never invokes sudo).
+./service/install-node.sh --binary "$NODE" --build-id "$BUILD_ID" --scope system
+```
+
+Choose **one** scope per machine. User scope installs under `~/.local/lib/mindmap/node/<build-id>`
+and `~/.local/bin`, with a unit in `~/.config/systemd/user`. It starts on user-manager startup;
+persistence after logout/before login requires administrator-configured lingering. System scope
+requires root, uses `/usr/local/lib/mindmap/node/<build-id>` and `/usr/local/bin`, and installs
+`/etc/systemd/system/mindmap-node.service`. That service runs as the invoking root operator.
+For a non-root service account use its user manager. No privilege escalation or lingering changes
+are performed automatically. The supplied `systemd/mindmap-node.service` is a separate example
+for an existing `/root/code/mindmap` checkout, with root `target/release` paths.
+An older `~/.local/bin/mindmap-node` can shadow a system-scope `/usr/local/bin/mindmap-node`.
+Check `command -v mindmap-node` after migration; the installer does not overwrite a different
+scope's CLI choice.
+
+On macOS the same `--scope user` command registers `dev.mindmap.node` in the logged-in user's
+launchd GUI domain. Its plist lives in `~/Library/LaunchAgents`; logs are in
+`~/Library/Logs/Mindmap`. The binary lives under `~/.local/lib/mindmap/node/<build-id>`, outside
+any `.app`. This survives app quit and app replacement, and starts at login. A headless SSH-only
+Mac without a logged-in GUI domain cannot use this LaunchAgent automatically.
+
+```sh
+# Explicit fallback on a host without a usable supervisor:
+./service/install-node.sh --binary "$NODE" --build-id "$BUILD_ID" --scope manual
+"$HOME/.local/bin/mindmap-node" serve --bind 127.0.0.1:47822
+```
+
+Manual mode installs only the versioned binary and CLI symlink. It does not start a background
+process, survive logout, or register reboot persistence; the operator supplies its lifecycle.
+It refuses to replace a running node.
+
+The package in `build/node/` contains native platform directories and both installer files. Copy
+those together over SSH, then invoke the same installer against the host's platform binary.
+Platform names are `linux-x64`, `linux-arm64`, `darwin-arm64`, and `darwin-x64`; only the platform
+actually built is present. Linux executable compatibility depends on the build host's libc and
+runtime libraries. No automatic cross compilation or Windows service installation is provided.
+
+### Approved updates and lifecycle
+
+Pass `--upgrade` (alias `--replace`) only after approving a restart. A different running build
+without this flag exits 20. Uninspectable sessions, prepared Syncs or ready merges exit 21;
+an unmanaged/legacy listener or supervisor PID mismatch exits 22. Other failures exit 1.
+Successful installation prints JSON with `status`, `build_id`, and installed `binary`.
+
+The installer verifies native `build-info`, PID ownership and `session.list`, then takes an atomic
+`upgrade.prepare` lease immediately before stopping the node. The 30-second lease rejects
+`sync.prepare`/`merge.apply` while edits continue; `upgrade.cancel {lease}` releases it if the old
+process survives a failed install. It waits for the expected node to answer before reporting
+success. Existing immutable binaries are retained, and failed starts restore the old supervisor
+configuration when possible. An install lock prevents concurrent installers within one scope.
+Old nodes lacking build identity/PID/upgrade lease support require an operator to verify no
+prepared work and stop their existing service explicitly before migration. The installer never
+kills an unmanaged listener or disables an unrelated service.
+
+Systemd units use `KillMode=process`, and launchd uses `AbandonProcessGroup`, so node replacement
+does not terminate shared Herdr/agent processes. The installer retains existing Herdr socket and
+session settings, with explicit `HERDR_SESSION`, `HERDR_SOCKET_PATH`, or `HERDR_BIN_PATH` environment
+overrides. The default remains the user's existing shared Herdr session.
+
+### Legacy document migration
+
 `mindmap-node migrate --records service/data/projects.json` exports and verifies legacy documents
 through the running server and node, preserving existing repository designs and never logging
 owner links. Keep the existing document server online while exporting its live designs,
@@ -120,9 +201,9 @@ older FigCraft installation is unaffected.
 ## Verification
 
 ```sh
-CARGO_HOME="$PWD/.cargo-home" cargo +1.95.0 test --manifest-path service/Cargo.toml
-CARGO_HOME="$PWD/.cargo-home" cargo +1.95.0 clippy --manifest-path service/Cargo.toml \
-  --all-targets -- -D warnings
+cargo test -p mindmap-node
+cargo clippy -p mindmap-node --all-targets -- -D warnings
+python3 -m unittest discover -s service -p 'test_install_node.py' -v
 ```
 
 The service suite covers ordered concurrent clients, disconnect cleanup, atomic saves and
@@ -132,7 +213,11 @@ Herdr protocol fixtures cover event subscription and reconnect; the opt-in live 
 the shared server without prompting agents. Client checks are documented in
 [`client/README.md`](../client/README.md).
 
-The backend cutover was verified with native Linux and macOS nodes, the rebuilt Mac app
+The earlier backend cutover was verified with native Linux and macOS nodes, the rebuilt Mac app
 opening this repository through one SSH tunnel, both machines' existing shared Herdr
 sessions, and the agent MCP reading the backend page. The Mindmap document container is
 stopped; its migration data is retained for rollback.
+
+Packaging lifecycle tests mock all supervisors and node requests. Those tests do not establish
+native launchd/systemd deployment or app-quit survival for the current build; verify those on
+the destination hosts after deployment.

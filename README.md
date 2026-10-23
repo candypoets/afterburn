@@ -5,6 +5,34 @@ agents, and a committed `.mindmap/map.figcraft` design. See [node operation and 
 and the [agent workflow](skills/mindmap/SKILL.md). The original generator and hosted-server notes
 below describe the migration source.
 
+## One build, full or headless installation
+
+The root Cargo workspace has two default packages: `figcraft` (desktop app) and `mindmap-node`
+(`service/`). Both use the canonical tracked tree in `server/figcraft/`, one root `Cargo.lock`,
+and root `target/`. The ignored `client-src/` checkout is historical, not a build input. Rust
+1.97.1 is selected by `rust-toolchain.toml`.
+
+```sh
+cargo build                          # app and node, same dependency graph
+cargo build -p mindmap-node           # headless node only, no desktop/display required
+./target/debug/mindmap-node serve --bind 127.0.0.1:47822
+```
+
+On macOS, `./client/build-mac.sh` builds both native binaries together, packages Mindmap.app and
+installs its node as a versioned launchd helper outside the bundle. The node keeps running when
+the app quits. `./service/build-node.sh` packages a native headless node; its portable installer
+supports Linux systemd system/user services, macOS launchd, and an explicit manual mode.
+Companion platforms are optional native builds with matching source identity and binary checksum
+sidecars. A default Mac package contains only its native node.
+
+See [full installation and Mac deployment](client/README.md) and
+[headless installation and safe upgrades](service/NODE.md#deployment-and-migration) for commands,
+prerequisites, platform availability and lifecycle limits. Existing running nodes are replaced
+only through an explicitly approved upgrade, with prepared Sync/merge checks and a node upgrade
+lease. Ordinary reconnect never silently replaces a running node.
+
+## Original feature-map generator and hosted migration source
+
 A feature map of **FigCraft** — the ArtCraft, pure-Rust Figma clone — drawn in FigCraft itself,
 and the generator that keeps it true to the code.
 
@@ -54,8 +82,8 @@ human's screen. `--map-mode` hides the layers and design panels, the toolbar, th
 frame labels, and adds a top bar with one tab per page and the live count. The app is renamed and
 carries its own icon; eframe's runtime Dock-icon override is skipped in map mode so the bundle's
 icon is the one shown. Every command that edits the document is refused in map mode — select,
-navigate and comment only. The patch, the icon and `build-mac.sh`
-live in [`client/`](client/README.md). It is a UI gate, not yet a permission model: editing
+navigate and comment only. The canonical app source lives in `server/figcraft/apps/figcraft` and its UI crate; the icon and
+`build-mac.sh` live in [`client/`](client/README.md). It is a UI gate, not yet a permission model: editing
 shortcuts and the writable document remain, and page navigation is done by the control channel
 until the map has in-canvas links.
 
@@ -84,7 +112,7 @@ build finds that literal in that file, requires it exactly once, and shows `path
 card. Move or rename the line and the build stops, naming the card. The map cannot invent a
 feature, a flag or a type the code does not have.
 
-## Build
+## Build the historical feature-map generator
 
 The scripts use only the Python standard library; the engine is the FigCraft CLI.
 
@@ -126,7 +154,8 @@ git -C .figcraft-src worktree list
 cargo build -p figcraft --manifest-path figcraft-work/Cargo.toml
 ```
 
-Both are git-ignored: this repository holds the map and the generator, not a vendored FigCraft.
+Both are git-ignored historical generator inputs. Application and node development now uses
+the tracked canonical tree at `server/figcraft/` and the root workspace described above.
 
 ## Why this exists
 

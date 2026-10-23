@@ -793,125 +793,132 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
         a11y::context_menu(app, ctx);
     }
     if let Some((pos, ids)) = app.ui.context_menu.clone() {
-        if let Some(f) = ctx.memory(|m| m.focused()) {
-            a11y::popup(&mut app.ui.nav, f, Id::new("ctx_menu"));
-        }
-        let mut close = false;
-        let area = egui::Area::new(ctx_menu_id()).fixed_pos(pos).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
-            menu_frame(ui, &t, At { root: ctx_menu_id(), path: String::new() }, |ui| {
-                if select_layer_menu(app, ui, pos, &t) {
-                    close = true;
-                }
-                let has_sel = !ids.is_empty();
-                // Sections in the selection add a contents toggle naming what it will do.
-                let section_toggle = app.session.doc().ok().and_then(|doc| {
-                    let secs: Vec<bool> = ids
-                        .iter()
-                        .filter_map(|i| doc.node(*i))
-                        .filter(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. }))
-                        .map(|n| n.hides_contents())
-                        .collect();
-                    (!secs.is_empty()).then(|| if secs.iter().all(|h| *h) { tr("Show section contents") } else { tr("Hide section contents") })
-                });
-                // Frames on the page (or in a section) convert to sections, and sections to frames.
-                let convert = app.session.doc().ok().and_then(|doc| {
-                    let nodes: Vec<_> = ids.iter().filter_map(|i| doc.node(*i)).collect();
-                    let on_board = |n: &figcraft_doc::Node| {
-                        n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.is_page() || matches!(p.kind, figcraft_doc::NodeKind::Section { .. }))
-                    };
-                    if nodes.is_empty() {
-                        None
-                    } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. })) {
-                        Some((tr("Convert to frame"), "object.convertToFrame"))
-                    } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame) && on_board(n)) {
-                        Some((tr("Convert to section"), "object.convertToSection"))
-                    } else {
-                        None
-                    }
-                });
-                let mut entries: Vec<(&str, &str)> = if has_sel {
-                    vec![
-                        (tr("Copy"), "edit.copy"),
-                        (tr("Paste here"), "edit.paste"),
-                        (tr("Paste to replace"), "edit.pasteReplace"),
-                        ("-", ""),
-                        (tr("Bring to front"), "arrange.front"),
-                        (tr("Bring forward"), "arrange.forward"),
-                        (tr("Send backward"), "arrange.backward"),
-                        (tr("Send to back"), "arrange.back"),
-                        ("-", ""),
-                        (tr("Group selection"), "object.group"),
-                        (tr("Frame selection"), "object.frameSelection"),
-                        (tr("Wrap in new section"), "object.wrapInSection"),
-                        (tr("Ungroup"), "object.ungroup"),
-                        (tr("Flatten"), "vector.flatten"),
-                        (tr("Outline stroke"), "vector.outlineStroke"),
-                        (tr("Use as mask"), "object.mask"),
-                        ("-", ""),
-                        (tr("Add auto layout"), "layout.add"),
-                        (tr("Create component"), "component.create"),
-                        (tr("Detach instance"), "component.detach"),
-                        ("-", ""),
-                        (tr("Show/Hide"), "object.toggleVisible"),
-                        (tr("Lock/Unlock"), "object.toggleLock"),
-                        ("-", ""),
-                        (tr("Flip horizontal"), "object.flipH"),
-                        (tr("Flip vertical"), "object.flipV"),
-                        ("-", ""),
-                        (tr("Copy as CSS"), "edit.copyAsCss"),
-                        (tr("Copy as SVG"), "edit.copyAsSvg"),
-                        (tr("Copy as PNG"), "edit.copyAsPng"),
-                        ("-", ""),
-                        (tr("Delete"), "edit.delete"),
-                    ]
-                } else {
-                    vec![
-                        (tr("Paste here"), "edit.paste"),
-                        ("-", ""),
-                        (tr("Select all"), "select.all"),
-                        ("-", ""),
-                        (tr("Show/Hide UI"), "view.toggleUi"),
-                        (tr("Zoom to fit"), "view.zoomFit"),
-                        (tr("Rulers"), "view.rulers"),
-                        (tr("Pixel grid"), "view.pixelGrid"),
-                    ]
-                };
-                if let Some(label) = section_toggle
-                    && let Some(at) = entries.iter().position(|e| e.1 == "object.toggleLock")
-                {
-                    entries.insert(at + 1, (label, "section.toggleContents"));
-                }
-                if let Some(entry) = convert
-                    && let Some(at) = entries.iter().position(|e| e.1 == "object.wrapInSection")
-                {
-                    entries.insert(at + 1, entry);
-                }
-                // A right-clicked ruler guide (selected, with no layers) can be removed.
-                if !has_sel && app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
-                    entries.splice(0..0, [(tr("Remove guide"), "guide.remove"), ("-", "")]);
-                }
-                for (label, id) in &entries {
-                    if *label == "-" {
-                        separator(ui);
-                        continue;
-                    }
-                    let sc = crate::shortcuts::shortcut(id).unwrap_or("");
-                    if item(ui, label, sc, available(id), false, &t) {
-                        if *id == "edit.paste" {
-                            let p = app.to_page(pos);
-                            paste(app, None, Some((p.x, p.y)));
-                        } else {
-                            invoke(app, id);
-                        }
+        if crate::map_mode() {
+            // The human's map: Copy and Comment, never the editor's tools.
+            crate::compose::context_menu(app, ctx, pos);
+        } else {
+            if let Some(f) = ctx.memory(|m| m.focused()) {
+                a11y::popup(&mut app.ui.nav, f, Id::new("ctx_menu"));
+            }
+            let mut close = false;
+            let area = egui::Area::new(ctx_menu_id()).fixed_pos(pos).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
+                menu_frame(ui, &t, At { root: ctx_menu_id(), path: String::new() }, |ui| {
+                    if select_layer_menu(app, ui, pos, &t) {
                         close = true;
                     }
-                }
+                    let has_sel = !ids.is_empty();
+                    // Sections in the selection add a contents toggle naming what it will do.
+                    let section_toggle = app.session.doc().ok().and_then(|doc| {
+                        let secs: Vec<bool> = ids
+                            .iter()
+                            .filter_map(|i| doc.node(*i))
+                            .filter(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. }))
+                            .map(|n| n.hides_contents())
+                            .collect();
+                        (!secs.is_empty()).then(|| if secs.iter().all(|h| *h) { tr("Show section contents") } else { tr("Hide section contents") })
+                    });
+                    // Frames on the page (or in a section) convert to sections, and sections to frames.
+                    let convert = app.session.doc().ok().and_then(|doc| {
+                        let nodes: Vec<_> = ids.iter().filter_map(|i| doc.node(*i)).collect();
+                        let on_board = |n: &figcraft_doc::Node| {
+                            n.parent
+                                .and_then(|p| doc.node(p))
+                                .is_some_and(|p| p.is_page() || matches!(p.kind, figcraft_doc::NodeKind::Section { .. }))
+                        };
+                        if nodes.is_empty() {
+                            None
+                        } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. })) {
+                            Some((tr("Convert to frame"), "object.convertToFrame"))
+                        } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame) && on_board(n)) {
+                            Some((tr("Convert to section"), "object.convertToSection"))
+                        } else {
+                            None
+                        }
+                    });
+                    let mut entries: Vec<(&str, &str)> = if has_sel {
+                        vec![
+                            (tr("Copy"), "edit.copy"),
+                            (tr("Paste here"), "edit.paste"),
+                            (tr("Paste to replace"), "edit.pasteReplace"),
+                            ("-", ""),
+                            (tr("Bring to front"), "arrange.front"),
+                            (tr("Bring forward"), "arrange.forward"),
+                            (tr("Send backward"), "arrange.backward"),
+                            (tr("Send to back"), "arrange.back"),
+                            ("-", ""),
+                            (tr("Group selection"), "object.group"),
+                            (tr("Frame selection"), "object.frameSelection"),
+                            (tr("Wrap in new section"), "object.wrapInSection"),
+                            (tr("Ungroup"), "object.ungroup"),
+                            (tr("Flatten"), "vector.flatten"),
+                            (tr("Outline stroke"), "vector.outlineStroke"),
+                            (tr("Use as mask"), "object.mask"),
+                            ("-", ""),
+                            (tr("Add auto layout"), "layout.add"),
+                            (tr("Create component"), "component.create"),
+                            (tr("Detach instance"), "component.detach"),
+                            ("-", ""),
+                            (tr("Show/Hide"), "object.toggleVisible"),
+                            (tr("Lock/Unlock"), "object.toggleLock"),
+                            ("-", ""),
+                            (tr("Flip horizontal"), "object.flipH"),
+                            (tr("Flip vertical"), "object.flipV"),
+                            ("-", ""),
+                            (tr("Copy as CSS"), "edit.copyAsCss"),
+                            (tr("Copy as SVG"), "edit.copyAsSvg"),
+                            (tr("Copy as PNG"), "edit.copyAsPng"),
+                            ("-", ""),
+                            (tr("Delete"), "edit.delete"),
+                        ]
+                    } else {
+                        vec![
+                            (tr("Paste here"), "edit.paste"),
+                            ("-", ""),
+                            (tr("Select all"), "select.all"),
+                            ("-", ""),
+                            (tr("Show/Hide UI"), "view.toggleUi"),
+                            (tr("Zoom to fit"), "view.zoomFit"),
+                            (tr("Rulers"), "view.rulers"),
+                            (tr("Pixel grid"), "view.pixelGrid"),
+                        ]
+                    };
+                    if let Some(label) = section_toggle
+                        && let Some(at) = entries.iter().position(|e| e.1 == "object.toggleLock")
+                    {
+                        entries.insert(at + 1, (label, "section.toggleContents"));
+                    }
+                    if let Some(entry) = convert
+                        && let Some(at) = entries.iter().position(|e| e.1 == "object.wrapInSection")
+                    {
+                        entries.insert(at + 1, entry);
+                    }
+                    // A right-clicked ruler guide (selected, with no layers) can be removed.
+                    if !has_sel && app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
+                        entries.splice(0..0, [(tr("Remove guide"), "guide.remove"), ("-", "")]);
+                    }
+                    for (label, id) in &entries {
+                        if *label == "-" {
+                            separator(ui);
+                            continue;
+                        }
+                        let sc = crate::shortcuts::shortcut(id).unwrap_or("");
+                        if item(ui, label, sc, available(id), false, &t) {
+                            if *id == "edit.paste" {
+                                let p = app.to_page(pos);
+                                paste(app, None, Some((p.x, p.y)));
+                            } else {
+                                invoke(app, id);
+                            }
+                            close = true;
+                        }
+                    }
+                });
             });
-        });
-        let clicked_outside = ctx.input(|i| i.pointer.any_pressed()) && !area.response.hovered() && !over_menu(ctx);
-        if close || clicked_outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            app.ui.context_menu = None;
-            forget_tree(ctx, ctx_menu_id());
+            let clicked_outside = ctx.input(|i| i.pointer.any_pressed()) && !area.response.hovered() && !over_menu(ctx);
+            if close || clicked_outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                app.ui.context_menu = None;
+                forget_tree(ctx, ctx_menu_id());
+            }
         }
     }
     crate::colorpicker::show(app, ctx);

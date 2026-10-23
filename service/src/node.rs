@@ -8,7 +8,7 @@ use std::sync::{
     mpsc, Arc, Mutex, MutexGuard,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
 use crate::node_documents::NodeDocuments;
@@ -21,7 +21,7 @@ use figcraft_collab::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub const PROTOCOL: u64 = 1;
+pub const PROTOCOL: u64 = mindmap_build::PROTOCOL;
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 128;
 
@@ -55,6 +55,7 @@ pub struct Node {
     jobs: Mutex<BTreeMap<String, Job>>,
     workspace_sessions: Mutex<HashMap<String, String>>,
     session_events: Mutex<HashMap<String, Value>>,
+    upgrade: Mutex<Option<(String, Instant)>>,
     next_connection: AtomicU64,
     address: String,
 }
@@ -84,6 +85,7 @@ pub fn serve(address: &str) -> Result<()> {
         jobs: Mutex::new(BTreeMap::new()),
         workspace_sessions: Mutex::new(HashMap::new()),
         session_events: Mutex::new(HashMap::new()),
+        upgrade: Mutex::new(None),
         next_connection: AtomicU64::new(1),
         address: bound.to_string(),
     });
@@ -292,6 +294,7 @@ impl Node {
     }
 
     fn open(&self, req: &Value) -> Result<Value> {
+        self.no_upgrade()?;
         let (workspace, label, path) = if let Some(path) = req["path"].as_str() {
             (
                 req["workspace"].as_str().unwrap_or("").to_string(),
@@ -325,11 +328,31 @@ impl Node {
     }
 
     fn handle(&self, connection: u64, req: &Value) -> Result<Value> {
-        match required(req, "method")? {
+        let method = required(req, "method")?;
+        if matches!(
+            method,
+            "sync.prepare" | "merge.apply" | "open" | "session.open"
+        ) {
+            self.no_upgrade()?;
+        }
+        match method {
             "hello" | "health" => Ok(
-                json!({"service":"mindmap-node","protocol":PROTOCOL,"version_name":env!("CARGO_PKG_VERSION"),"capabilities":["collaboration","git-sync","merge","herdr-events"]}),
+                json!({"service":"mindmap-node","protocol":PROTOCOL,"version_name":env!("CARGO_PKG_VERSION"),"build_id":mindmap_build::BUILD_ID,"pid":std::process::id(),"capabilities":["collaboration","git-sync","merge","herdr-events"]}),
             ),
             "host.status" => Ok(serde_json::to_value(self.herdr.status()?)?),
+            "upgrade.prepare" => self.prepare_upgrade(),
+            "upgrade.cancel" => {
+                let mut upgrade = lock(&self.upgrade)?;
+                if upgrade
+                    .as_ref()
+                    .is_some_and(|(lease, _)| Some(lease.as_str()) == req["lease"].as_str())
+                {
+                    *upgrade = None;
+                    Ok(json!({"cancelled":true}))
+                } else {
+                    Err(Error::new("unknown upgrade lease"))
+                }
+            }
             "host.ensure" => Ok(serde_json::to_value(
                 self.herdr
                     .ensure(req["install_herdr"].as_bool().unwrap_or(false))?,
@@ -491,6 +514,42 @@ impl Node {
             "merge.abort" => self.abort_merge(req),
             method => Err(Error::new(format!("unknown node method {method:?}"))),
         }
+    }
+
+    fn no_upgrade(&self) -> Result<()> {
+        let mut upgrade = lock(&self.upgrade)?;
+        if upgrade
+            .as_ref()
+            .is_some_and(|(_, until)| *until > Instant::now())
+        {
+            return Err(Error::new(
+                "node update is pending; retry after the helper reconnects",
+            ));
+        }
+        *upgrade = None;
+        Ok(())
+    }
+
+    // Dispatch holds document_order: checking gates and reserving the update is atomic with
+    // Sync/merge preparation. Live edits continue and remain durably cached before stop.
+    fn prepare_upgrade(&self) -> Result<Value> {
+        self.no_upgrade()?;
+        if lock(&self.docs)?
+            .sessions()
+            .iter()
+            .any(|session| session.sync_prepared || session.merge_ready)
+        {
+            return Err(Error::new(
+                "finish or cancel prepared Sync/merge before updating the node",
+            ));
+        }
+        let lease = format!(
+            "{}-{}",
+            std::process::id(),
+            self.next_connection.fetch_add(1, Ordering::Relaxed)
+        );
+        *lock(&self.upgrade)? = Some((lease.clone(), Instant::now() + Duration::from_secs(30)));
+        Ok(json!({"lease":lease,"pid":std::process::id(),"expires_in":30}))
     }
 
     fn context(&self, session: &str, req: &Value, commented: &[u64]) -> Result<String> {

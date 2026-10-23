@@ -1,28 +1,17 @@
 #!/usr/bin/env bash
-# Run on the Mac after bundling the native node with Mindmap.app.
+# Compatibility wrapper around the same installer used by the app and headless hosts.
+# Usage: install-mac-node.sh [Mindmap.app] [--upgrade]
 set -euo pipefail
+[[ "$(uname -s)" == Darwin ]] || { echo 'Run this installer on macOS.' >&2; exit 1; }
+HERE="$(cd "$(dirname "$0")" && pwd)"
 APP="${1:-$HOME/Applications/Mindmap.app}"
-NODE="$APP/Contents/Resources/node/darwin-arm64/mindmap-node"
-if [[ "$(uname -m)" == x86_64 ]]; then NODE="$APP/Contents/Resources/node/darwin-x64/mindmap-node"; fi
+if [[ $# -gt 0 ]]; then shift; fi
+case "$(uname -m)" in
+  arm64) PLATFORM=darwin-arm64 ;;
+  x86_64) PLATFORM=darwin-x64 ;;
+  *) echo 'Unsupported Mac architecture' >&2; exit 1 ;;
+esac
+NODE="$APP/Contents/Resources/node/$PLATFORM/mindmap-node"
 [[ -x "$NODE" ]] || { echo 'Bundle the native Mindmap node first.' >&2; exit 1; }
-mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs/Mindmap" "$HOME/.local/bin"
-ln -sfn "$NODE" "$HOME/.local/bin/mindmap-node"
-python3 - "$NODE" <<'PY'
-import pathlib, plistlib, sys
-home=pathlib.Path.home()
-data={
-    'Label':'dev.mindmap.node',
-    'ProgramArguments':[sys.argv[1],'serve','--bind','127.0.0.1:47822'],
-    'RunAtLoad':True,'KeepAlive':True,
-    'WorkingDirectory':str(home),
-    'EnvironmentVariables':{'HOME':str(home),'HERDR_ENV':'1','HERDR_SOCKET_PATH':str(home/'.config/herdr/herdr.sock'),
-        'PATH':f'{home}/.local/bin:{home}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'},
-    'StandardOutPath':str(home/'Library/Logs/Mindmap/node.log'),
-    'StandardErrorPath':str(home/'Library/Logs/Mindmap/node.error.log'),
-}
-with (home/'Library/LaunchAgents/dev.mindmap.node.plist').open('wb') as f: plistlib.dump(data,f)
-PY
-DOMAIN="gui/$(id -u)"
-launchctl bootout "$DOMAIN/dev.mindmap.node" >/dev/null 2>&1 || true
-launchctl bootstrap "$DOMAIN" "$HOME/Library/LaunchAgents/dev.mindmap.node.plist"
-launchctl kickstart "$DOMAIN/dev.mindmap.node"
+BUILD_ID="$("$NODE" build-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["build_id"])')"
+exec "$HERE/install-node.sh" --binary "$NODE" --build-id "$BUILD_ID" --scope user "$@"

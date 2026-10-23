@@ -1,75 +1,125 @@
 # Mindmap desktop client
 
-Mindmap reuses FigCraft's engine, collaboration model, canvas, and page tree. In map mode the
-app connects only to Mindmap nodes: one persistent protocol-v1 connection per machine, over
-loopback or one SSH tunnel. Ordinary FigCraft mode keeps its existing transport.
+Mindmap's app (`figcraft`) and backend (`mindmap-node`) belong to the root Cargo workspace.
+The only FigCraft source tree is `server/figcraft/`; the node crate is `service/`. Both use the
+root `Cargo.lock` and root `target/`. The old ignored `client-src/` checkout and source overlays
+are not build inputs. Edit the canonical source directly.
 
-## Reproduce the complete client
+## Full Mac install
 
-The ignored `client-src/` directory is a working checkout, not the source of record.
-`source-overlay/` contains **every differing file** relative to `server/figcraft/`, including
-previous Mindmap features and the node integration. `source-overlay.json` records baseline
-and resulting checksums. The old `mindmap-client.patch` is historical and incomplete.
+Run from the repository root on macOS, with Rust 1.97.1, Xcode command-line tools and Python 3.9+
+installed:
 
 ```sh
-cp -a server/figcraft /tmp/mindmap-client
-python3 client/apply-source-overlay.py /tmp/mindmap-client
-cargo +1.97.1 check --manifest-path /tmp/mindmap-client/Cargo.toml -p figcraft
-cargo +1.97.1 test --manifest-path /tmp/mindmap-client/Cargo.toml -p figcraft-ui-egui node --lib
+./client/build-mac.sh
+open "$HOME/Applications/Mindmap.app" --args --map-mode --node 127.0.0.1:47822
 ```
 
-The apply script checks all inputs before writing and refuses unrelated checkout edits. It is
-idempotent. After editing `client-src/`, run `python3 client/refresh-source-overlay.py` and review
-the resulting overlay changes before committing. No generated binaries or build caches belong
-in the overlay.
+The build script runs **one** `cargo +1.97.1 build --locked -p figcraft -p mindmap-node` invocation
+(with the release profile by default). It creates and ad-hoc signs `Mindmap.app`, bundles the
+native node produced by that invocation, and runs the bundled helper's installer. The helper
+is copied to `~/.local/lib/mindmap/node/<build-id>/mindmap-node`; launchd points directly to that
+immutable copy. `~/.local/bin/mindmap-node` is a CLI symlink to it. Quitting or replacing the app
+leaves the helper and shared Herdr running.
+
+`APP` selects a bundle destination, `PROFILE=debug` selects debug binaries, and `CARGO_TOOLCHAIN`
+overrides the pinned toolchain. `INSTALL_NODE=0` builds a package without registering a helper;
+this is not a completed full install. macOS user installation requires a logged-in GUI user
+and Python 3.9+. The helper is a LaunchAgent, so login starts it; it is not a machine-wide boot
+service before login. Logs are in `~/Library/Logs/Mindmap/`.
+
+A running node from a different build is left untouched unless the user approves an upgrade:
+
+```sh
+# Explicitly approved full install and helper upgrade:
+UPGRADE_NODE=1 ./client/build-mac.sh
+# Or upgrade the helper from an already-built app:
+./service/install-mac-node.sh "$HOME/Applications/Mindmap.app" --upgrade
+```
+
+A prepared Sync or ready merge prevents an upgrade. The installer checks `session.list`, verifies
+that the selected supervisor owns the listener's PID, then obtains the node's `upgrade.prepare`
+lease before stopping it. That lease prevents a new save gate from racing the restart. Failed
+starts restore the previous service definition when possible; immutable older binaries remain
+available. A legacy node without identity/PID reporting needs explicit operator migration.
+The installer does not kill unmanaged processes or stop Herdr.
+
+## Deploy this checkout to a Mac
+
+```sh
+./client/deploy-mac.sh macbook
+# Only after approving replacement of the running node:
+UPGRADE_NODE=1 ./client/deploy-mac.sh macbook
+```
+
+Deployment copies the current canonical workspace, lockfile, sources, assets and packaging scripts
+into an isolated `~/.cache/mindmap/builds/full.*/source` snapshot on the Mac. It includes new
+nonignored source files, so uncommitted work can be deployed. It does not reconstruct an overlay,
+copy `client-src`, overwrite a worktree, or copy private design/server state. The remote root
+build uses `~/.cache/mindmap/target` as its shared build cache. Snapshots are retained for inspection.
+The Mac needs the same build prerequisites as a local build; the deploying host needs Git,
+Python 3, SSH and rsync. SSH host keys/authentication use the user's configuration.
+
+## Optional companion platforms
+
+Native node input is **never** required separately. `NODE_ASSETS` is optional and supplies remote
+platforms only. Build each companion natively from the **same canonical source contents** and
+root lockfile using `service/build-node.sh` (see [headless installation](../service/NODE.md)).
+The script emits a binary plus `build-info.json` containing the shared source `build_id`, product
+version, protocol, platform and binary SHA256. Packaging verifies those fields against its native
+node and refuses stale, missing or modified sidecars. Foreign binaries are never executed during
+Mac packaging. Ad-hoc signing refreshes Mach-O checksums without changing their build identity.
+Sidecars establish matching build provenance; they are not a signed supply-chain attestation.
+
+```sh
+# On Linux, with this exact canonical source snapshot:
+./service/build-node.sh "$PWD/build/node"
+# From that same checkout, copy companions while building app + native Mac node:
+NODE_ASSETS="$PWD/build/node" ./client/deploy-mac.sh macbook
+```
+
+The supported asset directory names are `darwin-arm64`, `darwin-x64`, `linux-arm64` and `linux-x64`.
+A normal Mac build includes only its native architecture. Other platforms require corresponding
+native builds; naming a directory does not make a cross-platform binary. Linux builds retain their
+host libc/runtime requirements. Windows nodes and cross compilation are not packaged here.
 
 ## Nodes and host selection
 
-Launch with `--map-mode --node 127.0.0.1:47822` for local work, or `--node ssh:befree` for an SSH
-config alias. `MINDMAP_NODE` supplies the default address; `--service` remains a CLI alias for
-`--node`. Raw remote TCP connections are refused. Workspaces open by session ID, worktree path,
-and branch; no owner links or server keys are used.
+Use `--map-mode --node 127.0.0.1:47822` locally or `--node ssh:befree` for an SSH config alias.
+`MINDMAP_NODE` supplies the default address; `--service` remains an alias for `--node`. Remote
+connections use SSH to a loopback listener. Workspaces open by session ID, worktree path and
+branch; no owner links or server keys are used.
 
-The host picker installs/starts the bundled node in a worker thread. It requests approval only
-when Herdr needs installation, then ensures Herdr's shared session is running. Remote host
-setup reuses a matching saved Herdr machine or registers one targeting that same session.
-It never creates a private Herdr instance. SSH authentication and host keys use the user's SSH
-configuration; password prompts must be completed in a terminal first. Local Herdr discovery
-honors `HERDR_BIN_PATH`, then checks `~/.local/bin`, `~/.cargo/bin`, Homebrew, `/usr/local/bin`,
-and finally `PATH`, including GUI launches with a minimal environment.
+Explicit host setup installs the matching bundled node through `Resources/install-node.sh` and
+`install-node.py`, using launchd on macOS or systemd on Linux. Python 3.9+ and the selected service
+manager must be available on the host. Root Linux hosts use system scope; others use user scope.
+A different build is shown as an update requiring approval. Ordinary reconnect does not silently
+replace or launch a node. When the app lacks a host's platform asset, build/package that platform
+or install its matching node manually first. Existing installed nodes can be reached without a
+bundled companion asset.
 
-Saved hosts live in `~/.config/mindmap/hosts.json`:
+Herdr installation needs separate approval when missing. Setup uses the shared Herdr session
+and preserves `HERDR_SESSION`/`HERDR_SOCKET_PATH`; it never starts a private Herdr daemon. Saved
+hosts live in `~/.config/mindmap/hosts.json`, for example:
 
 ```json
 [{"name":"befree","address":"ssh:befree","ssh":"befree"}]
 ```
 
-Node binaries belong in the app bundle's `Contents/Resources/node/{platform}/mindmap-node`,
-where platform is `darwin-arm64`, `darwin-x64`, `linux-arm64`, or `linux-x64`. The app also checks
-`~/Applications/Mindmap.app/Contents/Resources/` when running outside its bundle. Remote setup
-copies the appropriate asset to `~/.local/bin/mindmap-node` and starts
-`mindmap-node serve --bind 127.0.0.1:47822`.
+Comments, first-page prompts, diffs and Sync requests carry the document's node session. Changing
+hosts cannot redirect an open map. Collaboration, Herdr status and job events share a connection.
+A checkout queues a reopen on the same node after pending workspace activity finishes. Lost
+mutating requests are not retried automatically because their outcome may be unknown. Quitting
+closes pooled connections and SSH tunnels; the independently supervised node remains running.
 
-## Behavior and validation
+## Verification
 
-Comments, first-page prompts, diffs, and sync requests carry the active document's node session,
-so choosing another host cannot redirect an open map. The node owns the design snapshot.
-Collaboration messages, live Herdr status, and job updates share the connection; periodic job
-queries remain a fallback. A checkout notification queues an automatic reopen of the active
-workspace on its selected node after any pending workspace action finishes; the new branch
-session supplies its existing page tree. The agent MCP opens the current branch on each call.
-A protocol mismatch or lost connection is shown as an error. Lost
-mutating requests are never retried automatically because their outcome may be unknown.
+```sh
+cargo test -p figcraft-ui-egui node --lib
+python3 -m unittest discover -s service -p 'test_install_node.py' -v
+bash -n client/build-mac.sh client/deploy-mac.sh service/build-node.sh service/install-mac-node.sh
+sh -n service/install-node.sh
+```
 
-Transport tests cover interleaved events and out-of-order RPC replies on one socket, protocol
-rejection, disconnect errors, the engine's actual join/welcome/presence path, loopback checks,
-and SSH target validation. Shutdown drains pooled connections and reaps their SSH processes,
-including the Mac app's explicit exit path; a quit/reopen cycle was verified on the deployed app.
-Existing page-tree tests cover the retained page hierarchy.
-
-`build-mac.sh` wraps the desktop executable and icon, copies `NODE_ASSETS` into the bundle,
-and requires the local-platform node before packaging. Include the Linux platform directories
-in `NODE_ASSETS` for remote setup. `deploy-mac.sh` reconstructs the full tracked overlay by
-default (or accepts a working source directory as its second argument), copies complete sources
-to the Mac, and optionally copies `NODE_ASSETS` before building/signing. It refuses to deploy
-an app missing its local node. The node deployment workflow builds these binaries separately.
+Packaging tests use temporary directories and mocked supervisors/RPCs. Native build, signature,
+launchd and app-quit survival checks must be performed on the destination Mac.

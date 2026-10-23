@@ -1,0 +1,13 @@
+[package]
+name = "mindmap-build"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Shared source identity for the Mindmap app and its node"
+
+[build-dependencies]
+sha2.workspace = true
+
+[lints]
+workspace = true

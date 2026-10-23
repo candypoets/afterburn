@@ -10,7 +10,7 @@ Type=simple
 # own private Herdr daemon, so a stop takes the whole cgroup down.
 WorkingDirectory=/root/code/mindmap/server
 Environment=HERDR_PRIVATE_HOME=/root/code/mindmap/server/data/agents
-ExecStart=/root/code/mindmap/server/figcraft/target/release/figcraft-server \
+ExecStart=/root/code/mindmap/target/release/figcraft-server \
   --listen 0.0.0.0:47910 --data /root/code/mindmap/server/data
 Restart=always
 RestartSec=2

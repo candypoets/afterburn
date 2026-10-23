@@ -242,7 +242,10 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
     app.session.tool.labels = overlays(app, &painter, &t);
-    crate::frame_labels::rename_field(app, ui);
+    detail_badges(app, ui);
+    if !crate::map_mode() {
+        crate::frame_labels::rename_field(app, ui);
+    }
     // The zoom tool's area.
     if let (Some(start), Some(p)) = (app.canvas.zoom_drag, ctx.input(|i| i.pointer.hover_pos())) {
         let area = Rect::from_two_pos(start, p);
@@ -252,8 +255,10 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         }
     }
     crate::dev_mode::draw(app, &painter);
-    crate::handles::draw(app, &painter);
-    crate::selection_spacing::draw(app, &painter);
+    if !crate::map_mode() {
+        crate::handles::draw(app, &painter);
+        crate::selection_spacing::draw(app, &painter);
+    }
     crate::comments::draw(app, &painter);
     crate::live_text::draw(app, &painter);
     crate::live::draw(app, &painter, &ctx);
@@ -590,7 +595,7 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
     if !app.canvas.dragging && resp.hovered() && crate::guides::input(app, &ctx, pos) {
         return false;
     }
-    if !app.canvas.dragging && resp.hovered() && crate::handles::input(app, &ctx, pos) {
+    if !app.canvas.dragging && resp.hovered() && !crate::map_mode() && crate::handles::input(app, &ctx, pos) {
         return false;
     }
     if resp.secondary_clicked() {
@@ -877,6 +882,59 @@ fn draw_outline(app: &FigApp, painter: &egui::Painter, doc: &Document, id: NodeI
 
 /// Everything drawn over the rendered page; returns the frame labels drawn (frame, corners on the
 /// page) for the engine to hit-test.
+/// A clickable subpage marker on every card that has a dedicated page.
+///
+/// It is drawn in page scale inside the card's top-right corner (an elbow and the word), so it
+/// shrinks with the canvas and disappears below 30% zoom. A screen-space badge stays the same
+/// size at every zoom and litters a zoomed-out map.
+fn detail_badges(app: &mut FigApp, ui: &mut Ui) {
+    let links: Vec<(NodeId, u64, Pos2, f32)> = match app.session.ds() {
+        Ok(ds) => {
+            let doc = ds.doc.clone();
+            let zoom = ds.view.zoom as f32;
+            if zoom < 0.3 {
+                return;
+            }
+            doc.subtree(ds.page)
+                .into_iter()
+                .filter_map(|id| {
+                    let page_id = doc.node(id)?.plugin_data.get(crate::new_page::DETAIL_PAGE_KEY)?.parse::<u64>().ok()?;
+                    let q = node_quad(app, &doc, id)?;
+                    Some((id, page_id, q[1], zoom))
+                })
+                .collect()
+        }
+        Err(_) => Vec::new(),
+    };
+    let painter = ui.painter().clone();
+    let ink = Color32::from_rgb(0xB5, 0x45, 0x2F);
+    for (id, page_id, corner, zoom) in links {
+        let galley = painter.layout_no_wrap("subpage".to_owned(), egui::FontId::monospace(8.0 * zoom), ink);
+        let mark = 6.0 * zoom;
+        let gap = 3.0 * zoom;
+        let width = mark + gap + galley.size().x;
+        let top = corner.y + 8.0 * zoom;
+        let left = corner.x - 12.0 * zoom - width;
+        let stroke = Stroke::new((1.2 * zoom).max(0.6), ink);
+        // The elbow: down from the corner, then right into the word (the "↳", drawn not typed).
+        painter.line_segment([pos2(left, top), pos2(left, top + mark)], stroke);
+        painter.line_segment([pos2(left, top + mark), pos2(left + mark, top + mark)], stroke);
+        painter.galley(pos2(left + mark + gap, top + (mark - galley.size().y) / 2.0), galley.clone(), ink);
+        let hit = Rect::from_min_size(pos2(left, top), vec2(width, mark.max(galley.size().y))).expand(6.0);
+        let response = ui
+            .interact(hit, ui.id().with(("detail_link", id)), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Open subpage");
+        if response.hovered() {
+            let underline = top + (mark + galley.size().y) / 2.0 + 1.0;
+            painter.line_segment([pos2(left + mark + gap, underline), pos2(left + width, underline)], Stroke::new((1.0 * zoom).max(0.5), ink));
+        }
+        if response.clicked() {
+            app.run("page.select", serde_json::json!({"id": page_id}));
+        }
+    }
+}
+
 fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [Point; 4])> {
     let mut labels = Vec::new();
     let Ok(ds) = app.session.ds() else { return labels };
@@ -933,7 +991,10 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
         }
         // The focus view's bar names its frame.
         let labelled = focus.is_none() && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }));
-        if labelled && let Some(q) = crate::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), ds.hover == Some(*c)) {
+        if labelled
+            && !crate::map_mode()
+            && let Some(q) = crate::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), ds.hover == Some(*c))
+        {
             labels.push((*c, q.map(|p| app.to_page(p))));
         }
     }
@@ -1045,31 +1106,35 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             } else {
                 4
             };
-            size_label = transform_box(app, painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, label);
-            arc_overlay(app, painter, col);
-            shape_overlay(app, painter, col);
-            if app.session.tool.tool == ToolId::Scale {
-                // The point that stays put: the dragged pivot, else the anchor.
-                let pivot = scale
-                    .map(|h| Point::new(h.pivot[0], h.pivot[1]))
-                    .or_else(|| figcraft_engine::tools::scale_anchor_point(&doc, &sel, app.session.tool.scale_anchor));
-                if let Some(p) = pivot {
-                    let c = app.to_screen(p.x, p.y);
-                    painter.circle_filled(c, 4.0, Color32::WHITE);
-                    painter.circle_stroke(c, 4.0, stroke(col, 1.5));
+            // The human's map has no transform box, handles, size badge or rotation origin: the
+            // outline drawn above is the whole selection chrome.
+            if !crate::map_mode() {
+                size_label = transform_box(app, painter, b.map(|p| app.to_screen(p.x, p.y)), col, sel.len() > 1, handles, label);
+                arc_overlay(app, painter, col);
+                shape_overlay(app, painter, col);
+                if app.session.tool.tool == ToolId::Scale {
+                    // The point that stays put: the dragged pivot, else the anchor.
+                    let pivot = scale
+                        .map(|h| Point::new(h.pivot[0], h.pivot[1]))
+                        .or_else(|| figcraft_engine::tools::scale_anchor_point(&doc, &sel, app.session.tool.scale_anchor));
+                    if let Some(p) = pivot {
+                        let c = app.to_screen(p.x, p.y);
+                        painter.circle_filled(c, 4.0, Color32::WHITE);
+                        painter.circle_stroke(c, 4.0, stroke(col, 1.5));
+                        painter.circle_filled(c, 1.5, col);
+                    }
+                }
+                // The rotation origin while it shows (Alt+R): a ring with a cross through it.
+                if let Some(o) = ds.origin_handle() {
+                    let c = app.to_screen(o.x, o.y);
+                    painter.circle_filled(c, 5.0, Color32::WHITE);
+                    painter.circle_stroke(c, 5.0, stroke(col, 1.5));
+                    for d in [vec2(1.0, 0.0), vec2(0.0, 1.0)] {
+                        painter.line_segment([c - d * 10.0, c - d * 5.0], stroke(col, 1.5));
+                        painter.line_segment([c + d * 5.0, c + d * 10.0], stroke(col, 1.5));
+                    }
                     painter.circle_filled(c, 1.5, col);
                 }
-            }
-            // The rotation origin while it shows (Alt+R): a ring with a cross through it.
-            if let Some(o) = ds.origin_handle() {
-                let c = app.to_screen(o.x, o.y);
-                painter.circle_filled(c, 5.0, Color32::WHITE);
-                painter.circle_stroke(c, 5.0, stroke(col, 1.5));
-                for d in [vec2(1.0, 0.0), vec2(0.0, 1.0)] {
-                    painter.line_segment([c - d * 10.0, c - d * 5.0], stroke(col, 1.5));
-                    painter.line_segment([c + d * 5.0, c + d * 10.0], stroke(col, 1.5));
-                }
-                painter.circle_filled(c, 1.5, col);
             }
         }
     }
@@ -1195,7 +1260,7 @@ fn transform_box(app: &FigApp, painter: &egui::Painter, q: [Pos2; 4], col: Color
         painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
         painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
     }
-    if app.session.prefs.show_dimensions {
+    if !crate::map_mode() && app.session.prefs.show_dimensions {
         let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
         return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));

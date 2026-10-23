@@ -1,7 +1,7 @@
 # figcraft-server in a container; setup in docs/server.md ("Deploy on a Linux server"). Build from
 # the repository root:
 #
-#   docker build -f packaging/server/Dockerfile -t figcraft-server .
+#   docker build -f server/figcraft/packaging/server/Dockerfile -t figcraft-server .
 #
 # The image runs as an unprivileged user, keeps its files in the /data volume and reads
 # /etc/figcraft-server/server.toml (listen on 0.0.0.0:47900, data in /data; mount your own to set
@@ -9,7 +9,10 @@
 
 FROM rust:1-bookworm AS build
 WORKDIR /src
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
+COPY server/figcraft server/figcraft
+COPY service service
 RUN cargo build --release --locked -p figcraft-server \
  && mkdir -p /out/data \
  && printf 'listen = "0.0.0.0:47900"\ndata = "/data"\n' > /out/server.toml

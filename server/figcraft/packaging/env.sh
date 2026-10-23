@@ -2,12 +2,13 @@
 # Shared setup for the packaging scripts. Source it: `. "$(dirname "$0")/../env.sh"`.
 #
 # Exports:
-#   ROOT                  workspace root
+#   ROOT                  FigCraft source and asset root
+#   WORKSPACE_ROOT        Mindmap Cargo workspace root
 #   VERSION               [workspace.package] version from Cargo.toml (override: FIGCRAFT_VERSION)
 #   DIST                  output directory for release artifacts (default: $ROOT/dist/release)
 #   FIGCRAFT_BUILD_SHA    git commit baked into the binaries (apps/figcraft/build.rs)
 #   FIGCRAFT_BUILD_DATE   UTC build date, YYYY-MM-DD
-#   CARGO_TARGET_DIR      cargo's target dir (default: $ROOT/target)
+#   CARGO_TARGET_DIR      cargo's target dir (default: $WORKSPACE_ROOT/target)
 # Sets (not exported):
 #   BINS                  the binaries to build and ship: figcraft, plus figcraft-cli when the
 #                         workspace has apps/figcraft-cli
@@ -15,7 +16,8 @@
 #   CARGO_PKGS            `-p <bin>` arguments for cargo build
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export ROOT
+WORKSPACE_ROOT="$(cd "$ROOT/../.." && pwd)"
+export ROOT WORKSPACE_ROOT
 
 # The version lives in exactly one place: `[workspace.package] version` in the root Cargo.toml.
 # (`cargo xtask version` prints the same thing; awk avoids compiling xtask here.)
@@ -23,12 +25,12 @@ workspace_version() {
   awk '
     /^\[/ { in_pkg = ($0 == "[workspace.package]") ; next }
     in_pkg && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }
-  ' "$ROOT/Cargo.toml"
+  ' "$WORKSPACE_ROOT/Cargo.toml"
 }
 
 VERSION="${FIGCRAFT_VERSION:-$(workspace_version)}"
 if [ -z "$VERSION" ]; then
-  echo "error: could not read [workspace.package] version from $ROOT/Cargo.toml" >&2
+  echo "error: could not read [workspace.package] version from $WORKSPACE_ROOT/Cargo.toml" >&2
   exit 1
 fi
 export VERSION
@@ -42,7 +44,7 @@ if [ -z "${FIGCRAFT_BUILD_SHA:-}" ]; then
 fi
 export FIGCRAFT_BUILD_SHA
 export FIGCRAFT_BUILD_DATE="${FIGCRAFT_BUILD_DATE:-$(date -u +%Y-%m-%d)}"
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT/target}"
 
 # The headless CLI ships next to the app once apps/figcraft-cli exists.
 BINS=(figcraft)

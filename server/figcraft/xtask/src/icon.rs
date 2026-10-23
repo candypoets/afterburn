@@ -29,7 +29,7 @@ pub fn generate(root: &Path) -> bool {
         eprintln!("icon: expected {VIEW_BOX} in figcraft.svg");
         return false;
     }
-    let tmp = root.join("target/icon");
+    let tmp = crate::target_dir().join("icon");
     // Windows and Linux show the tile edge to edge, rounded corners and all: the master as it is.
     let (mac, tile) = (tmp.join("mac.svg"), dir.join("figcraft.svg"));
     let mut ok = std::fs::create_dir_all(&tmp).is_ok() && std::fs::write(&mac, master.replacen(VIEW_BOX, MAC_VIEW_BOX, 1)).is_ok();

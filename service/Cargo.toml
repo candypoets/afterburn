@@ -1,5 +1,5 @@
 [package]
-name = "mindmap-service"
+name = "mindmap-node"
 version = "0.1.0"
 edition = "2021"
 description = "Mindmap node: live worktree designs, shared Herdr agents, Git-backed Sync"
@@ -11,13 +11,11 @@ name = "mindmap-node"
 path = "src/node_main.rs"
 
 [dependencies]
+mindmap-build = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-figcraft-doc = { path = "../server/figcraft/crates/doc" }
-figcraft-collab = { path = "../server/figcraft/crates/collab" }
-figcraft-engine = { path = "../server/figcraft/crates/engine" }
-figcraft-format = { path = "../server/figcraft/crates/format" }
-figcraft-text = { path = "../server/figcraft/crates/text" }
-
-[profile.release]
-strip = true
+figcraft-doc = { workspace = true }
+figcraft-collab = { workspace = true }
+figcraft-engine = { workspace = true }
+figcraft-format = { workspace = true }
+figcraft-text = { workspace = true }

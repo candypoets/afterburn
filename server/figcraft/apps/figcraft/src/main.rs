@@ -1,16 +1,19 @@
 //! FigCraft desktop app.
 //!
-//! Usage: `figcraft [--control <port>] [files…] [figcraft://join?…]` (an invite link joins that
+//! Usage: `figcraft [--control <port>] [--service <address>] [files…] [figcraft://join?…]` (an invite link joins that
 //! live session; the app registers itself as the opener of such links: `collab.registerLinks`).
 //!
 //! `--control <port>` (or `FIGCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":0,"y":0,"width":100,"height":100}}}`
 //! → `{"id":1,"ok":true,"result":{…}}`. Methods: `figcraft_ui_egui::control`.
 //!
+//! `--node <address>` (or `MINDMAP_NODE`) selects the map client's node (loopback or ssh:alias); launched with `open --args`, the Mac app gets it this way.
+//!
 //! `--automation-read-root <dir>` / `--automation-write-root <dir>` (each repeatable) confine the
 //! files the window and the control channel read and write (`figcraft_engine::file_access`); the
 //! app's own folders (settings, recovery copies, installed plugins) and opening the files given on
-//! the command line are not. A root that isn't an existing folder stops the app at startup.
+//! the command line are not. A root that isn't an existing folder stops the app at startup, and so
+//! does any flag the app doesn't know (a mistyped root flag must not start the app unconfined).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -113,22 +116,39 @@ impl eframe::App for App {
         // Everything is kept: end before the windows' teardown, where AppKit's Touch Bar support
         // throws on the content view AccessKit restores (craft-libs#3, #781).
         #[cfg(target_os = "macos")]
-        std::process::exit(0);
+        {
+            figcraft_ui_egui::node::shutdown();
+            std::process::exit(0);
+        }
     }
 }
 
 fn main() -> eframe::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let map_mode = args.iter().any(|a| a == "--map-mode");
+    if map_mode {
+        figcraft_ui_egui::set_map_mode(true);
+        args.retain(|a| a != "--map-mode");
+    }
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!(
-            "FigCraft {}{}",
+            "Mindmap {}{}",
             env!("CARGO_PKG_VERSION"),
             option_env!("FIGCRAFT_BUILD_SHA").filter(|s| !s.is_empty()).map(|s| format!(" ({s})")).unwrap_or_default()
         );
         return Ok(());
     }
     let args = args::parse(&args);
+    if let Some(flag) = args.unknown.first() {
+        eprintln!(
+            "FigCraft: unknown option {flag}\nUsage: figcraft [--control PORT] [--service ADDRESS] [--automation-read-root DIR]... [--automation-write-root DIR]... [FILE | figcraft://join?...]..."
+        );
+        std::process::exit(2);
+    }
+    if let Some(service) = &args.service {
+        figcraft_ui_egui::workspaces::set_service(service);
+    }
     let roots = match (
         args.read_roots.is_empty() && args.write_roots.is_empty(),
         figcraft_engine::file_access::Roots::new(&args.read_roots, &args.write_roots),
@@ -136,7 +156,7 @@ fn main() -> eframe::Result {
         (true, _) => None,
         (false, Ok(r)) => Some(Arc::new(r)),
         (false, Err(e)) => {
-            eprintln!("FigCraft: {e}");
+            eprintln!("Mindmap: {e}");
             std::process::exit(2);
         }
     };
@@ -154,11 +174,16 @@ fn main() -> eframe::Result {
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
     let wake_slot = ctx_slot.clone();
-    session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(move || {
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         if let Some(c) = wake_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
             c.request_repaint();
         }
-    }))));
+    });
+    if figcraft_ui_egui::map_mode() {
+        session.live.install(Box::new(figcraft_ui_egui::node::NodeLiveLink::new(wake)));
+    } else {
+        session.live.install(Box::new(figcraft_collab_net::NetLink::new(wake)));
+    }
     for f in &args.files {
         if let Err(e) = session.execute("file.open", &json!({"path": f})) {
             log::error!("{f}: {e}");
@@ -197,7 +222,7 @@ fn main() -> eframe::Result {
     figcraft_ui_egui::i18n::set(&session.prefs.language, figcraft_ui_egui::Services::system_language(&svc).as_deref());
     let mut fig = FigApp::new(session, Box::new(svc));
     fig.automation_roots = roots;
-    fig.ui.home = false;
+    fig.ui.home = figcraft_ui_egui::map_mode() && args.join.is_none();
     // Files named on the command line are the user's too: their missing fonts are listed.
     fig.ui.font_checks = opened;
     fig.note_recovered(recovered.copies);
@@ -212,8 +237,8 @@ fn main() -> eframe::Result {
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
     // and StartupWMClass (FreeBSD's package matches the binary's name instead).
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("FigCraft")
-        .with_app_id("ai.storyteller.figcraft")
+        .with_title("Mindmap")
+        .with_app_id("dev.mindmap.client")
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([800.0, 500.0])
         .with_drag_and_drop(true);
@@ -221,7 +246,9 @@ fn main() -> eframe::Result {
     // before enabling a client-side frame. Other windows inherit that decision.
     fig.ui.title_bar = desktop_title_bar();
     viewport = window_chrome(viewport, fig.ui.title_bar);
-    if let Some(icon) = icon {
+    // In map mode the bundle's icon is the identity: eframe would set the
+    // runtime (Dock) icon from the embedded FigCraft one.
+    if !map_mode && let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
@@ -236,7 +263,7 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
     let result = eframe::run_native(
-        "FigCraft",
+        "Mindmap",
         options,
         Box::new(move |_cc| {
             #[cfg(target_os = "linux")]
@@ -254,6 +281,9 @@ fn main() -> eframe::Result {
             }))
         }),
     );
+    // Static connection pools are not dropped at process exit. Reap their SSH tunnels on
+    // both successful and failed event-loop returns, after all windows have finished.
+    figcraft_ui_egui::node::shutdown();
     // Say why instead of quitting silently: release builds on Windows have no console.
     if let Err(e) = &result {
         startup::failed(e, port.is_some());

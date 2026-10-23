@@ -9,11 +9,21 @@ fn args(a: &[&str]) -> Vec<String> {
 #[test]
 fn files_and_the_control_port() {
     assert_eq!(parse(&args(&[])), Args::default());
-    let a = parse(&args(&["--control", "4242", "a.figcraft", "--verbose", "b.svg"]));
+    let a = parse(&args(&["--control", "4242", "a.figcraft", "b.svg"]));
     assert_eq!(a, Args { control: Some(4242), files: args(&["a.figcraft", "b.svg"]), ..Args::default() });
     // A missing or bad port is ignored, not taken as a file.
     assert_eq!(parse(&args(&["--control"])), Args::default());
     assert_eq!(parse(&args(&["--control", "nope"])).control, None);
+}
+
+#[test]
+fn the_project_service_address_is_an_option_not_a_file() {
+    assert_eq!(parse(&args(&["--service", "100.104.9.15:47821"])).service.as_deref(), Some("100.104.9.15:47821"));
+    let a = parse(&args(&["--service=127.0.0.1:1", "a.figcraft"]));
+    assert_eq!(a.service.as_deref(), Some("127.0.0.1:1"));
+    assert_eq!(a.files, args(&["a.figcraft"]));
+    // Without a value it isn't an address (the default applies), and it isn't a file either.
+    assert_eq!(parse(&args(&["--service"])), Args::default());
 }
 
 #[test]
@@ -24,6 +34,19 @@ fn automation_roots_repeat_and_are_never_files() {
     assert_eq!(a.files, args(&["a.figcraft"]));
     // A flag without its folder is kept as an empty one, which startup refuses.
     assert_eq!(parse(&args(&["--automation-write-root"])).write_roots, args(&[""]));
+}
+
+#[test]
+fn unknown_flags_are_refused_never_ignored() {
+    // #836: a mistyped root flag (or one an older release lacks) must stop the app, not start it
+    // unconfined. Both forms, with and without `=`.
+    let a = parse(&args(&["--automation-write-roots", "out", "--automation-write-dir=out", "--verbose", "a.figcraft"]));
+    assert_eq!(a.unknown, args(&["--automation-write-roots", "--automation-write-dir=out", "--verbose"]));
+    assert!(a.write_roots.is_empty());
+    // Single-dash arguments are left as they were (files); after `--` everything is a file.
+    let a = parse(&args(&["--control", "1", "--", "--odd.figcraft", "--automation-write-root=x"]));
+    assert_eq!(a.files, args(&["--odd.figcraft", "--automation-write-root=x"]));
+    assert!(a.unknown.is_empty() && a.write_roots.is_empty());
 }
 
 #[test]

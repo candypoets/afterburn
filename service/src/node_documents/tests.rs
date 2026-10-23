@@ -195,6 +195,201 @@ fn external_disk_change_merges_with_live_properties_and_broadcasts() {
     assert_eq!(repo.disk().node(node).unwrap().width, 321.0);
 }
 
+fn grids(sizes: &[f64]) -> Vec<figcraft_doc::LayoutGrid> {
+    sizes
+        .iter()
+        .map(|&size| figcraft_doc::LayoutGrid {
+            size,
+            ..Default::default()
+        })
+        .collect()
+}
+
+#[test]
+fn disk_refresh_merges_different_grid_items_and_persists_after_restart() {
+    let repo = Repo::new();
+    let mut manager = NodeDocuments::new();
+    let session = manager.open(&repo.0).unwrap().id;
+    let node = create(&mut manager, &session, "grid base");
+    for sizes in [[10.0, 20.0], [11.0, 20.0]] {
+        manager
+            .execute(
+                &session,
+                "node.set",
+                &json!({"ids":[node],"props":{"grids":grids(&sizes)}}),
+            )
+            .unwrap();
+        if sizes[0] == 10.0 {
+            manager.save(&session).unwrap();
+        }
+    }
+    let mut external = repo.disk();
+    external.node_mut(node).unwrap().grids[1].size = 22.0;
+    repo.write(&external);
+    let seq = manager.metadata(&session).unwrap().seq;
+    let outcome = manager.resolve_disk(&session, &[]).unwrap();
+    assert!(outcome.conflicts.is_empty());
+    assert!(matches!(
+        &outcome.outgoing[..],
+        [Outgoing::All(ServerMsg::Changes(_))]
+    ));
+    assert_eq!(manager.metadata(&session).unwrap().seq, seq + 1);
+    let expected = grids(&[11.0, 22.0]);
+    assert_eq!(
+        manager
+            .document(&session)
+            .unwrap()
+            .node(node)
+            .unwrap()
+            .grids,
+        expected
+    );
+    manager.save(&session).unwrap();
+    assert_eq!(repo.disk().node(node).unwrap().grids, expected);
+    drop(manager);
+    let mut manager = NodeDocuments::new();
+    assert_eq!(manager.open(&repo.0).unwrap().id, session);
+    assert_eq!(
+        manager
+            .document(&session)
+            .unwrap()
+            .node(node)
+            .unwrap()
+            .grids,
+        expected
+    );
+}
+
+#[test]
+fn disk_grid_conflicts_preserve_live_until_explicit_whole_list_pick() {
+    // Exercise both competing edits and incompatible appends, with opposite picks.
+    for (live_sizes, disk_sizes, side) in [
+        (vec![11.0, 20.0], vec![12.0, 20.0], Side::Main),
+        (vec![10.0, 20.0, 30.0], vec![10.0, 20.0, 40.0], Side::Branch),
+    ] {
+        let repo = Repo::new();
+        let mut manager = NodeDocuments::new();
+        let session = manager.open(&repo.0).unwrap().id;
+        let node = create(&mut manager, &session, "base");
+        manager
+            .execute(
+                &session,
+                "node.set",
+                &json!({"ids":[node],"props":{"grids":grids(&[10.0, 20.0])}}),
+            )
+            .unwrap();
+        manager.save(&session).unwrap();
+        let mut external = repo.disk();
+        external.node_mut(node).unwrap().grids = grids(&disk_sizes);
+        external.node_mut(node).unwrap().width = 321.0;
+        manager
+            .execute(
+                &session,
+                "node.set",
+                &json!({"ids":[node],"props":{"name":"live","grids":grids(&live_sizes)}}),
+            )
+            .unwrap();
+        repo.write(&external);
+        let live = manager.document(&session).unwrap();
+        let seq = manager.metadata(&session).unwrap().seq;
+        let disk_bytes = std::fs::read(repo.0.join(DESIGN_PATH)).unwrap();
+        let outcome = manager.resolve_disk(&session, &[]).unwrap();
+        assert_eq!(outcome.conflicts.len(), 1);
+        assert_eq!(outcome.conflicts[0].key, format!("{node}/grids"));
+        assert!(outcome.outgoing.is_empty());
+        assert!(manager.save(&session).is_err());
+        assert_eq!(manager.document(&session).unwrap(), live);
+        assert_eq!(manager.metadata(&session).unwrap().seq, seq);
+        assert_eq!(std::fs::read(repo.0.join(DESIGN_PATH)).unwrap(), disk_bytes);
+
+        let outcome = manager
+            .resolve_disk(
+                &session,
+                &[MergePick {
+                    key: format!("{node}/grids"),
+                    side,
+                }],
+            )
+            .unwrap();
+        assert!(outcome.conflicts.is_empty());
+        assert!(!outcome.outgoing.is_empty());
+        manager.save(&session).unwrap();
+        let saved = repo.disk();
+        let saved = saved.node(node).unwrap();
+        assert_eq!(saved.name, "live");
+        assert_eq!(saved.width, 321.0);
+        assert_eq!(
+            saved.grids,
+            grids(if side == Side::Main {
+                &disk_sizes
+            } else {
+                &live_sizes
+            })
+        );
+    }
+}
+
+#[test]
+fn execute_alpha_bind_unbind_rebind_applies_once_across_save_and_restart() {
+    let repo = Repo::new();
+    let mut manager = NodeDocuments::new();
+    let session = manager.open(&repo.0).unwrap().id;
+    let (created, _) = manager
+        .execute(
+            &session,
+            "shape.rectangle",
+            &json!({"width":10,"height":10,"props":{"fill":"#0D6EFD80"}}),
+        )
+        .unwrap();
+    let node: NodeId = serde_json::from_value(created["id"].clone()).unwrap();
+    manager
+        .execute(
+            &session,
+            "variable.createCollection",
+            &json!({"name":"Tokens","modes":["Light"]}),
+        )
+        .unwrap();
+    manager
+        .execute(
+            &session,
+            "variable.create",
+            &json!({"collection":"Tokens","name":"tint","type":"color","value":"#0D6EFD80"}),
+        )
+        .unwrap();
+    let check = |doc: &Document, bound: bool| {
+        let node = doc.node(node).unwrap();
+        assert_eq!(!node.bound.is_empty(), bound);
+        let alpha = node.fills[0].solid_color().unwrap().a;
+        assert_eq!(
+            (alpha * 255.0).round() as u8,
+            128,
+            "alpha applied twice: {alpha}"
+        );
+        if !bound {
+            assert!((node.fills[0].opacity - 128.0 / 255.0).abs() < 0.002);
+        }
+    };
+    check(&manager.document(&session).unwrap(), false);
+    // Every execute constructs a fresh engine from authority, including after reload.
+    for variable in [json!("tint"), Value::Null, json!("tint")] {
+        let bound = !variable.is_null();
+        manager
+            .execute(
+                &session,
+                "variable.bind",
+                &json!({"ids":[node],"field":"fill","variable":variable}),
+            )
+            .unwrap();
+        check(&manager.document(&session).unwrap(), bound);
+        manager.save(&session).unwrap();
+        check(&repo.disk(), bound);
+        drop(manager);
+        manager = NodeDocuments::new();
+        assert_eq!(manager.open(&repo.0).unwrap().id, session);
+        check(&manager.document(&session).unwrap(), bound);
+    }
+}
+
 #[test]
 fn disk_conflict_stays_explicit_until_picked_and_cannot_be_overwritten() {
     let repo = Repo::new();

@@ -52,11 +52,19 @@ fn run() -> Result<()> {
             Ok(())
         }
         "mcp" => mcp_proxy(&address, option(&args, "--path").as_deref()),
+        "build-info" => {
+            println!(
+                "{}",
+                json!({"build_id":mindmap_build::BUILD_ID,"version":mindmap_build::VERSION,"protocol":node::PROTOCOL})
+            );
+            Ok(())
+        }
         "--version" | "version" => {
             println!(
-                "mindmap-node {} protocol {}",
+                "mindmap-node {} protocol {} build {}",
                 env!("CARGO_PKG_VERSION"),
-                node::PROTOCOL
+                node::PROTOCOL,
+                mindmap_build::BUILD_ID
             );
             Ok(())
         }

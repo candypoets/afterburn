@@ -28,6 +28,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$WorkspaceRoot = (Resolve-Path (Join-Path $Root '..\..')).Path
 
 function Invoke-Native([string] $What, [scriptblock] $Block) {
   Write-Output "==> $What"
@@ -39,7 +40,7 @@ function Invoke-Native([string] $What, [scriptblock] $Block) {
 $Version = $env:FIGCRAFT_VERSION
 if (-not $Version) {
   $inPkg = $false
-  foreach ($line in Get-Content (Join-Path $Root 'Cargo.toml')) {
+  foreach ($line in Get-Content (Join-Path $WorkspaceRoot 'Cargo.toml')) {
     if ($line -match '^\s*\[') { $inPkg = ($line.Trim() -eq '[workspace.package]'); continue }
     if ($inPkg -and $line -match '^\s*version\s*=\s*"([^"]+)"') { $Version = $Matches[1]; break }
   }
@@ -50,7 +51,7 @@ $MsiVersion = ($Version -split '-')[0]
 
 $Target = switch ($Arch) { 'x64' { 'x86_64-pc-windows-msvc' } 'x86' { 'i686-pc-windows-msvc' } 'arm64' { 'aarch64-pc-windows-msvc' } }
 $Dist = if ($env:DIST) { $env:DIST } else { Join-Path $Root 'dist\release' }
-$TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $Root 'target' }
+$TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $WorkspaceRoot 'target' }
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
 if (-not $env:FIGCRAFT_BUILD_SHA) { $env:FIGCRAFT_BUILD_SHA = (git -C $Root rev-parse HEAD 2>$null) }
@@ -68,7 +69,7 @@ if (-not $SkipBuild) {
   $flagVar = 'CARGO_TARGET_' + ($Target.ToUpper() -replace '-', '_') + '_RUSTFLAGS'
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   $pkgs = @(); foreach ($b in $Bins) { $pkgs += @('-p', $b) }
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked @pkgs --target $Target }
+  Invoke-Native "cargo build ($Target)" { cargo build --manifest-path (Join-Path $WorkspaceRoot 'Cargo.toml') --release --locked @pkgs --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"

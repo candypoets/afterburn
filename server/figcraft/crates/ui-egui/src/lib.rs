@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod a11y;
+pub mod agents;
 pub mod assets_panel;
 pub mod bidi;
 pub mod branch_ui;
@@ -14,6 +15,7 @@ pub mod cjk;
 pub mod colorpicker;
 pub mod comments;
 pub mod component_panel;
+pub mod compose;
 pub mod control;
 pub mod credits;
 pub mod cursors;
@@ -39,9 +41,96 @@ pub mod list_drag;
 pub mod live;
 pub mod live_text;
 pub mod measure_overlay;
+/// The read-only map client: no layers panel, no design panels, no tools.
+static MAP_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_map_mode(on: bool) {
+    MAP_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn map_mode() -> bool {
+    MAP_MODE.load(std::sync::atomic::Ordering::Relaxed) || std::env::var_os("MINDMAP_CLIENT").is_some()
+}
+
+/// What the human may do in map mode: look, navigate, ask and comment. Every
+/// command that would edit the document is refused, not just hidden.
+fn map_command_allowed(id: &str) -> bool {
+    if id.starts_with("comment.") || id.starts_with("collab.") || id.starts_with("view.") {
+        return true;
+    }
+    // Adding a page is navigation, not drawing: the human can make a blank page for an agent to
+    // fill. Renaming, deleting and editing a page stay with the agent.
+    if id == "page.add" || id == "page.delete" {
+        return true;
+    }
+    if id.starts_with("tool.") || id.starts_with("text.edit") {
+        return false;
+    }
+    match figcraft_engine::cmd::all_commands().iter().find(|c| c.id == id) {
+        Some(spec) => !spec.history,
+        None => true,
+    }
+}
+
+fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 30.0), egui::Sense::click());
+    let hot = resp.hovered();
+    let color = if hot { egui::Color32::from_rgb(0xB5, 0x45, 0x2F) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
+    let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 15.0));
+    let p = ui.painter();
+    p.rect_stroke(icon, egui::CornerRadius::same(3), egui::Stroke::new(1.2, color), egui::StrokeKind::Inside);
+    let x = icon.left() + 6.0;
+    p.line_segment([egui::pos2(x, icon.top() + 2.0), egui::pos2(x, icon.bottom() - 2.0)], egui::Stroke::new(1.0, color));
+    for i in 0..3 {
+        let y = icon.top() + 4.0 + i as f32 * 3.5;
+        p.line_segment([egui::pos2(icon.left() + 3.0, y), egui::pos2(x - 2.0, y)], egui::Stroke::new(1.0, color));
+    }
+    a11y::button(&resp, if open { "Hide sidebar" } else { "Show sidebar" });
+    resp.on_hover_text(if open { "Hide sidebar" } else { "Show sidebar" })
+}
+
+fn page_tab(ui: &mut egui::Ui, name: &str, active: bool) -> (egui::Response, bool) {
+    let font = crate::theme::semibold(11.5);
+    let width = name.chars().count() as f32 * 6.7 + 40.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
+    let hot = resp.hovered();
+    let p = ui.painter();
+    if active {
+        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF8, 0xF6, 0xF3));
+        p.line_segment(
+            [egui::pos2(rect.left() + 6.0, rect.bottom() - 2.0), egui::pos2(rect.right() - 20.0, rect.bottom() - 2.0)],
+            egui::Stroke::new(2.0, egui::Color32::from_rgb(0xB5, 0x45, 0x2F)),
+        );
+    } else if hot {
+        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF8, 0xF6, 0xF3));
+    }
+    let color = if active { egui::Color32::from_rgb(0x1A, 0x1A, 0x1A) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
+    p.text(egui::pos2(rect.left() + 12.0, rect.center().y), egui::Align2::LEFT_CENTER, name, font, color);
+    a11y::button(&resp, &format!("Open page {name}"));
+    let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 13.0, rect.center().y), egui::vec2(18.0, 22.0));
+    let close = ui.interact(close_rect, ui.id().with(("close_page", name)), egui::Sense::click()).on_hover_text("Delete page");
+    if active || hot || close.hovered() {
+        p.text(
+            close_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "×",
+            egui::FontId::proportional(12.0),
+            if close.hovered() { egui::Color32::from_rgb(0x9E, 0x3B, 0x2C) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) },
+        );
+    }
+    (resp, close.clicked())
+}
+
 pub mod menus;
 pub mod missing_fonts;
+pub mod new_page;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod node;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod node_hosts;
 pub mod online;
+pub mod page_delete;
+pub mod page_tree;
 pub mod pending_open;
 pub mod plugins_ui;
 pub mod present;
@@ -57,6 +146,7 @@ mod selection_spacing;
 pub mod shortcuts;
 pub mod shortcuts_panel;
 pub mod style_picker;
+pub mod sync;
 pub mod tabs;
 pub mod theme;
 pub mod toolbar;
@@ -67,6 +157,7 @@ pub mod vector_panel;
 pub mod versions;
 pub mod widgets;
 pub mod windows;
+pub mod workspaces;
 
 #[cfg(test)]
 mod theme_startup_tests;
@@ -152,6 +243,8 @@ mod menu_input_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
 #[cfg(test)]
+mod new_page_menu_tests;
+#[cfg(test)]
 mod online_tests;
 #[cfg(test)]
 mod open_issues_tests;
@@ -199,6 +292,8 @@ mod shortcut_keys_tests;
 mod shortcuts_tests;
 #[cfg(test)]
 mod style_folder_rename_tests;
+#[cfg(test)]
+mod sync_scope_tests;
 #[cfg(test)]
 mod text_enter_tests;
 #[cfg(test)]
@@ -616,7 +711,7 @@ impl Default for UiState {
             shortcuts_tab: figcraft_engine::keymap::Group::Essential,
             shortcuts_query: String::new(),
             opacity_digit: None,
-            home: false,
+            home: map_mode(),
             home_view: home::Home::default(),
             title_bar: TitleBar::Native,
             icon_gallery: false,
@@ -690,6 +785,23 @@ impl Default for UiState {
 pub struct FigApp {
     pub session: Session,
     pub ui: UiState,
+    /// The agent breakdown modal.
+    pub agents_modal: agents::State,
+    /// A page deletion waiting for confirmation.
+    pub page_delete: Option<figcraft_doc::NodeId>,
+    /// The page/subpage tree popover.
+    pub page_tree: page_tree::State,
+    /// The New page dialog.
+    pub new_page: new_page::State,
+    /// The Workspaces screen (map mode's home): the listed Herdr workspaces and its requests.
+    pub ws: workspaces::State,
+    /// The Herdr workspace whose map is open: the composer sends its comments there. `None` when
+    /// the document was opened without the browser (the composer can't send).
+    pub active_workspace: Option<String>,
+    /// The bottom comment composer in map mode.
+    pub compose: compose::State,
+    /// The Sync button and widget in map mode.
+    pub sync: sync::State,
     pub canvas: canvas::CanvasState,
     pub services: Box<dyn Services>,
     worker: Option<render_worker::Worker>,
@@ -736,6 +848,14 @@ impl FigApp {
         let pages_height = session.prefs.pages_height;
         Self {
             ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
+            ws: workspaces::State::default(),
+            active_workspace: None,
+            page_delete: None,
+            page_tree: page_tree::State::default(),
+            agents_modal: agents::State::default(),
+            new_page: new_page::State::default(),
+            compose: compose::State::default(),
+            sync: sync::State::default(),
             session,
             canvas: canvas::CanvasState::default(),
             services,
@@ -760,6 +880,9 @@ impl FigApp {
 
     /// Run a command, surfacing errors as a toast. Returns the result.
     pub fn run(&mut self, id: &str, params: Value) -> Option<Value> {
+        if map_mode() && !map_command_allowed(id) {
+            return None;
+        }
         let r = self.session.execute(id, &params);
         self.handle_ui_requests();
         r.map_err(|e| self.failed(id, &e)).ok()
@@ -1394,6 +1517,11 @@ impl FigApp {
             }
             self.background_done(&ctx);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if map_mode() {
+            workspaces::update_active(self);
+            workspaces::poll_node_events(self, &ctx);
+        }
         // Files that arrived without a command (joined, recovered) take the kept View toggles too.
         self.session.apply_view_prefs();
         windows::begin(self, &ctx);
@@ -1419,6 +1547,7 @@ impl FigApp {
     pub(crate) fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let t = theme::Tokens::get(&ctx);
+        let map_mode = map_mode();
         // A field that had the keyboard when the frame began keeps its keys from the shortcuts
         // even if it lets go during the frame (Enter commits it), or as it began (egui drops the
         // focus on Escape before the frame, which cancels the field's edit and nothing else).
@@ -1443,7 +1572,9 @@ impl FigApp {
         // The Inspect tab measures on hover without Alt.
         self.session.tool.redlines = self.ui.right_tab == RightTab::Inspect;
         self.end_pen_outside_design();
-        tabs::tab_bar(self, ui);
+        if !map_mode {
+            tabs::tab_bar(self, ui);
+        }
         if self.ui.present.is_some() {
             // A close request can arrive while the presenter fills the window. Let its unsaved
             // changes dialog take Escape and draw above the player just as it does in the editor.
@@ -1456,7 +1587,13 @@ impl FigApp {
             return;
         }
         if !self.has_files() || self.ui.home {
-            home::show(self, ui);
+            // Map mode browses the projects themselves: Herdr workspaces, with or without a map.
+            // The design app keeps its FigCraft home.
+            if map_mode {
+                workspaces::show(self, ui);
+            } else {
+                home::show(self, ui);
+            }
             // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
             // (cleared after the home widgets, which may have just asked for it).
             self.ui.shortcuts_panel = false;
@@ -1467,7 +1604,7 @@ impl FigApp {
             return;
         }
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
-        if !hidden {
+        if !hidden && !map_mode {
             egui::Panel::left("left_rail")
                 .exact_size(56.0)
                 .resizable(false)
@@ -1478,7 +1615,7 @@ impl FigApp {
                 });
         }
         // The panels are as wide as asked, less in a window too small for them and the canvas.
-        let left_open = !hidden && !self.ui.left_collapsed;
+        let left_open = !hidden && !map_mode && !self.ui.left_collapsed;
         let (left_w, right_w) = fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), self.ui.right_width);
         let rows = ui.available_rect_before_wrap().y_range();
         let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
@@ -1498,7 +1635,7 @@ impl FigApp {
                     layers::left_panel(self, ui)
                 });
         }
-        if !hidden {
+        if !hidden && !map_mode {
             edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
             egui::Panel::right("right_panel")
                 .resizable(false)
@@ -1514,18 +1651,166 @@ impl FigApp {
                     right::right_panel(self, ui)
                 });
         }
+        if map_mode {
+            let all_pages: Vec<(figcraft_doc::NodeId, String)> =
+                self.session.doc().map(|d| d.pages.iter().filter_map(|p| d.node(*p).map(|n| (*p, n.name.clone()))).collect()).unwrap_or_default();
+            let current = self.session.page().ok();
+            let (pages, current_root) = match self.session.doc() {
+                Ok(doc) => {
+                    let main: Vec<(figcraft_doc::NodeId, String)> =
+                        all_pages.iter().filter(|(id, _)| page_tree::parent(doc, *id).is_none()).cloned().collect();
+                    (main, current.map(|page| page_tree::root(doc, page)))
+                }
+                Err(_) => (all_pages.clone(), current),
+            };
+            let (people, joined) = {
+                let live = self.session.live();
+                (live.peers.len() + 1, matches!(live.status, figcraft_engine::live::Status::Live))
+            };
+            let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
+            egui::Panel::top("map_header").exact_size(44.0).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                let rect = ui.max_rect();
+                ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
+                ui.horizontal_centered(|ui| {
+                    // macOS draws the traffic lights over the content view at the top left.
+                    ui.add_space(if cfg!(target_os = "macos") { 78.0 } else { 8.0 });
+                    if sidebar_toggle(ui, self.ws.pane_open).clicked() {
+                        self.ws.pane_open = !self.ws.pane_open;
+                        if self.ws.pane_open {
+                            self.ws.refresh(&ctx);
+                        }
+                    }
+                    ui.add_space(6.0);
+                    for (id, name) in &pages {
+                        let (response, close) = page_tab(ui, name, Some(*id) == current_root);
+                        if close {
+                            self.page_delete = Some(*id);
+                        } else if response.secondary_clicked() {
+                            self.page_tree.open = true;
+                            self.page_tree.just_opened = true;
+                        } else if response.clicked() {
+                            if Some(*id) == current_root {
+                                self.page_tree.open = true;
+                                self.page_tree.just_opened = true;
+                            } else {
+                                self.run("page.select", serde_json::json!({"id": id}));
+                            }
+                        }
+                        ui.add_space(2.0);
+                    }
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new("+ Page").size(10.5).color(muted)).frame(false))
+                        .on_hover_text("New page")
+                        .clicked()
+                    {
+                        self.new_page.start(all_pages.len() + 1);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(8.0);
+                        sync::header_button(self, ui, &ctx);
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new(if joined { format!("{people} live") } else { "offline".to_string() }).size(10.0).color(if joined {
+                                egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
+                            } else {
+                                muted
+                            }),
+                        );
+                        let (summary, color) = agents::summary(&self.compose.targets, self.compose.targets_error.as_deref());
+                        ui.add_space(10.0);
+                        let response = ui.add(egui::Button::new(egui::RichText::new(summary).size(9.5).color(color)).frame(false));
+                        a11y::button(&response, "Agent breakdown");
+                        if response.on_hover_text("Agent breakdown").clicked() {
+                            self.agents_modal.open = true;
+                            self.agents_modal.just_opened = true;
+                        }
+                        ui.add_space(4.0);
+                    });
+                });
+            });
+        }
+        if map_mode {
+            // A root page has no path to show: the strip exists only while a subpage is open.
+            let breadcrumb: Vec<(figcraft_doc::NodeId, String)> = self
+                .session
+                .doc()
+                .ok()
+                .zip(self.session.page().ok())
+                .map(|(doc, page)| page_tree::path(doc, page).into_iter().filter_map(|id| doc.node(id).map(|node| (id, node.name.clone()))).collect())
+                .unwrap_or_default();
+            if breadcrumb.len() > 1 {
+                let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
+                let ink = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+                let last = breadcrumb.len() - 1;
+                let path = breadcrumb.clone();
+                egui::Panel::top("map_breadcrumb").exact_size(30.0).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                    let rect = ui.max_rect();
+                    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
+                    ui.horizontal_centered(|ui| {
+                        ui.add_space(12.0);
+                        for (index, (id, name)) in path.iter().enumerate() {
+                            if index > 0 {
+                                ui.label(egui::RichText::new("›").font(egui::FontId::monospace(9.5)).color(muted));
+                            }
+                            let current = index == last;
+                            let response = ui.add(
+                                egui::Button::new(egui::RichText::new(name).font(egui::FontId::monospace(9.5)).color(if current {
+                                    ink
+                                } else {
+                                    muted
+                                }))
+                                .frame(false),
+                            );
+                            if !current && response.on_hover_text(format!("Open {name}")).clicked() {
+                                self.run("page.select", serde_json::json!({"id": id}));
+                            }
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(12.0);
+                            let response = ui.add(egui::Button::new(egui::RichText::new("Page tree  ⌄").size(9.5).color(muted)).frame(false));
+                            a11y::button(&response, "Page tree");
+                            if response.on_hover_text("All pages and subpages (⌘⇧P)").clicked() {
+                                self.page_tree.open = true;
+                                self.page_tree.just_opened = true;
+                            }
+                        });
+                    });
+                });
+            }
+        }
+        if map_mode && self.ws.pane_open {
+            egui::Panel::left("workspace_pane")
+                .exact_size(300.0)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
+                .show(ui, |ui| {
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspaces");
+                    workspaces::pane(self, ui);
+                });
+        }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             let worker = self.worker.take();
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
             canvas::show(self, ui, &mut worker);
             self.worker = Some(worker);
-            if !hidden {
+            if !hidden && !map_mode {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
                     a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
                     toolbar::show(self, ui);
                 });
             }
         });
+        if map_mode {
+            // The human comment surface: one bar at the bottom of the map.
+            compose::show(self, &ctx);
+            // The Sync button and widget, beside the map bar and above the composer.
+            sync::show(self, &ctx);
+            agents::show(self, &ctx);
+            new_page::show(self, &ctx);
+            page_delete::show(self, &ctx);
+            page_tree::show(self, &ctx);
+            page_tree::maintain(self, &ctx);
+        }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {

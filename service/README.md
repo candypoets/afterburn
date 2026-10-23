@@ -4,9 +4,29 @@ This crate builds one binary, `mindmap-node`: the per-machine backend that hosts
 designs, drives the machine's shared Herdr and runs Git-backed Sync. How it works, its protocol,
 deployment and migration are in [`NODE.md`](NODE.md).
 
+## Build and install
+
+This is package **`mindmap-node`** in the root workspace. Its FigCraft dependencies come from
+`server/figcraft/`, the same source used by the desktop app; there is one root lockfile.
+
+```sh
+# From the repository root (rust-toolchain.toml selects 1.97.1):
+cargo build -p mindmap-node
+./target/debug/mindmap-node serve --bind 127.0.0.1:47822
+# Package a release node with build provenance and a portable installer:
+./service/build-node.sh
+```
+
+The headless package does not build the desktop or require a display server. The portable
+`install-node.sh`/`install-node.py` installs immutable versioned binaries and registers launchd
+or systemd, with a manual option for hosts without a supervisor. It never invokes sudo.
+See [installation commands and upgrade safeguards](NODE.md#deployment-and-migration).
+`systemd/mindmap-node.service` is a root-checkout example using `target/release`; the portable
+installer generates units pointing to the installed version instead.
+
 | File | What it does |
 |---|---|
-| `src/node_main.rs` | CLI (`serve`, `request`, `mcp`, `migrate`) and the stdio MCP adapter for agents. |
+| `src/node_main.rs` | CLI (`serve`, `request`, `mcp`, `migrate`, `build-info`) and the stdio MCP adapter for agents. |
 | `src/node.rs` | Versioned, multiplexed JSON transport on `127.0.0.1:47822`; every method dispatches here. |
 | `src/node_context.rs` | The context packet: page, subpages, top-level cards and commented cards. |
 | `src/node_documents.rs` | One live session per worktree and branch; debounced atomic saves; renders. |

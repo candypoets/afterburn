@@ -9,6 +9,8 @@ description = "FigCraft egui frontend (the Figma-style UI: canvas, toolbar, laye
 workspace = true
 
 [dependencies]
+mindmap-build = { workspace = true }
+sha2 = { workspace = true }
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }
@@ -17,6 +19,7 @@ figcraft-layout = { workspace = true }
 figcraft-render = { workspace = true }
 figcraft-pathops = { workspace = true }
 figcraft-engine = { workspace = true }
+figcraft-collab = { workspace = true }
 figcraft-format = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }

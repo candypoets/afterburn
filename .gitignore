@@ -23,3 +23,6 @@ service/target/
 service/data/
 
 .ws-test/
+
+# Unified Cargo workspace build output
+/target/

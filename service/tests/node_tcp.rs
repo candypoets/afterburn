@@ -363,6 +363,74 @@ impl Participant {
 }
 
 #[test]
+fn source_identity_and_upgrade_lease_protect_prepared_designs() {
+    let fixture = Fixture::new();
+    let node = Node::start(&fixture);
+    let mut wire = node.connect();
+    let identity = wire.ok(json!({"method":"hello"}));
+    assert_eq!(identity["build_id"], mindmap_build::BUILD_ID);
+    assert!(identity["pid"].as_u64().unwrap() > 0);
+    let output = fixture
+        .command(env!("CARGO_BIN_EXE_mindmap-node"))
+        .arg("build-info")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let info: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(info["build_id"], identity["build_id"]);
+    assert_eq!(info["protocol"], identity["protocol"]);
+
+    let session = wire.open(&fixture);
+    let id = wire.create(&session, "before update");
+    let captured = wire.ok(json!({"method":"sync.capture","session":session}));
+    let job = captured["job"]["id"].clone();
+    let lease = wire.ok(json!({"method":"upgrade.prepare"}));
+    assert_eq!(lease["pid"], identity["pid"]);
+    assert_eq!(lease["expires_in"], 30);
+    for request in [
+        json!({"method":"sync.prepare","job":job}),
+        json!({"method":"merge.apply","session":session,"incoming":"main"}),
+        json!({"method":"open","path":fixture.worktree}),
+        json!({"method":"upgrade.prepare"}),
+    ] {
+        let rejected = wire.request_version(request, Some(json!(1)));
+        assert_eq!(rejected["ok"], false, "{rejected}");
+        assert!(
+            rejected["error"]
+                .as_str()
+                .unwrap()
+                .contains("update is pending"),
+            "{rejected}"
+        );
+    }
+    // The reservation prevents new file gates, not live edits or status reads.
+    wire.command(
+        &session,
+        "node.set",
+        json!({"ids":[id],"name":"live during update"}),
+    );
+    assert_eq!(wire.inspect(&session, id)["name"], "live during update");
+    assert_eq!(
+        wire.request_version(
+            json!({"method":"upgrade.cancel","lease":"wrong"}),
+            Some(json!(1))
+        )["ok"],
+        false
+    );
+    wire.ok(json!({"method":"upgrade.cancel","lease":lease["lease"]}));
+    wire.ok(json!({"method":"sync.prepare","job":job}));
+    let rejected = wire.request_version(json!({"method":"upgrade.prepare"}), Some(json!(1)));
+    assert_eq!(rejected["ok"], false, "{rejected}");
+    assert!(rejected["error"]
+        .as_str()
+        .unwrap()
+        .contains("prepared Sync/merge"));
+    wire.ok(json!({"method":"sync.cancel","job":job}));
+    let retry = wire.ok(json!({"method":"upgrade.prepare"}));
+    wire.ok(json!({"method":"upgrade.cancel","lease":retry["lease"]}));
+}
+
+#[test]
 fn protocol_mismatch_rejects_before_open_and_connection_remains_usable() {
     let fixture = Fixture::new();
     let node = Node::start(&fixture);

@@ -1,9 +1,13 @@
 # The build context is the repository root: send only what the build needs.
 .git
 target
+**/target
 target-*
 dist
 plan
 plans
 corpus
 log
+server/data
+service/data
+service/*.log

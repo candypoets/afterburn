@@ -39,9 +39,11 @@ BUILDER=figcraft-build
 WORK=/var/cache/figcraft-install
 SERVICE=figcraft-server
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# The source tree this script sits in (packaging/server/ of a copy or checkout), if any.
+# The Cargo workspace containing this script, if any. Release archives remain standalone.
 LOCAL_SRC=""
-if [ -f "$HERE/../../Cargo.toml" ] && [ -d "$HERE/../../apps/figcraft-server" ]; then
+if [ -f "$HERE/../../../../Cargo.toml" ] && [ -d "$HERE/../../apps/figcraft-server" ]; then
+  LOCAL_SRC="$(cd "$HERE/../../../.." && pwd)"
+elif [ -f "$HERE/../../Cargo.toml" ] && [ -d "$HERE/../../apps/figcraft-server" ]; then
   LOCAL_SRC="$(cd "$HERE/../.." && pwd)"
 fi
 
@@ -213,7 +215,9 @@ from_source() { # build the source tree around this script, else a fresh clone; 
   # The build user clears and fills its own copy (root never touches paths it controls).
   as_builder rm -rf "$copy"
   as_builder mkdir -p "$copy"
-  tar -C "$src" --exclude=./target --exclude=./plugins/target --exclude=./.git -cf - . | as_builder tar -C "$copy" -xf -
+  tar -C "$src" --exclude=target --exclude=.git --exclude=./client-src --exclude=./.client-src-orig \
+    --exclude=./.scratch --exclude=./build --exclude=./.cargo-home --exclude=./server/data \
+    --exclude=./service/data --exclude=./project/data -cf - . | as_builder tar -C "$copy" -xf -
   # The compiler needs about 2 GB: add a temporary swap file on smaller machines.
   mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
   if [ "$mem_kb" -lt 2000000 ] && [ -z "$(swapon --show --noheadings)" ]; then
@@ -235,6 +239,7 @@ from_source() { # build the source tree around this script, else a fresh clone; 
   as_builder cat "$BUILD/target/release/figcraft-server" >"$NEW_BIN" || die "the build left no binary"
   chmod 755 "$NEW_BIN"
   FILES="$src/packaging/server"
+  [ ! -d "$src/server/figcraft/packaging/server" ] || FILES="$src/server/figcraft/packaging/server"
 }
 
 if [ -x "$HERE/figcraft-server" ] && [ "$FROM_SOURCE" = false ]; then

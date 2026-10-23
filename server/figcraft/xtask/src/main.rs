@@ -24,11 +24,29 @@ fn run(cmd: &mut Command) -> bool {
 }
 
 fn cargo() -> Command {
-    Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+    let mut cmd = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    cmd.current_dir(workspace_root());
+    cmd
 }
 
+/// FigCraft's source/assets remain under server/figcraft in the Mindmap workspace.
 fn root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().map(|p| p.to_path_buf()).unwrap_or_default()
+}
+
+fn workspace_root() -> std::path::PathBuf {
+    root().join("../..").canonicalize().unwrap_or_else(|_| root().join("../.."))
+}
+
+fn target_dir() -> std::path::PathBuf {
+    cargo()
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| serde_json::from_slice::<serde_json::Value>(&out.stdout).ok())
+        .and_then(|metadata| metadata["target_directory"].as_str().map(std::path::PathBuf::from))
+        .unwrap_or_else(|| workspace_root().join("target"))
 }
 
 fn main() -> ExitCode {
@@ -88,7 +106,7 @@ const EXAMPLE_PLUGINS: &[&str] = &["tidy-names", "swatch-grid", "counter"];
 fn plugins() -> bool {
     let root = root();
     let manifest = root.join("plugins").join("Cargo.toml");
-    let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target")).join("plugins");
+    let target = target_dir().join("plugins");
     let ws = |args: &[&str]| {
         let mut c = cargo();
         c.args(args).arg("--manifest-path").arg(&manifest);
@@ -232,7 +250,7 @@ fn parity() -> bool {
 }
 
 fn version(sub: Option<&str>, value: Option<&str>) -> bool {
-    let path = root().join("Cargo.toml");
+    let path = workspace_root().join("Cargo.toml");
     let Ok(text) = std::fs::read_to_string(&path) else { return false };
     let cur = text
         .lines()
