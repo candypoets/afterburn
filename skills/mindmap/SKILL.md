@@ -1,92 +1,89 @@
 ---
 name: mindmap
-description: Build and maintain a feature map of a repository as a model, rendered into FigCraft. Use when asked to initialise, update or extend the map of a repo, or when an "Init map" job arrives.
+description: Maintain live repository designs through a local Mindmap node and implement scoped design changes with Git-backed Sync.
 ---
 
 # Mindmap
 
-You maintain a **map of what a repository does**, not a drawing. You write a model; the service
-renders it into FigCraft with the shared components. The map is read by a human who will never
-edit it, and asked questions about it.
+The node on the repository's machine owns the live design. Git owns its committed copy at
+`.mindmap/map.figcraft`. Agents edit the session; only the node writes that file. No owner
+links, server keys or `projects.json` records are needed.
 
-## Output
+## Connect and inspect
 
-Write `.mindmap/model.json` in the repository and render it:
+Start the stdio MCP adapter on the machine that owns the worktree:
 
 ```sh
-mindmap render .mindmap/model.json --project <id>
+mindmap-node mcp --path /absolute/worktree
 ```
 
-Then look at the rendered PNG the command returns. Iterate on the model, not on the canvas.
+Tools: `inspect_document`, `get_node`, `list_commands`, `run_command`, `node_request`.
+Discover command parameters with `list_commands`. `run_command` applies a FigCraft command
+through the authoritative session and broadcasts the changes. Use `command.batch` for
+selection-dependent steps. Inspect before and after editing.
 
-## Live comments and Sync
+The CLI also exposes the protocol:
 
-The service also sends comments and new-page prompts against an **existing live FigCraft
-document**. For those jobs:
-
-- Do **not** write `.mindmap/model.json` or re-render the whole map.
-- The context packet names the document, page id, card id, path, text and the owner edit link.
-- Run the FigCraft CLI with `mcp`, `collab.join` the edit link, `get_node` the page/card to read
-  it, then `run_command` to change or add the named cards.
-- Work only on the named page and card; keep card names stable; source every claim.
-- A Sync prompt with a `Scope:` line covers one page and its subpages: implement that part of the
-  map only. Its `Code scope:` lists the paths the page's cards cite; start there.
-- A Sync is done when you go idle, with no time limit. For large work, plan it and split it across
-  your own harness's sub-agents, and stop only when all of it is implemented.
-
-## The model
-
-```json
-{
-  "project": "name",
-  "pages": [
-    {
-      "title": "Overview",
-      "areas": [
-        {
-          "name": "Canvas and layers",
-          "role": "one sentence: what this part is for",
-          "source": ["crates/doc/src/node.rs", "one struct with the properties every node can have"],
-          "leaves": [
-            {
-              "title": "One node tree",
-              "fact": "one or two sentences: what it does, and how it is built",
-              "source": ["crates/doc/src/node.rs", "//! Nodes:"]
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
+```sh
+mindmap-node request '{"method":"open","path":"/absolute/worktree"}'
+mindmap-node request '{"method":"session.inspect","session":"SESSION","depth":8}'
+mindmap-node request '{"method":"diff","session":"SESSION","page":123,"offset":0,"limit":200}'
+mindmap-node request '{"method":"session.command","session":"SESSION","command":"node.set","params":{"ids":[123],"name":"New name"}}'
 ```
 
-- **6–12 areas** on the overview. Each is a part of the system a person would name.
-- **3–5 leaves** per area. One claim per leaf; if it needs "and", split it.
-- `source` is a `(path, literal)` pair: the literal must occur **exactly once** in that file. It is
-  the proof of the card. Never cite a line number, and never invent a symbol.
-- A detail page (a second `pages` entry) only when the overview is too thin: the same areas at
-  one altitude lower, still sourced.
+Use the actual session ID returned by `open`. `--address` selects a node reached through an
+existing SSH tunnel; the default is `127.0.0.1:47822`. The CLI adds the protocol version and
+request ID. After checking out another branch, reopen the worktree to use its session.
 
-## How to read a repo
+## Comments and scope
 
-1. README, manifests (`Cargo.toml`, `package.json`, `pyproject.toml`), entry points, top-level
-   directories, `docs/`.
-2. Name the **areas** from how the system is built and used — not from the directory tree alone.
-3. For each leaf, find the single line that proves it: a module doc, a command registration, a type
-   definition, a route, a job.
-4. Prefer the code that is true today; mark proposals as proposals, never as facts.
+Context identifies the worktree, branch, session, page and selected cards. Read their live
+content, then address the request there. A page-scoped job covers that page and its subpages;
+other pages are out of scope. Preserve card names and page IDs unless the task requires a
+change. Use existing components and layout conventions. Do not rebuild the whole map for a
+local edit.
 
-## Rules
+Every factual card needs a repository source. Read the implementation before claiming behavior.
+Keep one claim per card and explain it plainly. Label proposals as proposals. Do not edit
+`.mindmap/map.figcraft` directly or use the obsolete model renderer for live jobs.
 
-- No free shapes, no styling, no coordinates: the renderer owns layout and components.
-- No wall of text. A leaf is a claim, not a paragraph.
-- Every card sourced. If you cannot find the line, the claim is not ready — leave it out.
-- Keep names stable across updates: the map's history is diffed by name.
-- On a code change, re-read only what changed, update the affected cards, render, and report what
-  moved.
+## Sync implements the design
 
-## When the map is empty
+Sync freezes the authoritative design at job start. The last reachable commit with a matching
+`Mindmap-Sync:` trailer is the baseline for both design and code. A page-specific marker does
+not declare other pages synced. The node compares all FigCraft properties, including geometry,
+arrows, styles and document-level data. Follow `diff` pagination to read the entire change list.
+Read code drift with Git from that commit; the prompt is an entry point, not all the evidence.
 
-Start with the overview only. Do not open detail pages until the overview has 6–12 areas with
-sources. The Init job is done when the overview renders and every card has a source.
+Plan large work and split independent parts across sub-agents in your own harness. Implement,
+integrate, test and deploy everything authorized before stopping. Keep scope boundaries when
+delegating. An idle agent is not proof that the design was implemented.
+
+After implementation and verification:
+
+1. Call `sync.prepare` with the job ID. The node gates file saves, writes the frozen start design
+   into the worktree and stages its exact Git blob. Live edits continue in the session/cache.
+2. Stage the implementation files. Inspect the index, then commit code and
+   `.mindmap/map.figcraft` together with the **exact trailer returned by `sync.prepare`**. Do not
+   invent a marker or mark unrelated pages complete. The trailer contains job ID and scope.
+3. Call `sync.finish` with job ID and commit SHA. The node verifies the frozen blob, branch,
+   ancestry and trailer before reporting success. It then saves the current live design; edits
+   made during the job remain uncommitted drift for the next sync.
+
+```sh
+mindmap-node request '{"method":"sync.prepare","job":"JOB"}'
+# Stage implementation files and commit with the returned trailer.
+mindmap-node request '{"method":"sync.finish","job":"JOB","commit":"SHA"}'
+```
+
+Call `sync.cancel` to release the save gate without declaring success if the job is cancelled.
+Never overwrite the live file, substitute a newer design into the frozen commit, or clear drift
+by updating metadata. Cache files stay under the worktree's Git directory and are not committed.
+Never copy legacy owner links into source, another agent's prompt, commits or reports.
+
+## Branches and merges
+
+The committed design travels with Git push/fetch. `merge.plan` uses Git's merge base and
+FigCraft's three-way property merge. Review conflicts and supply explicit per-key picks to
+`merge.apply`; never use a text merge driver for the binary design. Resolve external-file
+conflicts with `session.resolve`, preserving both sides until the user or task supplies a pick.

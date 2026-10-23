@@ -1,5 +1,9 @@
 # server — our FigCraft server fork
 
+The deployed backend now embeds this fork's document, engine and collaboration crates in the
+per-machine [`mindmap-node`](../service/NODE.md). The Docker server is retained behind the
+`legacy` Compose profile only for migration or rollback. Its data stays intact.
+
 The document plane, forked from FigCraft **0.7.0** (upstream `storytold/figcraft`, commit
 `99e5db3`, 2026-10-18) so we can change the server's design instead of running it as a black box.
 

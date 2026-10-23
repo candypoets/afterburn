@@ -1,94 +1,75 @@
-# client — Mindmap.app
+# Mindmap desktop client
 
-The Mac client, built from a FigCraft 0.7.0 checkout: the same engine and canvas, with the editor
-taken off the human's screen. It is named **Mindmap**, has its own icon, and opens in **map mode**.
+Mindmap reuses FigCraft's engine, collaboration model, canvas, and page tree. In map mode the
+app connects only to Mindmap nodes: one persistent protocol-v1 connection per machine, over
+loopback or one SSH tunnel. Ordinary FigCraft mode keeps its existing transport.
 
-| File | What it is |
-|---|---|
-| `mindmap-client.patch` | The whole change against a 0.7.0 checkout (4 files, ~30 lines). |
-| `icon-1024.png` | The app icon, drawn for this project (not FigCraft's, not Figma's). |
-| `build-mac.sh` | Build, wrap in `Mindmap.app`, sign ad hoc, optionally launch with a join link. |
+## Reproduce the complete client
 
-## Apply and build
-
-```sh
-git clone https://github.com/storytold/figcraft ~/code/figcraft
-cd ~/code/figcraft && git checkout -b mindmap-client   # patch is against 0.7.0, main a0d1162
-git apply ~/code/mindmap/client/mindmap-client.patch
-~/code/mindmap/client/build-mac.sh ~/code/figcraft
-```
-
-Launch with a document:
+The ignored `client-src/` directory is a working checkout, not the source of record.
+`source-overlay/` contains **every differing file** relative to `server/figcraft/`, including
+previous Mindmap features and the node integration. `source-overlay.json` records baseline
+and resulting checksums. The old `mindmap-client.patch` is historical and incomplete.
 
 ```sh
-open -a ~/Applications/Mindmap.app --args --map-mode --control 49125 \
-  "figcraft://join?host=100.104.9.15:47910&file=…&token=…"
+cp -a server/figcraft /tmp/mindmap-client
+python3 client/apply-source-overlay.py /tmp/mindmap-client
+cargo +1.97.1 check --manifest-path /tmp/mindmap-client/Cargo.toml -p figcraft
+cargo +1.97.1 test --manifest-path /tmp/mindmap-client/Cargo.toml -p figcraft-ui-egui node --lib
 ```
 
-## What the patch does
+The apply script checks all inputs before writing and refuses unrelated checkout edits. It is
+idempotent. After editing `client-src/`, run `python3 client/refresh-source-overlay.py` and review
+the resulting overlay changes before committing. No generated binaries or build caches belong
+in the overlay.
 
-- Adds **map mode** (`--map-mode`, or `MINDMAP_CLIENT=1`): the left rail and layers/Assets panels,
-  the right Design/Prototype/Inspect panels, the bottom toolbar, the tab bar and the frame labels
-  are not drawn. The canvas, selection, zoom, prototype links and live session stay.
-- Adds a **map bar** at the top: one tab per page (click to `page.select`, accent underline on the
-  active page) and a live count (`N live` while joined, `offline` otherwise, counting you).
-- **Refuses edits.** Every command whose spec is a document edit is refused in map mode
-  (`FigApp::run` checks `CommandSpec::history`), except `comment.*`; `tool.*` and `text.edit` are
-  refused too. Selection, navigation, zoom, joins and comments still run. Hiding the tools was
-  not enough; this is the permission model.
-- **Keeps the bundle icon.** eframe calls `NSApplication.setApplicationIconImage` from the embedded
-  FigCraft icon when `with_icon` is set, which is why the Dock showed FigCraft even with a new
-  bundle. Map mode now skips `with_icon`, so macOS uses `AppIcon.icns` from the bundle.
-- Renames the app: window title, run name, app id (`dev.mindmap.client`), the home wordmark and the
-  version line. The bundle carries `CFBundleName`/`CFBundleDisplayName` **Mindmap** and `AppIcon`.
-- Leaves the engine untouched: this is a UI gate, not a permission model. Editing shortcuts still
-  exist, and the document is still writable — the next step is to refuse mutating commands in map
-  mode rather than only hiding their entry points.
+## Nodes and host selection
 
+Launch with `--map-mode --node 127.0.0.1:47822` for local work, or `--node ssh:befree` for an SSH
+config alias. `MINDMAP_NODE` supplies the default address; `--service` remains a CLI alias for
+`--node`. Raw remote TCP connections are refused. Workspaces open by session ID, worktree path,
+and branch; no owner links or server keys are used.
 
-## Comments (implemented)
+The host picker installs/starts the bundled node in a worker thread. It requests approval only
+when Herdr needs installation, then ensures Herdr's shared session is running. Remote host
+setup reuses a matching saved Herdr machine or registers one targeting that same session.
+It never creates a private Herdr instance. SSH authentication and host keys use the user's SSH
+configuration; password prompts must be completed in a terminal first. Local Herdr discovery
+honors `HERDR_BIN_PATH`, then checks `~/.local/bin`, `~/.cargo/bin`, Homebrew, `/usr/local/bin`,
+and finally `PATH`, including GUI launches with a minimal environment.
 
-In map mode the canvas has a single bottom composer, as designed:
+Saved hosts live in `~/.config/mindmap/hosts.json`:
 
-- **Select** a card; the composer shows `COMMENTING ON · <layer> · <page>`. Text selects in place;
-  `⌘C` works, and the right-click menu is exactly **Copy** and **Comment** — no layer or design
-  tools, and selection no longer draws resize handles or the `W × H` badge.
-- **Enter** turns the input into a draft chip; the input clears and the selection stays. Choosing
-  another card clears the input, never the drafts.
-- **Drafts follow the tree.** A draft remembers its node; the strip shows only the drafts a send
-  from the current selection would carry — the selected card's subtree, or the whole page with no
-  selection. Selecting a sibling hides the others; selecting the parent brings them back.
-- **Sent once.** A successful send removes exactly those drafts and keeps the rest; they are not
-  shown again and cannot be sent twice. A failed send keeps them.
-- **The target chip** lists the agents already in the open workspace (`kimi · idle`) and the CLIs
-  that can be started (`codex`, `claude`, `kimi`). The default is the focused or first non-blocked
-  agent.
-- **⌘Enter** sends: the current input is the prompt, every draft attaches, and the service formats
-  one message with page/layer context and prompts the chosen agent through Herdr. Success clears
-  the drafts and toasts how many comments went to which agent.
+```json
+[{"name":"befree","address":"ssh:befree","ssh":"befree"}]
+```
 
-Drafts are held by the client for now (not yet FigCraft comment annotations), so they are not
-shared with other viewers until sent to an agent. The map itself stays read-only.
+Node binaries belong in the app bundle's `Contents/Resources/node/{platform}/mindmap-node`,
+where platform is `darwin-arm64`, `darwin-x64`, `linux-arm64`, or `linux-x64`. The app also checks
+`~/Applications/Mindmap.app/Contents/Resources/` when running outside its bundle. Remote setup
+copies the appropriate asset to `~/.local/bin/mindmap-node` and starts
+`mindmap-node serve --bind 127.0.0.1:47822`.
 
-## Known gaps (the next slice)
+## Behavior and validation
 
-- **Opening a project.** The client now opens on the Herdr workspace list (map mode) and opens or
-  initialises a workspace through the Rust service; see `project/README.md`.
-- **The map itself.** Init starts and prompts the chosen agent, but the model renderer
-  (`mindmap render`) is still missing, so the agent cannot draw a new overview yet. One workspace
-  (`mindmap`) has a ready map through `adopt`, not through Init.
-- **Persisted comments.** Drafts live in the client session; writing them as shared FigCraft
-  comment threads is the next step.
-- **In-canvas links.** Cards show "Open →" in the design, but clicking one still selects it rather
-  than moving the canvas. The next step is: a click on a card with a navigate interaction selects
-  its destination page and zooms to the target — no prototype player.
-- **Auto-join.** A join link passed at launch opens the Join dialog prefilled; the control channel
-  (`collab.join`) completes it. It should join straight away.
-- **Ask bar.** The composer in the "Screens" design page is a drawing, not wired yet.
-- **Comments.** Pinning and reading threads should survive in map mode; the Comments panel was in
-  the hidden chrome.
-- **Read-only.** Hiding the tools is not the same as refusing edits; the server's view link or an
-  engine-level guard is the honest enforcement.
+Comments, first-page prompts, diffs, and sync requests carry the active document's node session,
+so choosing another host cannot redirect an open map. The node owns the design snapshot.
+Collaboration messages, live Herdr status, and job updates share the connection; periodic job
+queries remain a fallback. A checkout notification queues an automatic reopen of the active
+workspace on its selected node after any pending workspace action finishes; the new branch
+session supplies its existing page tree. The agent MCP opens the current branch on each call.
+A protocol mismatch or lost connection is shown as an error. Lost
+mutating requests are never retried automatically because their outcome may be unknown.
 
-The installed FigCraft.app (0.5.1) is untouched; this is a separate app bundle. The server it talks
-to is our 0.7.0 fork (`server/`), and the design it opens is "Mindmap · system".
+Transport tests cover interleaved events and out-of-order RPC replies on one socket, protocol
+rejection, disconnect errors, the engine's actual join/welcome/presence path, loopback checks,
+and SSH target validation. Shutdown drains pooled connections and reaps their SSH processes,
+including the Mac app's explicit exit path; a quit/reopen cycle was verified on the deployed app.
+Existing page-tree tests cover the retained page hierarchy.
+
+`build-mac.sh` wraps the desktop executable and icon, copies `NODE_ASSETS` into the bundle,
+and requires the local-platform node before packaging. Include the Linux platform directories
+in `NODE_ASSETS` for remote setup. `deploy-mac.sh` reconstructs the full tracked overlay by
+default (or accepts a working source directory as its second argument), copies complete sources
+to the Mac, and optionally copies `NODE_ASSETS` before building/signing. It refuses to deploy
+an app missing its local node. The node deployment workflow builds these binaries separately.

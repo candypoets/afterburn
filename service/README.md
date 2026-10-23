@@ -1,5 +1,9 @@
 # service — Mindmap project service (Rust)
 
+This describes the legacy `mindmap-service`. The deployed replacement is
+[`mindmap-node`](NODE.md), which owns live worktree designs and derives Sync baselines from Git.
+The legacy binary remains available for migration/rollback; it is not started alongside the node.
+
 A Herdr workspace is a project. This binary lists the workspaces on the host, gives each one a
 FigCraft document the first time it is opened, and, on **Init**, makes sure an agent is working on
 it. **Send** prompts an agent with canvas comments without opening or publishing a document.

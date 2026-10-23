@@ -4,6 +4,13 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="${1:-$HOME/code/figcraft}"
+NODE_ASSETS="${NODE_ASSETS:-$HERE/node}"
+case "$(uname -m)" in
+  arm64) NODE_PLATFORM=darwin-arm64 ;;
+  x86_64) NODE_PLATFORM=darwin-x64 ;;
+  *) echo "Unsupported Mac architecture" >&2; exit 1 ;;
+esac
+[[ -x "$NODE_ASSETS/$NODE_PLATFORM/mindmap-node" ]] || { echo "Set NODE_ASSETS to the built node platform directories before packaging." >&2; exit 1; }
 LINK="${2:-}"
 PORT="${3:-49125}"
 APP="${APP:-$HOME/Applications/Mindmap.app}"
@@ -12,7 +19,8 @@ cd "$SRC"
 cargo build -p figcraft
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/node"
+cp -R "$NODE_ASSETS/." "$APP/Contents/Resources/node/"
 cp target/debug/figcraft "$APP/Contents/MacOS/Mindmap"
 
 TMP="$(mktemp -d)"
@@ -41,7 +49,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
 </dict></plist>
 PLIST
-codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+codesign --force --sign - "$APP"
 
 if [[ -n "$LINK" ]]; then
   open -a "$APP" --args --map-mode --control "$PORT" "$LINK"

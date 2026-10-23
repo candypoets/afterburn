@@ -1,6 +1,9 @@
 name: mindmap-server
 services:
   server:
+    # Retained only to export pre-node documents or perform an explicit rollback.
+    # The normal backend is mindmap-node on each machine, installed on the host.
+    profiles: [legacy]
     image: debian:bookworm-slim
     restart: unless-stopped
     user: "10001:10001"

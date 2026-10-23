@@ -1,5 +1,10 @@
 # mindmap
 
+The current backend is a **Mindmap node on each machine**: live worktree sessions, shared Herdr
+agents, and a committed `.mindmap/map.figcraft` design. See [node operation and protocol](service/NODE.md)
+and the [agent workflow](skills/mindmap/SKILL.md). The original generator and hosted-server notes
+below describe the migration source.
+
 A feature map of **FigCraft** — the ArtCraft, pure-Rust Figma clone — drawn in FigCraft itself,
 and the generator that keeps it true to the code.
 
