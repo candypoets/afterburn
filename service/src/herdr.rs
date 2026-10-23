@@ -98,12 +98,6 @@ pub struct Pane {
 }
 
 #[derive(Debug, Deserialize)]
-struct WorkspaceList {
-    #[serde(default)]
-    workspaces: Vec<Workspace>,
-}
-
-#[derive(Debug, Deserialize)]
 struct AgentList {
     #[serde(default)]
     agents: Vec<Agent>,
@@ -134,14 +128,6 @@ impl Herdr {
     /// Wrap the configured binary.
     pub fn new(bin: PathBuf) -> Self {
         Self { bin }
-    }
-
-    /// List workspaces.
-    pub fn workspaces(&self) -> Result<Vec<Workspace>> {
-        let value = self.call(&["workspace", "list"])?;
-        let parsed: WorkspaceList =
-            serde_json::from_value(value).context("parse `herdr workspace list`")?;
-        Ok(parsed.workspaces)
     }
 
     /// List all recognized agents in the session.

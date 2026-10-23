@@ -20,6 +20,7 @@ impl Error {
     }
 
     /// The message without the wrapper.
+    #[cfg(test)]
     pub fn message(&self) -> &str {
         &self.message
     }

@@ -1,23 +1,18 @@
 //! The per-machine Mindmap node. Repositories own designs; this process owns live sessions.
-#![allow(dead_code)] // The legacy agent adapter shares types with the retired service binary.
 
 mod agent;
 mod comments;
 mod config;
-mod context;
 mod error;
 mod herdr;
-mod link;
 mod mcp;
 mod node;
+mod node_context;
 mod node_documents;
 mod node_git;
 mod node_herdr;
 mod node_migration;
-mod project;
-mod records;
-mod sync;
-mod time;
+mod workspace;
 
 use crate::error::{Error, Result};
 use serde_json::{json, Value};
@@ -100,6 +95,27 @@ fn request(address: &str, mut request: Value) -> Result<Value> {
     }
 }
 
+/// Shape a node reply the way FigCraft's own MCP does: reads return the node itself, commands
+/// return their result, and a screenshot returns an image.
+fn tool_result(tool: &str, reply: &Value) -> Result<Value> {
+    if reply["ok"] != true {
+        return Ok(
+            json!({"content":[{"type":"text","text":serde_json::to_string_pretty(reply)?}],"isError":true}),
+        );
+    }
+    if tool == "screenshot" {
+        if let Some(data) = reply["data"].as_str() {
+            return Ok(json!({"content":[{"type":"image","data":data,"mimeType":"image/png"}]}));
+        }
+    }
+    let body = match tool {
+        "inspect_document" | "get_node" => &reply["document"],
+        "run_command" | "create_node" | "set_properties" => &reply["result"],
+        _ => reply,
+    };
+    Ok(json!({"content":[{"type":"text","text":serde_json::to_string_pretty(body)?}]}))
+}
+
 /// Small stdio MCP adapter for agents. Commands always execute inside the node's live session.
 fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
     let path = path.ok_or_else(|| Error::new("mcp needs --path WORKTREE"))?;
@@ -125,6 +141,9 @@ fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
             "tools/list" => json!({"tools":[
                 {"name":"inspect_document","description":"Read the authoritative live design","inputSchema":{"type":"object","properties":{"depth":{"type":"integer"}}}},
                 {"name":"get_node","description":"Read a layer or page and its children","inputSchema":{"type":"object","properties":{"id":{"type":"integer"},"depth":{"type":"integer"}},"required":["id"]}},
+                {"name":"create_node","description":"Create a layer in the live session (node.create): type, parent, name, x, y, width, height, text, path, props","inputSchema":{"type":"object","properties":{"type":{"type":"string"},"parent":{"type":"integer"},"name":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"height":{"type":"number"},"text":{"type":"string"},"path":{"type":"string"},"index":{"type":"integer"},"props":{"type":"object"}},"required":["type"]}},
+                {"name":"set_properties","description":"Set properties on layers (node.set): ids and a props object","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":{"type":"integer"}},"props":{"type":"object"}},"required":["ids","props"]}},
+                {"name":"screenshot","description":"PNG of layers or a page of the live design, to check what you drew; nothing is written","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":{"type":"integer"}},"page":{"type":"integer"},"scale":{"type":"number"}}}},
                 {"name":"run_command","description":"Execute a FigCraft command in the live worktree session","inputSchema":{"type":"object","properties":{"command":{"type":"string"},"params":{"type":"object"}},"required":["command"]}},
                 {"name":"list_commands","description":"Discover FigCraft commands and parameter schemas","inputSchema":{"type":"object","properties":{"filter":{"type":"string"}}}},
                 {"name":"node_request","description":"Call node diff, sync.prepare, sync.finish, merge or other worktree APIs","inputSchema":{"type":"object","properties":{"request":{"type":"object"}},"required":["request"]}}
@@ -139,7 +158,8 @@ fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
                     }
                 }
                 let args = &value["params"]["arguments"];
-                let mut req = match value["params"]["name"].as_str().unwrap_or("") {
+                let tool = value["params"]["name"].as_str().unwrap_or("");
+                let mut req = match tool {
                     "inspect_document" => json!({"method":"session.inspect","depth":args["depth"]}),
                     "get_node" => {
                         json!({"method":"session.inspect","node":args["id"],"depth":args["depth"]})
@@ -148,6 +168,24 @@ fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
                         json!({"method":"session.command","command":args["command"],"params":args["params"]})
                     }
                     "list_commands" => json!({"method":"session.commands","filter":args["filter"]}),
+                    "create_node" => {
+                        let mut params = args.clone();
+                        if params.get("select").is_none() {
+                            params["select"] = json!(false);
+                        }
+                        json!({"method":"session.command","command":"node.create","params":params})
+                    }
+                    "set_properties" => {
+                        let mut params = args["props"].clone();
+                        if !params.is_object() {
+                            params = json!({});
+                        }
+                        params["ids"] = args["ids"].clone();
+                        json!({"method":"session.command","command":"node.set","params":params})
+                    }
+                    "screenshot" => {
+                        json!({"method":"session.render","ids":args["ids"],"page":args["page"],"scale":args["scale"]})
+                    }
                     "node_request" => args["request"].clone(),
                     _ => json!({"method":"unknown"}),
                 };
@@ -157,7 +195,7 @@ fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
                     Ok(value)=>value,
                     Err(error)=>json!({"ok":false,"error":error.to_string()}),
                 };
-                json!({"content":[{"type":"text","text":serde_json::to_string_pretty(&reply)?}],"isError":reply["ok"] != true})
+                tool_result(tool, &reply)?
             }
             _ => {
                 println!(

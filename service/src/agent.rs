@@ -15,10 +15,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::herdr::{Agent, Herdr};
-use crate::project::WorkspaceView;
+use crate::workspace::WorkspaceView;
 
 /// Agent CLIs detected in this order when a workspace has none.
 pub const AGENT_ORDER: [&str; 6] = ["codex", "claude", "kimi", "opencode", "gemini", "cursor"];
@@ -239,29 +238,11 @@ impl AgentOutcome {
     }
 }
 
-/// Ensure an agent exists in `workspace` and submit the map prompt.
-///
-/// The returned outcome is always serializable; failures are reported in-band so Init can still
-/// return the published document.
-pub fn ensure(
-    config: &Config,
-    herdr: &Herdr,
-    workspace: &WorkspaceView,
-    file: Option<&str>,
-    target: &Target,
-) -> AgentOutcome {
-    let prompt = workspace
-        .path
-        .as_deref()
-        .map(|path| prompt_text(config, workspace, path, file));
-    finish(herdr, workspace, target, prompt.as_deref())
-}
-
 /// Ensure an agent exists in `workspace` and submit a caller-supplied prompt.
 ///
-/// This is the Send path: the caller has already rendered the comments and validated the target,
-/// so no document is opened or published. Reusing an existing agent, starting the chosen kind,
-/// first-run trust handling, and in-band failures are the same as [`ensure`].
+/// The caller has already rendered the prompt and validated the target. An existing agent is
+/// reused or the chosen kind is started, first-run trust is accepted, and failures are reported
+/// in-band in the returned outcome.
 pub fn ensure_with_prompt(
     herdr: &Herdr,
     workspace: &WorkspaceView,
@@ -537,27 +518,6 @@ fn unique_agent_name(agents: &[Agent], base: &str) -> Result<String> {
     )))
 }
 
-fn prompt_text(
-    config: &Config,
-    workspace: &WorkspaceView,
-    path: &str,
-    file: Option<&str>,
-) -> String {
-    let document = match file {
-        Some(file) => format!("The project document file id is {file}."),
-        None => "No project document file id is recorded yet.".to_string(),
-    };
-    format!(
-        "Read {} and map {path} into the Mindmap for the {} workspace. {document} \
-         Follow the skill: write the model to {path}/.mindmap/model.json, render it into the \
-         project document, and start with the Overview (6–12 areas, every card sourced). \
-         Work in {path}; do not draw directly on the canvas. When the Overview is rendered, \
-         report what you mapped.",
-        config.skill_file.display(),
-        workspace.label,
-    )
-}
-
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -581,7 +541,6 @@ mod tests {
             clis: Vec::new(),
             focused: false,
             map: "empty".into(),
-            file: None,
             tabs: Some(1),
             panes: Some(1),
         }
@@ -597,31 +556,6 @@ mod tests {
             agent_status: Some(status.into()),
             focused,
         }
-    }
-
-    #[test]
-    fn prompt_names_skill_path_and_file_id() {
-        let config = Config {
-            data_dir: PathBuf::from("/repo/service/data"),
-            legacy_records: PathBuf::from("/repo/project/data/projects.json"),
-            empty_template: PathBuf::from("/repo/service/assets/empty.figcraft"),
-            key_file: PathBuf::from("/repo/server/data/server.key"),
-            figcraft_cli: PathBuf::from("/repo/figcraft-cli"),
-            herdr_bin: PathBuf::from("herdr"),
-            public_server: "host:1".into(),
-            local_server: "ws://localhost:1/".into(),
-            bind: "0.0.0.0:1".into(),
-            skill_file: PathBuf::from("/repo/skills/mindmap/SKILL.md"),
-        };
-        let prompt = prompt_text(
-            &config,
-            &workspace(Some("/repo/eisledger")),
-            "/repo/eisledger",
-            Some("3e3bb408a90e35a1"),
-        );
-        assert!(prompt.contains("/repo/skills/mindmap/SKILL.md"));
-        assert!(prompt.contains("map /repo/eisledger"));
-        assert!(prompt.contains("3e3bb408a90e35a1"));
     }
 
     #[test]

@@ -2,7 +2,8 @@
 
 `mindmap-node` is the backend on each machine. It hosts live worktree designs and drives that
 machine's shared Herdr server. The app uses one persistent connection per node, through loopback
-or an SSH tunnel. The Docker document server and `mindmap-service` are legacy migration sources.
+or an SSH tunnel. The Docker document server is the only legacy migration source; the old
+`mindmap-service` binary has been removed (it is in Git history before the node cleanup).
 
 ```sh
 CARGO_HOME="$PWD/.cargo-home" cargo +1.95.0 build --release \
@@ -39,7 +40,17 @@ each key. The node never silently overwrites a changed file. `session.import {so
 explicit migration/import operation; it applies the imported document through the authority.
 
 Agents use `mindmap-node mcp --path WORKTREE`, or `mindmap-node request '<JSON>'`. The MCP adapter
-exposes document inspection, commands, command discovery and a general node request tool.
+answers in the same shape as FigCraft's own MCP: `inspect_document` and `get_node` return the node
+itself, `create_node` (`node.create`), `set_properties` (`node.set`) and `run_command` return the
+command result, `list_commands` discovers commands, and `node_request` reaches any node method.
+`screenshot {ids?, page?, scale?}` returns a PNG through `session.render`, which exports a copy of
+the live design: nothing is written and the session is not edited. Document commands that write
+files (`*.export`, `*.import`) stay refused.
+
+The context packet sent with comments, new pages and Sync is a short summary, never raw JSON: the
+page and its subpages (from `page` or the client's `page_id`, else the page of the first commented
+card), the page's top-level cards, and each commented card with its id, type, path and text,
+capped at 8,000 characters by whole lines (`src/node_context.rs`).
 
 ## Herdr and host setup
 
@@ -103,8 +114,7 @@ with the Mac client; `service/install-mac-node.sh` registers the native node wit
 through the running server and node, preserving existing repository designs and never logging
 owner links. Keep the existing document server online while exporting its live designs,
 then import each into its repository through the node and verify pages and IDs. Preserve server
-data for rollback. Only after verification stop the old project service and the mindmap Docker
-container. `server/compose.yaml` retains it behind the explicit `legacy` profile; the separate
+data for rollback. Only after verification stop the mindmap Docker container. `server/compose.yaml` retains it behind the explicit `legacy` profile; the separate
 older FigCraft installation is unaffected.
 
 ## Verification
@@ -124,5 +134,5 @@ the shared server without prompting agents. Client checks are documented in
 
 The backend cutover was verified with native Linux and macOS nodes, the rebuilt Mac app
 opening this repository through one SSH tunnel, both machines' existing shared Herdr
-sessions, and the agent MCP reading the backend page. The legacy project service and
-Mindmap document container are stopped; their migration data is retained for rollback.
+sessions, and the agent MCP reading the backend page. The Mindmap document container is
+stopped; its migration data is retained for rollback.

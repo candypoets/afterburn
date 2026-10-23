@@ -23,7 +23,7 @@ use crate::agent::{self, AgentOutcome, Target};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::herdr::{Agent, Herdr, Pane, Workspace};
-use crate::project::{AgentDetail, WorkspaceView};
+use crate::workspace::{AgentDetail, WorkspaceView};
 
 #[path = "node_herdr_events.rs"]
 mod events;
@@ -513,7 +513,6 @@ fn workspace_view(
         clis: clis.to_vec(),
         focused: workspace.focused,
         map: map.into(),
-        file: None,
         tabs: workspace.tab_count,
         panes: workspace.pane_count,
     }

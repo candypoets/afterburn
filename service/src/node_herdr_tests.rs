@@ -159,14 +159,13 @@ fn inventory_keeps_legacy_shape_and_uses_checkout_then_focused_shell_cwd() {
             "clis",
             "focused",
             "map",
-            "file",
             "tabs",
             "panes"
         ]
         .into_iter()
         .collect()
     );
-    assert!(json["file"].is_null());
+    assert!(json.get("file").is_none());
     let mut explicit = workspace();
     explicit.worktree = Some(crate::herdr::Worktree {
         checkout_path: Some("/checkout".into()),

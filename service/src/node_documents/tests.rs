@@ -281,7 +281,6 @@ fn imported_foreign_ids_preserve_peers_and_use_one_authority_batch() {
         [Outgoing::All(ServerMsg::Changes(_))]
     ));
     assert!(manager.document(&session).unwrap().contains(page));
-    assert_eq!(manager.peers(&session).unwrap()[0].client_id, peer);
     assert_eq!(manager.metadata(&session).unwrap().seq, before + 1);
     let pong = manager.receive(&session, peer, ClientMsg::Ping).unwrap();
     assert!(matches!(&pong[..], [Outgoing::To(id, ServerMsg::Pong)] if *id == peer));
@@ -296,9 +295,9 @@ fn frozen_sync_gate_survives_restart_and_later_edits_remain_drift() {
     let session = manager.open(&repo.0).unwrap().id;
     let node = create(&mut manager, &session, "frozen design");
     manager.save(&session).unwrap();
-    let frozen = manager.freeze(&session).unwrap();
+    let frozen = encode(&manager.document(&session).unwrap()).unwrap();
     edit(&mut manager, &session, node, "later edit");
-    manager.prepare_sync(&session, &frozen.document).unwrap();
+    manager.prepare_sync_bytes(&session, &frozen).unwrap();
     assert_eq!(repo.disk().node(node).unwrap().name, "frozen design");
     assert!(manager.save(&session).is_err());
     drop(manager);
@@ -467,7 +466,9 @@ fn git_merge_gate_ignores_transient_conflict_file_and_abort_preserves_live() {
     manager.save(&session).unwrap();
     let base = repo.disk();
     edit(&mut manager, &session, node, "live before merge");
-    manager.prepare_sync(&session, &base).unwrap();
+    manager
+        .prepare_sync_bytes(&session, &encode(&base).unwrap())
+        .unwrap();
     std::fs::write(repo.0.join(DESIGN_PATH), b"transient Git binary conflict").unwrap();
     let mut incoming = base.clone();
     incoming.node_mut(node).unwrap().width = 475.0;
@@ -497,7 +498,9 @@ fn git_merge_conflicts_leave_gate_and_authority_untouched_until_picked() {
     manager.save(&session).unwrap();
     let base = repo.disk();
     edit(&mut manager, &session, node, "live");
-    manager.prepare_sync(&session, &base).unwrap();
+    manager
+        .prepare_sync_bytes(&session, &encode(&base).unwrap())
+        .unwrap();
     let mut incoming = base.clone();
     incoming.node_mut(node).unwrap().name = "incoming".into();
     let outcome = manager
@@ -533,7 +536,9 @@ fn merge_readiness_and_exact_prepared_bytes_survive_restart_and_clear_on_release
     let node = create(&mut manager, &session, "base");
     manager.save(&session).unwrap();
     let base = repo.disk();
-    manager.prepare_sync(&session, &base).unwrap();
+    manager
+        .prepare_sync_bytes(&session, &encode(&base).unwrap())
+        .unwrap();
     assert!(!manager.metadata(&session).unwrap().merge_ready);
     let mut incoming = base.clone();
     incoming.node_mut(node).unwrap().width = 600.0;
@@ -553,7 +558,10 @@ fn merge_readiness_and_exact_prepared_bytes_survive_restart_and_clear_on_release
     assert!(!manager.metadata(&session).unwrap().merge_ready);
     assert!(manager.prepared_bytes(&session).is_err());
     manager
-        .prepare_sync(&session, &manager.document(&session).unwrap())
+        .prepare_sync_bytes(
+            &session,
+            &encode(&manager.document(&session).unwrap()).unwrap(),
+        )
         .unwrap();
     assert!(!manager.metadata(&session).unwrap().merge_ready);
     manager.finish_sync(&session).unwrap();

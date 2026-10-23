@@ -17,10 +17,11 @@ Start the stdio MCP adapter on the machine that owns the worktree:
 mindmap-node mcp --path /absolute/worktree
 ```
 
-Tools: `inspect_document`, `get_node`, `list_commands`, `run_command`, `node_request`.
-Discover command parameters with `list_commands`. `run_command` applies a FigCraft command
-through the authoritative session and broadcasts the changes. Use `command.batch` for
-selection-dependent steps. Inspect before and after editing.
+Tools: `inspect_document`, `get_node`, `create_node`, `set_properties`, `run_command`,
+`list_commands`, `screenshot`, `node_request`. Discover command parameters with `list_commands`.
+`run_command` applies a FigCraft command through the authoritative session and broadcasts the
+changes. Use `command.batch` for selection-dependent steps. Inspect before and after editing, and
+look at your work with `screenshot` (a PNG of layers or a page; it writes nothing).
 
 The CLI also exposes the protocol:
 

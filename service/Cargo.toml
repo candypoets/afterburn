@@ -2,13 +2,9 @@
 name = "mindmap-service"
 version = "0.1.0"
 edition = "2021"
-description = "Mindmap project service: Herdr workspaces, FigCraft documents, agents"
+description = "Mindmap node: live worktree designs, shared Herdr agents, Git-backed Sync"
 license = "MIT OR Apache-2.0"
 publish = false
-
-[[bin]]
-name = "mindmap-service"
-path = "src/main.rs"
 
 [[bin]]
 name = "mindmap-node"

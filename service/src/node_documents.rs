@@ -13,8 +13,7 @@ use std::time::{Duration, Instant};
 
 use figcraft_collab::merge::{self, Side};
 use figcraft_collab::{
-    Change, ClientMsg, Hello, Limits, Outgoing, Peer, Presence, Resume, Server, ServerMsg,
-    SessionState,
+    Change, ClientMsg, Hello, Limits, Outgoing, Presence, Resume, Server, ServerMsg, SessionState,
 };
 use figcraft_doc::{Document, NodeId};
 use serde::{Deserialize, Serialize};
@@ -37,13 +36,6 @@ pub struct SessionMetadata {
     pub active: bool,
     pub sync_prepared: bool,
     pub merge_ready: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct FrozenDocument {
-    pub session: String,
-    pub seq: u64,
-    pub document: Document,
 }
 
 /// In a merge, `branch` is the live authority; `main` is the incoming disk/Git version.
@@ -213,10 +205,6 @@ impl NodeDocuments {
         Ok(self.get(session)?.server.document().clone())
     }
 
-    pub fn peers(&self, session: &str) -> Result<Vec<Peer>> {
-        Ok(self.get(session)?.server.peers().cloned().collect())
-    }
-
     pub fn inspect(&self, session: &str, node: Option<NodeId>, depth: usize) -> Result<Value> {
         let doc = self.get(session)?.server.document();
         let depth = depth.min(128);
@@ -330,21 +318,6 @@ impl NodeDocuments {
         Ok(outgoing)
     }
 
-    pub fn merge(
-        &mut self,
-        session: &str,
-        base: &Document,
-        incoming: &Document,
-        picks: &[MergePick],
-    ) -> Result<MergeOutcome> {
-        let mut s = self.get(session)?.clone();
-        let outcome = s.merge_document(base, incoming, picks)?;
-        if outcome.conflicts.is_empty() {
-            self.commit(s)?;
-        }
-        Ok(outcome)
-    }
-
     /// Resolve the current disk change against the last observed disk baseline. Unresolved
     /// conflicts leave both disk and live authority untouched, and prevent autosaving.
     pub fn resolve_disk(&mut self, session: &str, picks: &[MergePick]) -> Result<MergeOutcome> {
@@ -360,28 +333,10 @@ impl NodeDocuments {
         Ok(outcome)
     }
 
-    pub fn freeze(&self, session: &str) -> Result<FrozenDocument> {
-        let s = self.get(session)?;
-        Ok(FrozenDocument {
-            session: session.to_string(),
-            seq: s.server.seq(),
-            document: s.server.document().clone(),
-        })
-    }
-
-    pub fn save_frozen(&mut self, frozen: &FrozenDocument) -> Result<Vec<Outgoing>> {
-        self.prepare_sync(&frozen.session, &frozen.document)
-    }
-
     /// Persist the live cache and gate FIRST, then write the exact frozen snapshot. Edits keep
     /// flowing through the authority while the gate blocks autosave/reload (including restart).
     /// The caller keeps this gate through Git commit verification; finish also serves abort.
-    pub fn prepare_sync(&mut self, session: &str, frozen: &Document) -> Result<Vec<Outgoing>> {
-        self.prepare_sync_bytes(session, &encode(frozen)?)
-    }
-
-    /// Byte-preserving form for Git's frozen snapshot: the worktree must match the staged blob
-    /// exactly, including ZIP metadata. The document form above is convenient for in-memory jobs.
+    /// The bytes are Git's frozen blob: the worktree must match it exactly, including ZIP metadata.
     pub fn prepare_sync_bytes(&mut self, session: &str, bytes: &[u8]) -> Result<Vec<Outgoing>> {
         decode(bytes)?;
         let mut s = self.get(session)?.clone();
@@ -446,10 +401,6 @@ impl NodeDocuments {
         s.dirty = false;
         self.commit(s)?;
         Ok(outgoing)
-    }
-
-    pub fn restore_live(&mut self, session: &str) -> Result<Vec<Outgoing>> {
-        self.finish_sync(session)
     }
 
     /// Git may temporarily leave a binary conflict in map.figcraft. While its gate is held,
@@ -1016,6 +967,27 @@ fn validate_command(command: &str, params: &Value, depth: usize) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Render layers (or a page) of a copy of the live design as a PNG. Nothing is written to disk
+/// and no session is edited. Returns FigCraft's export result (`data` in base64).
+pub fn render(doc: Document, ids: &[u64], page: Option<u64>, scale: f64) -> Result<Value> {
+    let mut engine = figcraft_engine::Session::with_document(doc);
+    if let Some(page) = page {
+        engine
+            .execute("page.select", &json!({"id": page}))
+            .map_err(collab_error)?;
+    }
+    let scale = if scale.is_finite() {
+        scale.clamp(0.05, 4.0)
+    } else {
+        1.0
+    };
+    let mut params = json!({"format": "png", "scale": scale});
+    if !ids.is_empty() {
+        params["ids"] = json!(ids);
+    }
+    engine.execute("file.export", &params).map_err(collab_error)
 }
 
 #[cfg(test)]

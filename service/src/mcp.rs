@@ -94,24 +94,6 @@ impl FigcraftSession {
         Ok(session)
     }
 
-    /// Open a `.figcraft` document.
-    ///
-    /// In this CLI build `open_file` is an MCP tool, while the command id is `file.open` (the
-    /// Python reference calls the tool directly too). Use the tool and fall back to the command
-    /// only when the tool surface is older.
-    pub fn open_document(&mut self, path: &Path) -> Result<Value> {
-        let path = path
-            .to_str()
-            .ok_or_else(|| Error::new(format!("path is not UTF-8: {}", path.display())))?;
-        match self.call_tool("open_file", json!({ "path": path })) {
-            Ok(value) => Ok(value),
-            Err(error) if looks_like_unknown_tool(&error) => {
-                self.run_command("file.open", json!({ "path": path }))
-            }
-            Err(error) => Err(error),
-        }
-    }
-
     /// Execute one FigCraft command through the `run_command` tool.
     pub fn run_command(&mut self, command: &str, params: Value) -> Result<Value> {
         self.call_tool(
@@ -276,14 +258,6 @@ fn read_responses(
             }
         }
     }
-}
-
-fn looks_like_unknown_tool(error: &Error) -> bool {
-    let message = error.message().to_ascii_lowercase();
-    message.contains("unknown tool")
-        || message.contains("unknown method")
-        || message.contains("method not found")
-        || message.contains("no such tool")
 }
 
 fn excerpt(text: &str, limit: usize) -> String {

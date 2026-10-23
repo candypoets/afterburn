@@ -399,6 +399,17 @@ impl Node {
                 let depth = req["depth"].as_u64().unwrap_or(6).min(24) as usize;
                 Ok(json!({"document":lock(&self.docs)?.inspect(&session,node,depth)?}))
             }
+            "session.render" => {
+                let session = self.session(req)?;
+                let ids: Vec<u64> = req["ids"]
+                    .as_array()
+                    .map(|ids| ids.iter().filter_map(Value::as_u64).take(64).collect())
+                    .unwrap_or_default();
+                let page = req["page"].as_u64();
+                let scale = req["scale"].as_f64().unwrap_or(1.0);
+                let document = lock(&self.docs)?.document(&session)?;
+                crate::node_documents::render(document, &ids, page, scale)
+            }
             "session.commands" => {
                 let filter = req["filter"].as_str().unwrap_or("");
                 let commands: Vec<Value> = figcraft_engine::all_commands().iter().filter(|c|c.id.contains(filter)).map(|c|json!({"id":c.id,"label":c.label,"params":c.params,"history":c.history})).collect();
@@ -482,21 +493,35 @@ impl Node {
         }
     }
 
-    fn context(&self, session: &str, req: &Value) -> Result<String> {
+    fn context(&self, session: &str, req: &Value, commented: &[u64]) -> Result<String> {
         let docs = lock(&self.docs)?;
         let metadata = docs.metadata(session)?;
-        let scope = page(req)?;
-        let inspect = docs.inspect(session, scope.map(figcraft_doc::NodeId), 8)?;
-        let mut text = format!("MINDMAP CONTEXT\nWorktree: {}\nBranch: {}\nNode: {}\nSession: {session}\nRead and edit the live session with `mindmap-node mcp --path <worktree>` or `mindmap-node request '<JSON>'`. All requests include session, method, and parameters. Do not write .mindmap/map.figcraft: only the node saves it. Keep names stable and source claims.\n",metadata.worktree.display(),metadata.branch,self.address);
-        if let Some(page) = scope {
-            text.push_str(&format!(
-                "Scope: page {page} and its subpages only. Other pages are out of scope.\n"
-            ));
-        }
-        text.push_str("Read skills/mindmap/SKILL.md for the node workflow. The complete design and property diff can be read from session.inspect and diff with pagination.\n");
-        let serialized = serde_json::to_string(&inspect)?;
-        text.push_str(&serialized.chars().take(12_000).collect::<String>());
-        Ok(text)
+        let document = docs.document(session)?;
+        drop(docs);
+        // Sync names `page`; comments and new pages send `page_id` (and the comments their own).
+        let scope = match page(req)? {
+            Some(page) => Some(page),
+            None => req["page_id"].as_u64().filter(|id| *id > 0),
+        };
+        let commented: Vec<figcraft_doc::NodeId> = commented
+            .iter()
+            .copied()
+            .map(figcraft_doc::NodeId)
+            .collect();
+        let worktree = metadata.worktree.display().to_string();
+        Ok(crate::node_context::render(
+            &document,
+            &crate::node_context::Request {
+                worktree: &worktree,
+                branch: &metadata.branch,
+                node: &self.address,
+                session,
+                page: scope.map(figcraft_doc::NodeId),
+                commented: &commented,
+                new_page: req["new_page"].as_bool().unwrap_or(false),
+                source: req["source_node_id"].as_u64().map(figcraft_doc::NodeId),
+            },
+        ))
     }
 
     fn send(&self, req: &Value) -> Result<Value> {
@@ -507,7 +532,17 @@ impl Node {
         let prompt=req["prompt"].as_str().unwrap_or(if initial {"Create the project map in the live session. Read the code, plan and implement the requested map; source every claim."} else {""});
         let session = self.session(req)?;
         self.validate_workspace(&workspace, &session)?;
-        let context = self.context(&session, req)?;
+        let commented: Vec<u64> = comments
+            .iter()
+            .filter_map(|comment| comment.node_id)
+            .collect();
+        let mut context_req = req.clone();
+        if context_req["page_id"].is_null() {
+            if let Some(page) = comments.iter().find_map(|comment| comment.page_id) {
+                context_req["page_id"] = json!(page);
+            }
+        }
+        let context = self.context(&session, &context_req, &commented)?;
         let prompt = crate::comments::format_prompt(
             &workspace.label,
             workspace.path.as_deref(),
@@ -554,7 +589,7 @@ impl Node {
             .as_ref()
             .map(|b| b.commit.as_str())
             .unwrap_or("first sync");
-        let prompt=format!("Sync {} ({}) since {}.\nLarge work: plan it and split it across sub-agents in your own harness; finish all authorized work.\n{}\nJob: {}\nRead complete design drift with node diff and code drift with git. At completion call node sync.prepare with job {}, then commit code and .mindmap/map.figcraft together with this exact trailer:\n{}\nCall sync.finish with job {} and commit SHA after committing. Agent idle alone cannot finish this sync. Changes made after its start remain drift. Do not commit node cache or private links.\nNOTE: {}",workspace.label,metadata.worktree.display(),since,self.context(&session,req)?,id,id,frozen.trailer,id,req["prompt"].as_str().unwrap_or(""));
+        let prompt=format!("Sync {} ({}) since {}.\nLarge work: plan it and split it across sub-agents in your own harness; finish all authorized work.\n{}\nJob: {}\nRead complete design drift with node diff and code drift with git. At completion call node sync.prepare with job {}, then commit code and .mindmap/map.figcraft together with this exact trailer:\n{}\nCall sync.finish with job {} and commit SHA after committing. Agent idle alone cannot finish this sync. Changes made after its start remain drift. Do not commit node cache or private links.\nNOTE: {}",workspace.label,metadata.worktree.display(),since,self.context(&session,req,&[])?,id,id,frozen.trailer,id,req["prompt"].as_str().unwrap_or(""));
         let job = Job {
             frozen,
             session: session.clone(),
@@ -990,7 +1025,7 @@ impl Node {
 
     fn validate_workspace(
         &self,
-        workspace: &crate::project::WorkspaceView,
+        workspace: &crate::workspace::WorkspaceView,
         session: &str,
     ) -> Result<()> {
         let metadata = lock(&self.docs)?.metadata(session)?;
