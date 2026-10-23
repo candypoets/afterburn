@@ -29,6 +29,8 @@ document**. For those jobs:
 - Run the FigCraft CLI with `mcp`, `collab.join` the edit link, `get_node` the page/card to read
   it, then `run_command` to change or add the named cards.
 - Work only on the named page and card; keep card names stable; source every claim.
+- A Sync prompt with a `Scope:` line covers one page and its subpages: implement that part of the
+  map only. Its `Code scope:` lists the paths the page's cards cite; start there.
 
 ## The model
 

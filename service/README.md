@@ -39,7 +39,7 @@ product shape from [`../project/README.md`](../project/README.md). The Python fi
 | `src/agent.rs` | Agent detection, tab creation, start, prompt (Init and Send), in-band failure. |
 | `src/comments.rs` | Canvas-comment validation and prompt rendering for `send`. |
 | `src/sync.rs` | Map snapshot validation, design/code diffs, sync prompt, job transitions. |
-| `src/records.rs` | `service/data/projects.json` store (atomic writes, mode 0600, `last_sync`). |
+| `src/records.rs` | `service/data/projects.json` store (atomic writes, mode 0600, `last_sync`, `page_syncs`). |
 | `src/server.rs` | Newline-delimited JSON TCP API (`health`, `workspaces`, `open`, `init`, `send`, `adopt`, `diff`, `sync`, `sync_status`). |
 | `src/link.rs` | Rewrites the join link's `host` parameter to the public address. |
 | `src/config.rs` | Paths and environment overrides. |
@@ -329,10 +329,33 @@ Validation happens before the workspace is resolved or anything is prompted:
   node `name` are required too).
 * At most **500 pages** and **5,000 nodes**. A larger snapshot is rejected, never truncated. The
   request line itself is capped at 1 MiB.
+* A page may carry `parent`: missing, `null`, or a positive integer, the page it is a subpage of
+  (the client's `mindmap.parent_page`). The parent need not be in the snapshot.
 * Unknown fields are ignored, not stored.
 
 The snapshot is captured at sync start. `diff` does not store it. `sync` keeps it in the job and
-writes it to `last_sync` only when the agent finishes successfully.
+writes it to `page_syncs` (and, for a whole-map sync, `last_sync`) only when the agent finishes
+successfully.
+
+### Page sync
+
+`diff` and `sync` take an optional `"page": <page id>`. With it, they cover that page and every
+subpage below it (following `parent`), not the whole map; the client sends it by default.
+
+* **Scope.** The snapshot is cut to the page's subtree. A page that is not in the snapshot is
+  `ok:false`.
+* **Baseline per page.** Each page has its own last sync in `page_syncs`. A page sync compares
+  every page in scope with its newest state: its own entry, or the whole-map `last_sync` when that
+  finished later. A subpage that was synced before and has since been deleted still counts, so its
+  cards show as removed. `last` (and the code side) uses the **oldest** state among those pages, so
+  nothing any page in scope has not seen is left out. Without `page`, the same rule runs over every
+  page, so a whole-map diff also respects page syncs made since.
+* **Code scope.** A page sync limits `git diff` and `git log` to the code the page's cards cite:
+  every `path` or `path:line` in a card's text that exists in the checkout. A file counts by its
+  directory (`service/src/sync.rs:36` → `service/src`), unless that directory is the repository root
+  or a top-level folder, where the file alone counts. Paths are passed after `--` with
+  `--literal-pathspecs`; absolute paths, `..`, and paths that do not exist are ignored; at most
+  40 are kept. `code.scope` lists them. A page that cites nothing gets the whole repository.
 
 ### `diff`
 
@@ -367,18 +390,19 @@ writes it to `last_sync` only when the agent finishes successfully.
 * A first sync (`last.exists:false`) reports every node as added and no removed or changed rows.
   The code lists are empty; `code.head` is still filled in when the checkout is a repository.
 * `code` runs `git -C <path> rev-parse HEAD`, `git diff --numstat <last>..HEAD`, and
-  `git log --format=%h%x09%s <last>..HEAD`. Binary numstat lines (`- -`) count as 0 added/removed.
-  Files and commits are each capped at **100**. `code.from` is the last-sync commit.
+  `git log --format=%h%x09%s <last>..HEAD`, limited to `code.scope` for a page sync. Binary numstat
+  lines (`- -`) count as 0 added/removed. Files and commits are each capped at **100**. `code.from`
+  is the last-sync commit.
 * A workspace with no checkout path, a directory that is not a git repository, an unknown last
   commit, or a git failure is **not a request error**: the code lists are empty and `code.note`
-  says why. This is the only extra field in `code`.
+  says why.
 * `diff` does **not** write project records. It resolves the workspace from a read-only record view
-  (no legacy import) and reads `last_sync` through a read-only store path.
+  and reads the store file without the legacy import.
 
 ### `sync`
 
 ```json
-{"id":3,"method":"sync","workspace":"wX","target":"pane:wX:p2","prompt":"optional note","map":{…}}
+{"id":3,"method":"sync","workspace":"wX","target":"pane:wX:p2","prompt":"optional note","map":{…},"page":2}
 ```
 
 ```json
@@ -409,6 +433,10 @@ The submitted prompt is built from the two diffs:
 
 ```text
 Sync <label> (<path>) against the code.
+Document: <file id>
+Edit link (owner access; do not share, commit or paste): <edit link>
+Scope: page <name> (id N) and its subpages <name> (id M), …. Implement this part of the map only; other pages are out of scope.
+Code scope (the paths its cards cite): <path>, …
 
 DESIGN CHANGES SINCE <last|first> sync:
 + <card> (<page>)
@@ -423,6 +451,9 @@ CODE SINCE <commit>:
 NOTE: <prompt>
 ```
 
+* `Document:` and the edit link come from the project record, so the agent can read the cards. The
+  `Scope:` and `Code scope:` lines are there only for a page sync; a page that cites no repository
+  path says `Code scope: the whole repository …` instead.
 * `DESIGN CHANGES SINCE last sync:` when a last sync exists, otherwise `… SINCE first sync:`.
   Added, changed, and removed rows are in that order; design and code sections are omitted when
   empty. A first sync therefore has no code section.
@@ -436,7 +467,7 @@ NOTE: <prompt>
 The job is in memory only:
 
 ```json
-{"id","workspace","started","started_secs","head","map_snapshot","pane","agent","state":"in_flight","seen_active":false}
+{"id","workspace","started","started_secs","head","map_snapshot","page","pane","agent","state":"in_flight","seen_active":false}
 ```
 
 It keeps the head commit and the map snapshot from before the prompt. `sync` itself writes no
@@ -471,14 +502,16 @@ workspace and pane:
 * If `herdr agent list` itself fails, `sync_status` returns `ok:false` and leaves the job in
   flight; the client can retry the poll.
 
-On success, just before reporting `done`, the service writes only `last_sync` through the store:
+On success, just before reporting `done`, the service writes through the store one `page_syncs`
+entry per synced page (its own cards only) and, for a whole-map sync, `last_sync`:
 
 ```json
 {"commit": "<head captured by sync>", "at": "<completion time>", "map": {<start snapshot>}}
 ```
 
-The store lock and atomic rename make that update safe, and all other record fields (including
-unknown ones) are preserved. A failed job writes nothing; the previous `last_sync` stays intact.
+A page sync leaves `last_sync` and the other pages' entries alone. `last` in the reply is the
+synced pages' baseline as it now stands. The store lock and atomic rename make that update safe,
+and all other record fields (including unknown ones) are preserved. A failed job writes nothing.
 A finished job is returned as-is on later polls. Unknown or empty job ids are `ok:false`.
 
 ### Limits
@@ -515,12 +548,13 @@ Requests:
 | `init` | `{"id":4,"method":"init","workspace":"wP","target":"pane:wX:p2"}` | same as `open` plus `"agent":{…}` |
 | `send` | `{"id":5,"method":"send","workspace":"wX","target":"pane:wX:p2","prompt":"Why does this rebuild?","comments":[{"text":"…","node":"Components","page":"Mindmap"}]}` | `{"id":5,"ok":true,"agent":{…},"sent":1}` |
 | `adopt` | `{"id":6,"method":"adopt","workspace":"wX","path":"build/mindmap-system.figcraft","name":"Mindmap · mindmap"}` | `{"id":6,"ok":true,"file":"…","link":"figcraft://…","name":"…"}` |
-| `diff` | `{"id":7,"method":"diff","workspace":"wX","map":{…}}` | `{"id":7,"ok":true,"last":{…},"map":{…},"code":{…}}` |
-| `sync` | `{"id":8,"method":"sync","workspace":"wX","target":"pane:wX:p2","prompt":"optional note","map":{…}}` | `{"id":8,"ok":true,"job":{"id":"sync-…","state":"in_flight",…},"agent":{…}}` |
+| `diff` | `{"id":7,"method":"diff","workspace":"wX","map":{…},"page":2}` | `{"id":7,"ok":true,"last":{…},"map":{…},"code":{…}}` |
+| `sync` | `{"id":8,"method":"sync","workspace":"wX","target":"pane:wX:p2","prompt":"optional note","map":{…},"page":2}` | `{"id":8,"ok":true,"job":{"id":"sync-…","state":"in_flight",…},"agent":{…}}` |
 | `sync_status` | `{"id":9,"method":"sync_status","job":"sync-…"}` | `{"id":9,"ok":true,"job":{…},"last":{…}}` |
 
 `target` is optional: absent or `"auto"`, `"pane:<pane-id>"`, or `"kind:<agent-kind>"`. `name` is
-optional for `adopt` and defaults to `Mindmap · <label>`. `send` never returns a link: it only
+optional for `adopt` and defaults to `Mindmap · <label>`. `page` is optional for `diff` and `sync`
+(see [Page sync](#page-sync)). `send` never returns a link: it only
 prompts an agent, and its `comments`/`prompt` rules and prompt format are described in
 [Send](#sending-canvas-comments). `diff`, `sync`, and `sync_status` require the `map` snapshot,
 target/record rules, prompt, and job lifecycle described in [Diffing and syncing the
@@ -536,16 +570,17 @@ Records are `service/data/projects.json`, keyed by workspace id, with the refere
 optional sync state:
 
 ```json
-{"id","label","path","file","edit","view","name","built","created","last_sync"?}
+{"id","label","path","file","edit","view","name","built","created","last_sync"?,"page_syncs"?}
 ```
 
-`last_sync` is written only by a successful `sync_status`; its shape is:
+`last_sync` (the whole map) and `page_syncs` (keyed by page id) are written only by a successful
+`sync_status`; each entry has this shape:
 
 ```json
 {"commit":"<head at sync start>","at":"<completion time>","map":{"pages":[…],"nodes":[…]}}
 ```
 
-A sync updates only `last_sync`; `built`, `file`, `edit`, `view`, and every other field stay as
+A sync updates only `last_sync` and `page_syncs`; `built`, `file`, `edit`, `view`, and every other field stay as
 they were. Unknown top-level fields are preserved on that write. The store lock and the
 write-temp-then-rename path keep concurrent readers and writers safe.
 
@@ -553,7 +588,7 @@ The edit/view links contain tokens, so the store is written atomically with mode
 are never logged. On first use, if the new store does not exist, records from
 `project/data/projects.json` are imported so an already-published workspace (eisledger) keeps its
 document instead of getting a duplicate. Later imports do not happen. Read-only paths (`diff`,
-`Store::last_sync`, `Store::all_readonly`) do not trigger that import.
+`Store::all_readonly`) do not trigger that import.
 
 ## Verification performed
 

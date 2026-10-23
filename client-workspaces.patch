@@ -1599,7 +1599,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/compose.rs client
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src/crates/ui-egui/src/lib.rs
 --- .client-src-orig/crates/ui-egui/src/lib.rs	2026-10-21 19:43:48.000000000 +0200
-+++ client-src/crates/ui-egui/src/lib.rs	2026-10-22 16:28:40.527769940 +0200
++++ client-src/crates/ui-egui/src/lib.rs	2026-10-23 14:12:33.506151674 +0200
 @@ -6,6 +6,7 @@
  #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
  
@@ -1698,16 +1698,18 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
  
  #[cfg(test)]
  mod theme_startup_tests;
-@@ -135,6 +189,8 @@
+@@ -135,6 +189,10 @@
  #[cfg(test)]
  mod gap_handle_tests;
  #[cfg(test)]
 +mod new_page_menu_tests;
 +#[cfg(test)]
++mod sync_scope_tests;
++#[cfg(test)]
  mod gradient_shorthand_tests;
  #[cfg(test)]
  mod guide_release_tests;
-@@ -643,7 +699,7 @@
+@@ -643,7 +701,7 @@
              shortcuts_tab: figcraft_engine::keymap::Group::Essential,
              shortcuts_query: String::new(),
              opacity_digit: None,
@@ -1716,7 +1718,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              home_view: home::Home::default(),
              title_bar: TitleBar::Native,
              icon_gallery: false,
-@@ -717,6 +773,23 @@
+@@ -717,6 +775,23 @@
  pub struct FigApp {
      pub session: Session,
      pub ui: UiState,
@@ -1740,7 +1742,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
      pub canvas: canvas::CanvasState,
      pub services: Box<dyn Services>,
      worker: Option<render_worker::Worker>,
-@@ -763,6 +836,14 @@
+@@ -763,6 +838,14 @@
          let pages_height = session.prefs.pages_height;
          Self {
              ui: UiState { left_width, right_width, pages_height, ..UiState::default() },
@@ -1755,7 +1757,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              session,
              canvas: canvas::CanvasState::default(),
              services,
-@@ -1489,7 +1570,13 @@
+@@ -1489,7 +1572,13 @@
              return;
          }
          if !self.has_files() || self.ui.home {
@@ -1770,7 +1772,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
              // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
              // (cleared after the home widgets, which may have just asked for it).
              self.ui.shortcuts_panel = false;
-@@ -1547,90 +1634,196 @@
+@@ -1547,91 +1636,197 @@
                      right::right_panel(self, ui)
                  });
          }
@@ -2007,8 +2009,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                .show(ui, |ui| {
 +                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspaces");
 +                    workspaces::pane(self, ui);
-+                });
-+        }
+                 });
+         }
 +        egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
 +            let worker = self.worker.take();
 +            let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
@@ -2018,7 +2020,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +                ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
 +                    a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
 +                    toolbar::show(self, ui);
-                 });
++                });
 +            }
 +        });
 +        if map_mode {
@@ -2031,9 +2033,10 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/lib.rs client-src
 +            page_delete::show(self, &ctx);
 +            page_tree::show(self, &ctx);
 +            page_tree::maintain(self, &ctx);
-         }
++        }
          // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
          for (name, x, shown, grows) in edges {
+             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/menus.rs client-src/crates/ui-egui/src/menus.rs
 --- .client-src-orig/crates/ui-egui/src/menus.rs	2026-10-19 15:50:23.000000000 +0200
 +++ client-src/crates/ui-egui/src/menus.rs	2026-10-22 12:05:18.916502808 +0200
@@ -2594,8 +2597,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/page_delete.rs cl
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/page_tree.rs client-src/crates/ui-egui/src/page_tree.rs
 --- .client-src-orig/crates/ui-egui/src/page_tree.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/page_tree.rs	2026-10-22 16:10:19.706032686 +0200
-@@ -0,0 +1,337 @@
++++ client-src/crates/ui-egui/src/page_tree.rs	2026-10-23 14:10:29.851753803 +0200
+@@ -0,0 +1,338 @@
 +//! Page/subpage hierarchy stored as document metadata.
 +//!
 +//! A page with `mindmap.parent_page` is a subpage. A subpage created from a card also stores
@@ -2702,7 +2705,8 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/page_tree.rs clie
 +}
 +
 +/// All descendants of `page` (not including it), deepest first.
-+fn descendants(doc: &Document, page: NodeId) -> Vec<NodeId> {
++/// Every page below `page`, deepest first.
++pub(crate) fn descendants(doc: &Document, page: NodeId) -> Vec<NodeId> {
 +    let mut out = Vec::new();
 +    let mut stack = vec![page];
 +    let mut seen = Vec::new();
@@ -2935,9 +2939,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/page_tree.rs clie
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-src/crates/ui-egui/src/sync.rs
 --- .client-src-orig/crates/ui-egui/src/sync.rs	1970-01-01 01:00:00.000000000 +0100
-+++ client-src/crates/ui-egui/src/sync.rs	2026-10-22 13:47:35.080999864 +0200
-@@ -0,0 +1,1563 @@
++++ client-src/crates/ui-egui/src/sync.rs	2026-10-23 14:11:16.115154392 +0200
+@@ -0,0 +1,1678 @@
 +//! Sync: the map's drift from the last sync, the code drift since it, and one action.
++//!
++//! A sync covers the current page and its subpages by default, or every page. A page sync is
++//! compared with each page's own last sync, and its code side is limited to the paths the page's
++//! cards cite; the service keeps one baseline per page.
 +//!
 +//! The button is a floating pill at the map's top right, never a mode: it opens a widget with the
 +//! design changes the agent is about to implement, the code that changed since the last sync, an
@@ -3030,6 +3038,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +pub struct SnapPage {
 +    pub id: u64,
 +    pub name: String,
++    /// The parent page of a subpage (`mindmap.parent_page`), so the service knows the tree.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub parent: Option<u64>,
 +}
 +
 +/// The snapshot's node: the card as the map shows it.
@@ -3057,6 +3068,16 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    /// cannot loop or overflow the stack. Pages and cards beyond the caps are left out (the
 +    /// service rejects larger snapshots outright).
 +    pub fn of(doc: &Document) -> Snapshot {
++        Snapshot::of_pages(doc, None)
++    }
++
++    /// Like [`Snapshot::of`], limited to `page` and its subpages when one is given.
++    pub fn of_pages(doc: &Document, page: Option<NodeId>) -> Snapshot {
++        let scope: Option<HashSet<NodeId>> = page.map(|page| {
++            let mut pages: HashSet<NodeId> = crate::page_tree::descendants(doc, page).into_iter().collect();
++            pages.insert(page);
++            pages
++        });
 +        let mut pages = Vec::new();
 +        let mut nodes = Vec::new();
 +        // The map's cards are its top-level frames. Nested frames are the card's internal layout,
@@ -3066,8 +3087,12 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +            if pages.len() >= MAX_PAGES || nodes.len() >= MAX_NODES {
 +                break;
 +            }
++            if scope.as_ref().is_some_and(|scope| !scope.contains(page_id)) {
++                continue;
++            }
 +            let Some(page) = doc.node(*page_id) else { continue };
-+            pages.push(SnapPage { id: page_id.0, name: page.name.clone() });
++            let parent = crate::page_tree::parent(doc, *page_id).map(|parent| parent.0);
++            pages.push(SnapPage { id: page_id.0, name: page.name.clone(), parent });
 +            for child in &page.children {
 +                if nodes.len() >= MAX_NODES {
 +                    break;
@@ -3244,6 +3269,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    pub commits: Vec<CommitInfo>,
 +    #[serde(default)]
 +    pub note: Option<String>,
++    /// The repository paths the files and commits are limited to; empty is the whole repository.
++    #[serde(default)]
++    pub scope: Vec<String>,
 +}
 +
 +/// The service's answer to `diff`.
@@ -3376,6 +3404,10 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    starting: bool,
 +    /// The target menu is open.
 +    menu_open: bool,
++    /// Sync every page instead of the current page and its subpages.
++    all_pages: bool,
++    /// The page the diff was read for (`None` when it covers every page).
++    page: Option<u64>,
 +}
 +
 +impl State {
@@ -3445,7 +3477,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +        return;
 +    };
 +    match snapshot_now(app) {
-+        Ok(snapshot) => start_diff(app, ctx, snapshot, workspace),
++        Ok((snapshot, page)) => start_diff(app, ctx, snapshot, page, workspace),
 +        Err(message) => {
 +            app.sync.open = false;
 +            app.toast(message);
@@ -3478,12 +3510,24 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +        app.sync.menu_open = false;
 +    }
 +
++    // A page sync's diff belongs to the page it was read on: moving to another page reads that
++    // page's diff instead. A job in flight keeps polling.
++    let current_page = app.session.page().ok().map(|page| page.0);
++    if !app.sync.all_pages && !app.sync.busy && app.sync.page.is_some() && app.sync.page != current_page {
++        app.sync.diff = None;
++        app.sync.snapshot = None;
++        app.sync.page = None;
++        app.sync.dirty = false;
++        app.sync.error = None;
++        app.sync.refresh = app.sync.open;
++    }
++
 +    poll_diff(app);
 +    poll_job(app, ctx);
 +    if app.sync.refresh && !app.sync.busy {
 +        app.sync.refresh = false;
-+        if let Ok(snapshot) = snapshot_now(app) {
-+            start_diff(app, ctx, snapshot, workspace.clone());
++        if let Ok((snapshot, page)) = snapshot_now(app) {
++            start_diff(app, ctx, snapshot, page, workspace.clone());
 +        }
 +    }
 +    if app.sync.open {
@@ -3496,6 +3540,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +        return;
 +    }
 +
++    let scope = scope_label(app);
 +    let menu_was_open = app.sync.menu_open;
 +    let mut out = WidgetOut::default();
 +    // The anchored area takes its first frame's size from `default_size`; without it the
@@ -3521,7 +3566,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +                .inner_margin(egui::Margin::symmetric(18, 16))
 +                .show(ui, |ui| {
 +                    ui.set_width(WIDGET_W - 2.0 * PAD);
-+                    out = widget_body(ui, &mut app.sync, &mut app.compose, scroll_h);
++                    out = widget_body(ui, &mut app.sync, &mut app.compose, &scope, scroll_h);
 +                });
 +        });
 +
@@ -3545,11 +3590,36 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +        app.sync.open = false;
 +        app.sync.menu_open = false;
 +    }
++    if let Some(all_pages) = out.scope {
++        if all_pages != app.sync.all_pages && !app.sync.busy {
++            app.sync.all_pages = all_pages;
++            app.sync.diff = None;
++            app.sync.snapshot = None;
++            app.sync.page = None;
++            app.sync.dirty = false;
++            app.sync.error = None;
++            if let Ok((snapshot, page)) = snapshot_now(app) {
++                start_diff(app, ctx, snapshot, page, workspace.clone());
++            }
++        }
++    }
 +    if out.sync && app.sync.open {
 +        match snapshot_now(app) {
-+            Ok(snapshot) => start_sync(app, ctx, workspace, snapshot),
++            Ok((snapshot, page)) => start_sync(app, ctx, workspace, snapshot, page),
 +            Err(message) => app.toast(message),
 +        }
++    }
++}
++
++/// The widget's scope line: the current page and how many subpages a page sync takes along.
++fn scope_label(app: &FigApp) -> String {
++    let Ok(doc) = app.session.doc() else { return String::new() };
++    let Ok(page) = app.session.page() else { return String::new() };
++    let name = doc.node(page).map(|node| node.name.clone()).unwrap_or_else(|| "this page".to_string());
++    match crate::page_tree::descendants(doc, page).len() {
++        0 => name,
++        1 => format!("{name} + 1 subpage"),
++        n => format!("{name} + {n} subpages"),
 +    }
 +}
 +
@@ -3558,16 +3628,25 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +struct WidgetOut {
 +    close: bool,
 +    sync: bool,
++    /// The scope the human picked: `Some(true)` for every page, `Some(false)` for this page.
++    scope: Option<bool>,
 +}
 +
 +/// The widget's frame contents: header, last sync, the diffs, agent, note and action.
-+fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, scroll_h: f32) -> WidgetOut {
++fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, scope: &str, scroll_h: f32) -> WidgetOut {
 +    let mut out = WidgetOut::default();
 +
 +    ui.horizontal(|ui| {
-+        ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
++        ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
 +        ui.label(egui::RichText::new("SYNC").font(mono(9.5)).color(ACCENT));
-+        ui.label(egui::RichText::new("main ↔ map").font(mono(9.0)).color(MUTED));
++        ui.add_space(4.0);
++        let enabled = !state.busy;
++        if scope_chip(ui, "This page", !state.all_pages, enabled) {
++            out.scope = Some(false);
++        }
++        if scope_chip(ui, "All pages", state.all_pages, enabled) {
++            out.scope = Some(true);
++        }
 +        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 +            if close_button(ui) {
 +                out.close = true;
@@ -3575,6 +3654,9 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +        });
 +    });
 +    ui.add_space(7.0);
++    let covers = if state.all_pages { "every page".to_string() } else { scope.to_string() };
++    ui.label(egui::RichText::new(covers).font(regular(11.0)).color(INK));
++    ui.add_space(2.0);
 +    let last_line = match &state.last {
 +        Some(last) => last_line(last),
 +        None => "first sync".to_string(),
@@ -3808,6 +3890,15 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    };
 +    eyebrow(ui, &title, MUTED);
 +    ui.add_space(6.0);
++    if !code.scope.is_empty() {
++        let shown: Vec<&str> = code.scope.iter().take(FILES).map(String::as_str).collect();
++        let mut line = format!("in {}", shown.join(", "));
++        if code.scope.len() > FILES {
++            line.push_str(&format!(" +{} more", code.scope.len() - FILES));
++        }
++        paragraph(ui, &line, 10.0, FAINT);
++        ui.add_space(3.0);
++    }
 +    if first {
 +        paragraph(ui, "first sync: the map is the baseline.", 11.0, MUTED);
 +        ui.add_space(3.0);
@@ -4016,6 +4107,29 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    response.clicked()
 +}
 +
++/// One scope choice in the widget's header.
++fn scope_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
++    let width = text_width(ui, label, semibold(9.5)) + 16.0;
++    let sense = if enabled { Sense::click() } else { Sense::hover() };
++    let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), sense);
++    let response = if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
++    a11y::button(&response, &format!("Sync {}", label.to_lowercase()));
++    let hot = enabled && response.hovered();
++    let fill = if selected {
++        Color32::from_rgb(0xF1, 0xEC, 0xE7)
++    } else if hot {
++        SOFT
++    } else {
++        Color32::TRANSPARENT
++    };
++    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
++    let border = if selected || hot { ACCENT } else { BORDER };
++    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, border), StrokeKind::Inside);
++    let ink = if selected || hot { ACCENT } else { MUTED };
++    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(9.5), ink);
++    response.clicked() && enabled && !selected
++}
++
 +/// The note field: multiline, capped, with the design's placeholder.
 +fn note_field(ui: &mut Ui, note: &mut String) {
 +    egui::Frame::NONE
@@ -4071,23 +4185,26 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +    response.clicked() && enabled
 +}
 +
-+/// Read the current document's snapshot. The doc and its current page must both exist.
-+fn snapshot_now(app: &FigApp) -> Result<Snapshot, String> {
++/// Read the current document's snapshot and the page it is limited to (`None` for every page). The
++/// doc and its current page must both exist.
++fn snapshot_now(app: &FigApp) -> Result<(Snapshot, Option<u64>), String> {
 +    let doc = app.session.doc().map_err(|_| "Open a map to sync.".to_string())?;
 +    let page = app.session.page().map_err(|_| "This map has no page to sync.".to_string())?;
 +    if doc.node(page).is_none() {
 +        return Err("This map's page is not available to sync.".to_string());
 +    }
-+    let snapshot = Snapshot::of(doc);
++    let scope = (!app.sync.all_pages).then_some(page);
++    let snapshot = Snapshot::of_pages(doc, scope);
 +    if snapshot.pages.is_empty() {
 +        return Err("This map has no pages to sync.".to_string());
 +    }
-+    Ok(snapshot)
++    Ok((snapshot, scope.map(|page| page.0)))
 +}
 +
 +/// Rebuild the current snapshot and compare it with the one the diff was read from.
 +fn refresh_dirty(app: &mut FigApp) {
-+    let current = app.session.doc().ok().map(|doc| Snapshot::of(doc));
++    let scope = app.sync.page.map(NodeId);
++    let current = app.session.doc().ok().map(|doc| Snapshot::of_pages(doc, scope));
 +    let dirty = match (app.sync.snapshot.as_ref(), current.as_ref()) {
 +        (Some(baseline), Some(current)) => current.differs(baseline),
 +        (None, _) => false,
@@ -4098,7 +4215,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +
 +/// Ask for the diff of `snapshot`, on a thread of its own.
 +#[cfg(not(target_arch = "wasm32"))]
-+fn start_diff(app: &mut FigApp, ctx: &egui::Context, snapshot: Snapshot, workspace: String) {
++fn start_diff(app: &mut FigApp, ctx: &egui::Context, snapshot: Snapshot, page: Option<u64>, workspace: String) {
 +    if app.sync.busy {
 +        return;
 +    }
@@ -4109,12 +4226,13 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +            return;
 +        }
 +    };
-+    let request = json!({"id": 1, "method": "diff", "workspace": workspace, "map": map}).to_string();
++    let request = json!({"id": 1, "method": "diff", "workspace": workspace, "map": map, "page": page}).to_string();
 +    let (tx, rx) = mpsc::channel();
 +    app.sync.rx = Some(rx);
 +    app.sync.busy = true;
 +    app.sync.error = None;
 +    app.sync.snapshot = Some(snapshot);
++    app.sync.page = page;
 +    app.sync.dirty = false;
 +    let address = workspaces::service_addr();
 +    let context = ctx.clone();
@@ -4132,14 +4250,14 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +}
 +
 +#[cfg(target_arch = "wasm32")]
-+fn start_diff(app: &mut FigApp, _ctx: &egui::Context, _snapshot: Snapshot, _workspace: String) {
++fn start_diff(app: &mut FigApp, _ctx: &egui::Context, _snapshot: Snapshot, _page: Option<u64>, _workspace: String) {
 +    app.sync.busy = false;
 +    app.sync.error = Some("The project service is only available in the desktop app.".to_string());
 +}
 +
 +/// Ask the service to sync the map with the chosen target.
 +#[cfg(not(target_arch = "wasm32"))]
-+fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, snapshot: Snapshot) {
++fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, snapshot: Snapshot, page: Option<u64>) {
 +    if app.sync.busy || app.sync.starting || app.sync.in_flight() {
 +        return;
 +    }
@@ -4162,6 +4280,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +        "target": target.line(),
 +        "prompt": note,
 +        "map": map,
++        "page": page,
 +    })
 +    .to_string();
 +    let (tx, rx) = mpsc::channel();
@@ -4187,7 +4306,7 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +}
 +
 +#[cfg(target_arch = "wasm32")]
-+fn start_sync(app: &mut FigApp, _ctx: &egui::Context, _workspace: String, _snapshot: Snapshot) {
++fn start_sync(app: &mut FigApp, _ctx: &egui::Context, _workspace: String, _snapshot: Snapshot, _page: Option<u64>) {
 +    app.sync.busy = false;
 +    app.sync.starting = false;
 +    app.toast("The project service is only available in the desktop app.");
@@ -4499,6 +4618,119 @@ diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync.rs client-sr
 +
 +fn mono(size: f32) -> FontId {
 +    FontId::monospace(size)
++}
+diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/sync_scope_tests.rs client-src/crates/ui-egui/src/sync_scope_tests.rs
+--- .client-src-orig/crates/ui-egui/src/sync_scope_tests.rs	1970-01-01 01:00:00.000000000 +0100
++++ client-src/crates/ui-egui/src/sync_scope_tests.rs	2026-10-23 14:16:47.042866726 +0200
+@@ -0,0 +1,109 @@
++//! Sync's page scope: a page sync snapshots the page and its subpages, with their parents.
++
++use egui::{Pos2, RawInput, Rect, vec2};
++use figcraft_doc::NodeId;
++use figcraft_engine::Session;
++use serde_json::json;
++
++use crate::sync::{CodeDiff, DiffReply, Snapshot};
++use crate::{FigApp, NoServices};
++
++fn id(value: &serde_json::Value) -> u64 {
++    figcraft_engine::params::id_of(&value["id"]).unwrap().0
++}
++
++/// The first page with a card, a second root page with a subpage below it, each with a card.
++fn tree() -> (Session, u64, u64, u64) {
++    let mut session = Session::new();
++    let first = session.page().unwrap().0;
++    session.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Card Overview"})).unwrap();
++    let backend = id(&session.execute("page.add", &json!({"name": "Backend"})).unwrap());
++    session.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Card Server"})).unwrap();
++    let diff = id(&session.execute("page.add", &json!({"name": "Diff engine"})).unwrap());
++    session.execute("node.set", &json!({"id": diff, "pluginData": {crate::page_tree::PARENT_KEY: backend.to_string()}})).unwrap();
++    session.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 100, "name": "Card Numstat"})).unwrap();
++    (session, first, backend, diff)
++}
++
++fn names(snapshot: &Snapshot) -> Vec<&str> {
++    snapshot.nodes.iter().map(|node| node.name.as_str()).collect()
++}
++
++#[test]
++fn a_page_snapshot_takes_its_subpages_and_their_parents() {
++    let (session, first, backend, diff) = tree();
++    let doc = session.doc().unwrap();
++
++    let page = Snapshot::of_pages(doc, Some(NodeId(backend)));
++    let pages: Vec<(u64, Option<u64>)> = page.pages.iter().map(|page| (page.id, page.parent)).collect();
++    assert_eq!(pages, vec![(backend, None), (diff, Some(backend))]);
++    assert_eq!(names(&page), vec!["Card Server", "Card Numstat"]);
++
++    let subpage = Snapshot::of_pages(doc, Some(NodeId(diff)));
++    assert_eq!(names(&subpage), vec!["Card Numstat"]);
++
++    let all = Snapshot::of(doc);
++    assert_eq!(all.pages.len(), 3);
++    assert_eq!(names(&all), vec!["Card Overview", "Card Server", "Card Numstat"]);
++    assert_eq!(all.pages[0].id, first);
++}
++
++#[test]
++fn a_root_page_is_sent_without_a_parent_field() {
++    let (session, _, backend, diff) = tree();
++    let snapshot = Snapshot::of_pages(session.doc().unwrap(), Some(NodeId(backend)));
++    let value = serde_json::to_value(&snapshot).unwrap();
++    assert!(value["pages"][0].get("parent").is_none(), "{value}");
++    assert_eq!(value["pages"][1]["parent"], json!(backend));
++    assert_eq!(value["pages"][1]["id"], json!(diff));
++}
++
++fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
++    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
++        match shape {
++            egui::Shape::Text(text) => out.push(text.galley.text().to_string()),
++            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
++            _ => {}
++        }
++    }
++    let mut out = Vec::new();
++    for clipped in shapes {
++        walk(&clipped.shape, &mut out);
++    }
++    out
++}
++
++#[test]
++fn the_widget_names_the_page_scope_and_the_code_it_covers() {
++    let (mut session, _, backend, _) = tree();
++    session.execute("page.select", &json!({"id": backend})).unwrap();
++    let mut app = FigApp::new(session, Box::new(NoServices));
++    app.active_workspace = Some("wX".to_string());
++
++    let ctx = egui::Context::default();
++    crate::theme::install_fonts(&ctx, false, 0);
++    let mut time = 0.0f64;
++    let mut run = |app: &mut FigApp| {
++        time += 1.0 / 60.0;
++        let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(time), ..Default::default() };
++        let mut out = ctx.run_ui(input, |ui| {
++            let ctx = ui.ctx().clone();
++            crate::sync::show(app, &ctx);
++        });
++        out.textures_delta.clear();
++        texts(&out.shapes)
++    };
++    // The first frame binds the state to the workspace; then the widget shows a page diff.
++    run(&mut app);
++    app.sync.open = true;
++    app.sync.diff = Some(DiffReply {
++        ok: true,
++        code: CodeDiff { scope: vec!["service/src".to_string(), "skills/mindmap".to_string()], ..CodeDiff::default() },
++        ..DiffReply::default()
++    });
++    run(&mut app);
++    let shown = run(&mut app);
++    for needle in ["This page", "All pages", "Backend + 1 subpage", "in service/src, skills/mindmap"] {
++        assert!(shown.iter().any(|text| text == needle), "{needle:?} not in {shown:?}");
++    }
 +}
 diff -ruN --exclude target .client-src-orig/crates/ui-egui/src/workspaces.rs client-src/crates/ui-egui/src/workspaces.rs
 --- .client-src-orig/crates/ui-egui/src/workspaces.rs	1970-01-01 01:00:00.000000000 +0100

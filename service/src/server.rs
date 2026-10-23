@@ -254,7 +254,8 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
             let query =
                 workspace.ok_or_else(|| Error::new("diff needs a \"workspace\" id or label"))?;
             let map = request_map(request)?;
-            let result = service.diff(query, &map)?;
+            let page = request_page(request)?;
+            let result = service.diff(query, &map, page)?;
             Ok(json!({
                 "id": id,
                 "ok": true,
@@ -269,7 +270,8 @@ fn dispatch(service: &ProjectService, request: &Value, id: &Value) -> Result<Val
             let target = request_target(request)?;
             let prompt = request_prompt(request)?;
             let map = request_map(request)?;
-            let result = service.start_sync(query, &target, &prompt, &map)?;
+            let page = request_page(request)?;
+            let result = service.start_sync(query, &target, &prompt, &map, page)?;
             Ok(json!({
                 "id": id,
                 "ok": true,
@@ -300,6 +302,19 @@ fn request_map(request: &Value) -> Result<sync::MapSnapshot> {
         .get("map")
         .ok_or_else(|| Error::new("request has no \"map\" object"))?;
     sync::parse_snapshot(raw)
+}
+
+/// Read the optional `page` request field: the page whose subtree a diff or sync covers.
+fn request_page(request: &Value) -> Result<Option<u64>> {
+    match request.get("page") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => match value.as_u64() {
+            Some(page) if page > 0 => Ok(Some(page)),
+            _ => Err(Error::new(format!(
+                "\"page\" must be a positive integer, not {value}"
+            ))),
+        },
+    }
 }
 
 /// Read the optional `target` request field, rejecting non-string values.

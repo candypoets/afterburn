@@ -58,6 +58,9 @@ pub struct MapPage {
     pub id: u64,
     /// Page name (`Mindmap`).
     pub name: String,
+    /// Parent page, when the page is a subpage (`mindmap.parent_page` in the document).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u64>,
 }
 
 /// One node in the client-supplied map snapshot.
@@ -156,6 +159,9 @@ pub struct CodeDiff {
     /// Why the code side is empty (no path, not a repository, bad commit, …).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Repository paths the files and commits are limited to; empty means the whole repository.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
 }
 
 /// The state of one sync job.
@@ -199,8 +205,10 @@ pub struct SyncJob {
     pub started_secs: u64,
     /// Repository head captured at sync start.
     pub head: Option<String>,
-    /// The map snapshot captured at sync start.
+    /// The map snapshot captured at sync start, limited to the synced pages.
     pub map_snapshot: MapSnapshot,
+    /// The page whose subtree is synced; `None` for the whole map.
+    pub page: Option<u64>,
     /// Pane hosting the prompted agent.
     pub pane: String,
     /// The agent outcome that accepted the prompt.
@@ -284,9 +292,14 @@ pub fn parse_snapshot(raw: &Value) -> Result<MapSnapshot> {
         if !page_ids.insert(id) {
             return Err(Error::new(format!("{path}.id {id} is duplicated")));
         }
+        let parent = match page.get("parent") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(positive_id(Some(value), &format!("{path}.parent"))?),
+        };
         pages.push(MapPage {
             id,
             name: string_field(page, "name", &path)?,
+            parent,
         });
     }
 
@@ -442,6 +455,220 @@ pub fn last_json(last: Option<&LastSync>) -> Value {
     }
 }
 
+/// The most paths one page's code scope keeps; the rest are left out of the git command.
+pub const MAX_SCOPE_PATHS: usize = 40;
+
+/// `root` and every page below it, following each page's `parent`.
+///
+/// Returns an empty set when `root` is not one of the snapshot's pages. A parent cycle cannot loop:
+/// the walk only ever adds pages, and stops when a pass adds none.
+pub fn subtree(snapshot: &MapSnapshot, root: u64) -> BTreeSet<u64> {
+    let mut pages = BTreeSet::new();
+    if !snapshot.pages.iter().any(|page| page.id == root) {
+        return pages;
+    }
+    pages.insert(root);
+    loop {
+        let before = pages.len();
+        for page in &snapshot.pages {
+            if page.parent.is_some_and(|parent| pages.contains(&parent)) {
+                pages.insert(page.id);
+            }
+        }
+        if pages.len() == before {
+            return pages;
+        }
+    }
+}
+
+/// The pages in `pages` and the nodes on them.
+pub fn scoped(snapshot: &MapSnapshot, pages: &BTreeSet<u64>) -> MapSnapshot {
+    MapSnapshot {
+        pages: snapshot
+            .pages
+            .iter()
+            .filter(|page| pages.contains(&page.id))
+            .cloned()
+            .collect(),
+        nodes: snapshot
+            .nodes
+            .iter()
+            .filter(|node| pages.contains(&node.page))
+            .cloned()
+            .collect(),
+    }
+}
+
+/// One snapshot per page: the page and its own cards, as a finished sync stores them.
+pub fn per_page(snapshot: &MapSnapshot) -> Vec<(u64, MapSnapshot)> {
+    snapshot
+        .pages
+        .iter()
+        .map(|page| (page.id, scoped(snapshot, &BTreeSet::from([page.id]))))
+        .collect()
+}
+
+/// The baseline a diff of `current` compares with: for each page, its newest synced state.
+///
+/// A page's state comes from its own entry in `pages` (written by a page or project sync) or from
+/// the project-wide `last` sync, whichever finished later. `scope` is the set of pages being
+/// synced (`None` for the whole map). Stored pages that no longer exist are included when they
+/// belonged to the scope, so their cards show as removed: for a page sync, a stored page belongs
+/// when its stored parent is in the scope. The result's `commit` and `at` are those of the oldest
+/// page state used, so the code side covers everything any page in scope has not seen yet. `None`
+/// means no page in scope was ever synced: a first sync.
+pub fn baseline(
+    current: &MapSnapshot,
+    scope: Option<&BTreeSet<u64>>,
+    pages: &BTreeMap<String, LastSync>,
+    last: Option<&LastSync>,
+) -> Option<LastSync> {
+    // Every page a baseline may know about, with its stored parent.
+    let mut known: BTreeMap<u64, Option<u64>> = BTreeMap::new();
+    for page in &current.pages {
+        known.insert(page.id, page.parent);
+    }
+    let stored = pages
+        .values()
+        .flat_map(|entry| entry.map.pages.iter())
+        .chain(last.into_iter().flat_map(|last| last.map.pages.iter()));
+    for page in stored {
+        known.entry(page.id).or_insert(page.parent);
+    }
+    let in_scope: BTreeSet<u64> = match scope {
+        None => known.keys().copied().collect(),
+        Some(scope) => {
+            let mut in_scope = scope.clone();
+            loop {
+                let before = in_scope.len();
+                for (page, parent) in &known {
+                    if parent.is_some_and(|parent| in_scope.contains(&parent)) {
+                        in_scope.insert(*page);
+                    }
+                }
+                if in_scope.len() == before {
+                    break in_scope;
+                }
+            }
+        }
+    };
+
+    let mut result = MapSnapshot::default();
+    let mut oldest: Option<(&str, &str)> = None;
+    for page in &in_scope {
+        let own = pages
+            .get(&page.to_string())
+            .filter(|entry| entry.map.pages.iter().any(|stored| stored.id == *page));
+        let project = last.filter(|last| last.map.pages.iter().any(|stored| stored.id == *page));
+        let chosen = match (own, project) {
+            (Some(own), Some(project)) => {
+                if project.at > own.at {
+                    project
+                } else {
+                    own
+                }
+            }
+            (Some(own), None) => own,
+            (None, Some(project)) => project,
+            (None, None) => continue,
+        };
+        let only = scoped(&chosen.map, &BTreeSet::from([*page]));
+        result.pages.extend(only.pages);
+        result.nodes.extend(only.nodes);
+        if oldest.is_none_or(|(at, _)| chosen.at.as_str() < at) {
+            oldest = Some((chosen.at.as_str(), chosen.commit.as_str()));
+        }
+    }
+    let (at, commit) = oldest?;
+    Some(LastSync {
+        commit: commit.to_string(),
+        at: at.to_string(),
+        map: result,
+    })
+}
+
+/// The code a page's cards point at: the repository paths cited in their text.
+///
+/// Cards cite their sources as `path:line` (`service/src/sync.rs:36`). Every cited path that
+/// exists in the repository counts; a file counts by its directory, so new files next to it are in
+/// scope too, unless that directory is the repository's top level or a top-level folder, where the
+/// file alone counts. Paths inside another kept path are dropped. Absolute paths, `..`, and
+/// anything that does not exist are ignored. More than [`MAX_SCOPE_PATHS`] paths are cut.
+pub fn code_scope(repo: Option<&str>, snapshot: &MapSnapshot) -> Vec<String> {
+    let Some(repo) = repo.map(str::trim).filter(|repo| !repo.is_empty()) else {
+        return Vec::new();
+    };
+    let root = std::path::Path::new(repo);
+    let mut paths = BTreeSet::new();
+    for node in &snapshot.nodes {
+        for candidate in cited_paths(&node.text) {
+            let full = root.join(&candidate);
+            if full.is_dir() {
+                paths.insert(candidate);
+            } else if full.is_file() {
+                let parent = std::path::Path::new(&candidate)
+                    .parent()
+                    .and_then(|parent| parent.to_str())
+                    .unwrap_or("");
+                if parent.split('/').filter(|part| !part.is_empty()).count() >= 2 {
+                    paths.insert(parent.to_string());
+                } else {
+                    paths.insert(candidate);
+                }
+            }
+        }
+    }
+    let mut kept: Vec<String> = Vec::new();
+    for path in paths {
+        // Sorted order puts `a/b` before `a/b/c`, so a kept parent is always seen first.
+        if kept.iter().any(|parent| {
+            path.strip_prefix(parent.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        }) {
+            continue;
+        }
+        kept.push(path);
+    }
+    kept.truncate(MAX_SCOPE_PATHS);
+    kept
+}
+
+/// Repository-relative path candidates in a card's text, with any `:line` suffix removed.
+fn cited_paths(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in text.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '·' | ',' | ';' | '(' | ')' | '`' | '"' | '\'' | '[' | ']'
+            )
+    }) {
+        let token = raw.trim_matches(|c: char| matches!(c, '.' | ':' | '—' | '–'));
+        // Drop a `:line` or `:line-line` suffix.
+        let path = match token.split_once(':') {
+            Some((path, line))
+                if !line.is_empty() && line.chars().all(|c| c.is_ascii_digit() || c == '-') =>
+            {
+                path
+            }
+            Some(_) => continue,
+            None => token,
+        };
+        let plausible = path.contains('/')
+            && !path.starts_with('/')
+            && !path.starts_with('-')
+            && !path.contains("//")
+            && !path.split('/').any(|part| part == ".." || part == ".")
+            && path
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'));
+        if plausible {
+            out.push(path.trim_end_matches('/').to_string());
+        }
+    }
+    out
+}
+
 /// Build the code half of a diff.
 ///
 /// `last_commit` is `None` for a first sync (only `head` is filled in), `Some(commit)` for a normal
@@ -449,8 +676,14 @@ pub fn last_json(last: Option<&LastSync>) -> Value {
 /// not a git repository at the time). A missing path, a non-repository, an unknown commit, or a
 /// failed git command yields empty `files`/`commits` and a `note`, never an error: the design half
 /// of the diff is still useful.
-pub fn code_diff(path: Option<&str>, last_commit: Option<&str>) -> CodeDiff {
-    let mut diff = CodeDiff::default();
+///
+/// `scope` limits files and commits to those repository paths, taken literally (no globs); empty is
+/// the whole repository.
+pub fn code_diff(path: Option<&str>, last_commit: Option<&str>, scope: &[String]) -> CodeDiff {
+    let mut diff = CodeDiff {
+        scope: scope.to_vec(),
+        ..CodeDiff::default()
+    };
     let last = last_commit
         .map(str::trim)
         .filter(|commit| !commit.is_empty());
@@ -489,14 +722,24 @@ pub fn code_diff(path: Option<&str>, last_commit: Option<&str>) -> CodeDiff {
     }
 
     let range = format!("{last}..HEAD");
-    match git(path, &["diff", "--numstat", &range]) {
+    let mut numstat = vec!["diff", "--numstat", range.as_str()];
+    let mut log = vec!["log", "--format=%h%x09%s", range.as_str()];
+    if !scope.is_empty() {
+        numstat.push("--");
+        log.push("--");
+        for path in scope {
+            numstat.push(path);
+            log.push(path);
+        }
+    }
+    match git(path, &numstat) {
         Ok(stdout) => diff.files = parse_numstat(&stdout),
         Err(reason) => {
             diff.note = Some(format!("git diff {range} failed: {reason}"));
             return diff;
         }
     }
-    match git(path, &["log", "--format=%h%x09%s", &range]) {
+    match git(path, &log) {
         Ok(stdout) => diff.commits = parse_log(&stdout),
         Err(reason) => diff.note = Some(format!("git log {range} failed: {reason}")),
     }
@@ -507,6 +750,7 @@ fn git(path: &str, args: &[&str]) -> std::result::Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(path)
+        .arg("--literal-pathspecs")
         .arg("-c")
         .arg("core.quotepath=false")
         .args(args)
@@ -568,6 +812,75 @@ fn parse_log(stdout: &str) -> Vec<Commit> {
         .collect()
 }
 
+/// What a sync covers, for the prompt's header.
+#[derive(Clone, Debug, Default)]
+pub struct PromptScope {
+    /// FigCraft file id of the map.
+    pub document: Option<String>,
+    /// Owner edit link, so the agent can read the cards; rendered with a do-not-share warning.
+    pub edit: Option<String>,
+    /// The synced page as (name, id), for a page sync; `None` syncs the whole map.
+    pub page: Option<(String, u64)>,
+    /// The subpages synced with it, as (name, id).
+    pub subpages: Vec<(String, u64)>,
+}
+
+/// The header lines that name the document and, for a page sync, the page, its subpages, and the
+/// code the diff was limited to. Empty for a project sync without a document.
+fn scope_lines(scope: &PromptScope, code: &CodeDiff) -> String {
+    let mut out = String::new();
+    if let Some(document) = scope
+        .document
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        out.push_str(&format!(
+            "Document: {}\n",
+            truncate_chars(&one_line(document), 120)
+        ));
+    }
+    if let Some(edit) = scope
+        .edit
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        out.push_str(&format!(
+            "Edit link (owner access; do not share, commit or paste): {}\n",
+            truncate_chars(&one_line(edit), 400)
+        ));
+    }
+    if let Some((name, id)) = &scope.page {
+        let mut line = format!(
+            "Scope: page {} (id {id})",
+            truncate_chars(&one_line(name), 120)
+        );
+        if !scope.subpages.is_empty() {
+            let names: Vec<String> = scope
+                .subpages
+                .iter()
+                .map(|(name, id)| format!("{} (id {id})", truncate_chars(&one_line(name), 80)))
+                .collect();
+            line.push_str(" and its subpages ");
+            line.push_str(&truncate_chars(&names.join(", "), 1_000));
+        }
+        line.push_str(". Implement this part of the map only; other pages are out of scope.\n");
+        out.push_str(&line);
+        if code.scope.is_empty() {
+            out.push_str(
+                "Code scope: the whole repository (the page cites no repository paths).\n",
+            );
+        } else {
+            out.push_str(&format!(
+                "Code scope (the paths its cards cite): {}\n",
+                truncate_chars(&one_line(&code.scope.join(", ")), 1_500)
+            ));
+        }
+    }
+    out
+}
+
 /// Render the prompt `sync` submits to an agent.
 ///
 /// ```text
@@ -593,6 +906,7 @@ fn parse_log(stdout: &str) -> Vec<Commit> {
 pub fn format_prompt(
     label: &str,
     path: Option<&str>,
+    scope: &PromptScope,
     map: &MapDiff,
     code: &CodeDiff,
     has_last: bool,
@@ -604,6 +918,7 @@ pub fn format_prompt(
         header.push_str(&format!(" ({})", truncate_chars(&one_line(path), 300)));
     }
     header.push_str(" against the code.\n");
+    header.push_str(&scope_lines(scope, code));
 
     let note = note.trim();
     let note_block = if note.is_empty() {
@@ -844,6 +1159,7 @@ mod tests {
         MapPage {
             id,
             name: name.into(),
+            parent: None,
         }
     }
 
@@ -1105,6 +1421,7 @@ mod tests {
         let prompt = format_prompt(
             "mindmap",
             Some("/root/code/mindmap"),
+            &PromptScope::default(),
             &map,
             &CodeDiff::default(),
             false,
@@ -1152,11 +1469,13 @@ mod tests {
                 subject: "Fix the map".into(),
             }],
             note: None,
+            scope: Vec::new(),
         };
         assert_eq!(
             format_prompt(
                 "mindmap",
                 Some("/root/code/mindmap"),
+                &PromptScope::default(),
                 &map,
                 &code,
                 true,
@@ -1183,6 +1502,7 @@ mod tests {
         let prompt = format_prompt(
             "mindmap",
             None,
+            &PromptScope::default(),
             &MapDiff::default(),
             &CodeDiff::default(),
             true,
@@ -1196,6 +1516,7 @@ mod tests {
             format_prompt(
                 "mindmap",
                 None,
+                &PromptScope::default(),
                 &MapDiff::default(),
                 &CodeDiff::default(),
                 false,
@@ -1224,7 +1545,15 @@ mod tests {
             });
         }
         let note = "keep this note ".repeat(2_000);
-        let prompt = format_prompt("mindmap", Some("/repo"), &map, &code, true, &note);
+        let prompt = format_prompt(
+            "mindmap",
+            Some("/repo"),
+            &PromptScope::default(),
+            &map,
+            &code,
+            true,
+            &note,
+        );
         assert!(
             prompt.chars().count() <= MAX_PROMPT_CHARS,
             "prompt has {} chars",
@@ -1246,7 +1575,15 @@ mod tests {
             removed: Vec::new(),
             changed: Vec::new(),
         };
-        let prompt = format_prompt("mindmap", None, &map, &CodeDiff::default(), false, "");
+        let prompt = format_prompt(
+            "mindmap",
+            None,
+            &PromptScope::default(),
+            &map,
+            &CodeDiff::default(),
+            false,
+            "",
+        );
         assert!(prompt.contains("+ line\\nname (page\\tone)"), "{prompt}");
         assert_eq!(prompt.lines().count(), 4);
     }
@@ -1350,7 +1687,7 @@ mod tests {
 
     #[test]
     fn code_diff_without_a_path_is_a_note_not_an_error() {
-        let diff = code_diff(None, Some("abc"));
+        let diff = code_diff(None, Some("abc"), &[]);
         assert!(diff.head.is_none());
         assert_eq!(diff.from.as_deref(), Some("abc"));
         assert!(diff.files.is_empty());
@@ -1362,7 +1699,7 @@ mod tests {
     fn code_diff_outside_a_repository_is_a_note_not_an_error() {
         let dir = unique_dir("not-a-repo");
         std::fs::create_dir_all(&dir).unwrap_or(());
-        let diff = code_diff(dir.to_str(), None);
+        let diff = code_diff(dir.to_str(), None, &[]);
         assert!(diff.head.is_none(), "expected no head in {dir:?}");
         assert!(diff.files.is_empty());
         assert!(diff.commits.is_empty());
@@ -1388,7 +1725,7 @@ mod tests {
         let _ = git_ok(&dir, &["commit", "-q", "-m", "second"]);
         let head = git_stdout(&dir, &["rev-parse", "HEAD"]);
 
-        let diff = code_diff(dir.to_str(), Some(&first));
+        let diff = code_diff(dir.to_str(), Some(&first), &[]);
         assert_eq!(diff.head.as_deref(), Some(head.as_str()));
         assert_eq!(diff.from.as_deref(), Some(first.as_str()));
         assert_eq!(diff.files.len(), 1);
@@ -1398,13 +1735,292 @@ mod tests {
         assert_eq!(diff.commits.len(), 1);
         assert_eq!(diff.commits[0].subject, "second");
 
-        let first_sync = code_diff(dir.to_str(), None);
+        let first_sync = code_diff(dir.to_str(), None, &[]);
         assert_eq!(first_sync.head.as_deref(), Some(head.as_str()));
         assert!(first_sync.files.is_empty());
         assert!(first_sync.commits.is_empty());
         assert!(first_sync.note.is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn subpage(id: u64, name: &str, parent: u64) -> MapPage {
+        MapPage {
+            id,
+            name: name.into(),
+            parent: Some(parent),
+        }
+    }
+
+    /// Root 1 with subpage 2 (and its subpage 3), plus an unrelated root 9.
+    fn tree_map() -> MapSnapshot {
+        snapshot(
+            vec![
+                page(1, "Backend"),
+                subpage(2, "Diff engine", 1),
+                subpage(3, "Numstat", 2),
+                page(9, "Mindmap"),
+            ],
+            vec![
+                node(10, "Card A", "service/src/sync.rs:36", "frame", None, 1),
+                node(20, "Card B", "b", "frame", None, 2),
+                node(30, "Card C", "c", "frame", None, 3),
+                node(90, "Card Z", "z", "frame", None, 9),
+            ],
+        )
+    }
+
+    fn synced(commit: &str, at: &str, map: MapSnapshot) -> LastSync {
+        LastSync {
+            commit: commit.into(),
+            at: at.into(),
+            map,
+        }
+    }
+
+    #[test]
+    fn parses_a_page_parent() {
+        let raw = json!({
+            "pages": [{"id": 1, "name": "Backend"}, {"id": 2, "name": "Diff", "parent": 1}],
+            "nodes": []
+        });
+        let parsed = parse_snapshot(&raw).unwrap_or_default();
+        assert_eq!(parsed.pages[0].parent, None);
+        assert_eq!(parsed.pages[1].parent, Some(1));
+        let bad = json!({"pages": [{"id": 2, "name": "Diff", "parent": 0}], "nodes": []});
+        assert!(error_text(parse_snapshot(&bad)).contains("parent must be a positive integer"));
+    }
+
+    #[test]
+    fn subtree_follows_parents_and_survives_a_cycle() {
+        let map = tree_map();
+        assert_eq!(subtree(&map, 1), BTreeSet::from([1, 2, 3]));
+        assert_eq!(subtree(&map, 2), BTreeSet::from([2, 3]));
+        assert_eq!(subtree(&map, 9), BTreeSet::from([9]));
+        assert!(subtree(&map, 404).is_empty());
+        let cycle = snapshot(vec![subpage(1, "a", 2), subpage(2, "b", 1)], Vec::new());
+        assert_eq!(subtree(&cycle, 1), BTreeSet::from([1, 2]));
+
+        let scoped_map = scoped(&map, &subtree(&map, 2));
+        let ids: Vec<u64> = scoped_map.nodes.iter().map(|node| node.id).collect();
+        assert_eq!(ids, vec![20, 30]);
+    }
+
+    #[test]
+    fn a_page_without_any_sync_has_no_baseline() {
+        let map = scoped(&tree_map(), &subtree(&tree_map(), 1));
+        assert_eq!(
+            baseline(&map, Some(&subtree(&map, 1)), &BTreeMap::new(), None),
+            None
+        );
+    }
+
+    #[test]
+    fn each_page_uses_its_newest_sync_and_the_oldest_commit_wins() {
+        let full = tree_map();
+        // A project sync at t1 saw every page; page 2 was synced on its own later, at t2.
+        let project = synced("c1", "2026-10-20T10:00:00Z", full.clone());
+        let mut pages = BTreeMap::new();
+        let mut later = scoped(&full, &BTreeSet::from([2]));
+        later.nodes[0].text = "b, as synced at t2".into();
+        pages.insert("2".to_string(), synced("c2", "2026-10-21T10:00:00Z", later));
+
+        // Syncing page 2's subtree: page 2 from its own sync, page 3 from the project sync.
+        let scope = subtree(&full, 2);
+        let current = scoped(&full, &scope);
+        let base = baseline(&current, Some(&scope), &pages, Some(&project)).unwrap_or_default();
+        assert_eq!(base.commit, "c1", "page 3 was last seen at c1");
+        let text_of = |id: u64| {
+            base.map
+                .nodes
+                .iter()
+                .find(|node| node.id == id)
+                .map(|node| node.text.clone())
+        };
+        assert_eq!(text_of(20).as_deref(), Some("b, as synced at t2"));
+        assert_eq!(text_of(30).as_deref(), Some("c"));
+        assert_eq!(text_of(90), None, "other roots stay out of a page sync");
+
+        // Once page 3 is synced too, the whole subtree starts from c2.
+        pages.insert(
+            "3".to_string(),
+            synced(
+                "c2",
+                "2026-10-21T10:00:00Z",
+                scoped(&full, &BTreeSet::from([3])),
+            ),
+        );
+        let base = baseline(&current, Some(&scope), &pages, Some(&project)).unwrap_or_default();
+        assert_eq!(base.commit, "c2");
+        assert_eq!(base.at, "2026-10-21T10:00:00Z");
+    }
+
+    #[test]
+    fn a_deleted_subpage_shows_its_cards_as_removed() {
+        let full = tree_map();
+        let mut pages = BTreeMap::new();
+        for (page, map) in per_page(&full) {
+            pages.insert(page.to_string(), synced("c1", "2026-10-20T10:00:00Z", map));
+        }
+        // Subpage 3 is gone from the document.
+        let mut now = full.clone();
+        now.pages.retain(|page| page.id != 3);
+        now.nodes.retain(|node| node.page != 3);
+        let scope = subtree(&now, 1);
+        let current = scoped(&now, &scope);
+        let base = baseline(&current, Some(&scope), &pages, None);
+        let diff = diff_maps(&current, base.as_ref().map(|base| &base.map));
+        let removed: Vec<&str> = diff.removed.iter().map(|card| card.name.as_str()).collect();
+        assert_eq!(removed, vec!["Card C"]);
+        assert!(diff.added.is_empty());
+        assert!(diff.changed.is_empty());
+    }
+
+    #[test]
+    fn cited_paths_strip_lines_and_skip_what_is_not_a_relative_path() {
+        let text = "service/src/sync.rs:36  ·  server/figcraft/docs/server.md:5 (see crates/doc). \
+                    /etc/passwd ../secret a/../b herdr.dev v0.9.5 `client-src/crates/ui-egui/src/sync.rs:1138` \
+                    service/src/sync.rs:x -flag/x";
+        assert_eq!(
+            cited_paths(text),
+            vec![
+                "service/src/sync.rs",
+                "server/figcraft/docs/server.md",
+                "crates/doc",
+                "client-src/crates/ui-egui/src/sync.rs",
+            ]
+        );
+    }
+
+    #[test]
+    fn code_scope_keeps_existing_cited_paths_by_directory() {
+        let dir = unique_dir("scope");
+        for path in [
+            "service/src/sync.rs",
+            "service/src/server.rs",
+            "service/src/deep/x.rs",
+            "server/compose.yaml",
+            "skills/mindmap/SKILL.md",
+        ] {
+            let full = dir.join(path);
+            std::fs::create_dir_all(full.parent().unwrap_or(&dir)).unwrap_or(());
+            std::fs::write(&full, "x").unwrap_or(());
+        }
+        let map = snapshot(
+            vec![page(1, "Backend")],
+            vec![
+                node(
+                    1,
+                    "a",
+                    "service/src/sync.rs:36 · service/src/deep/x.rs:1 · server/compose.yaml:8",
+                    "frame",
+                    None,
+                    1,
+                ),
+                node(
+                    2,
+                    "b",
+                    "skills/mindmap/SKILL.md:29 and service/src/missing.rs:3",
+                    "frame",
+                    None,
+                    1,
+                ),
+            ],
+        );
+        assert_eq!(
+            code_scope(dir.to_str(), &map),
+            vec!["server/compose.yaml", "service/src", "skills/mindmap"]
+        );
+        assert!(code_scope(None, &map).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn code_diff_limits_files_and_commits_to_the_scope() {
+        let dir = unique_dir("git-scope");
+        if !git_ok(&dir, &["init", "-q"]) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let _ = git_ok(&dir, &["config", "user.email", "test@example.invalid"]);
+        let _ = git_ok(&dir, &["config", "user.name", "Mindmap Test"]);
+        std::fs::create_dir_all(dir.join("service/src")).unwrap_or(());
+        std::fs::create_dir_all(dir.join("client")).unwrap_or(());
+        std::fs::write(dir.join("service/src/a.rs"), "one\n").unwrap_or(());
+        let _ = git_ok(&dir, &["add", "."]);
+        let _ = git_ok(&dir, &["commit", "-q", "-m", "first"]);
+        let first = git_stdout(&dir, &["rev-parse", "HEAD"]);
+        std::fs::write(dir.join("service/src/a.rs"), "one\ntwo\n").unwrap_or(());
+        let _ = git_ok(&dir, &["commit", "-q", "-am", "service change"]);
+        std::fs::write(dir.join("client/b.rs"), "b\n").unwrap_or(());
+        let _ = git_ok(&dir, &["add", "."]);
+        let _ = git_ok(&dir, &["commit", "-q", "-m", "client change"]);
+
+        let scope = vec!["service/src".to_string()];
+        let diff = code_diff(dir.to_str(), Some(&first), &scope);
+        let files: Vec<&str> = diff.files.iter().map(|file| file.path.as_str()).collect();
+        let subjects: Vec<&str> = diff
+            .commits
+            .iter()
+            .map(|commit| commit.subject.as_str())
+            .collect();
+        assert_eq!(files, vec!["service/src/a.rs"]);
+        assert_eq!(subjects, vec!["service change"]);
+        assert_eq!(diff.scope, scope);
+        assert!(diff.note.is_none(), "{:?}", diff.note);
+
+        let whole = code_diff(dir.to_str(), Some(&first), &[]);
+        assert_eq!(whole.files.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_page_prompt_names_the_page_subpages_document_and_code_scope() {
+        let scope = PromptScope {
+            document: Some("2f2e".into()),
+            edit: Some("figcraft://join?file=2f2e&token=t".into()),
+            page: Some(("backend code".into(), 7)),
+            subpages: vec![("Diff engine".into(), 8)],
+        };
+        let code = CodeDiff {
+            scope: vec!["service/src".into()],
+            ..CodeDiff::default()
+        };
+        let prompt = format_prompt(
+            "mindmap",
+            Some("/repo"),
+            &scope,
+            &MapDiff::default(),
+            &code,
+            false,
+            "",
+        );
+        assert_eq!(
+            prompt,
+            "Sync mindmap (/repo) against the code.\n\
+             Document: 2f2e\n\
+             Edit link (owner access; do not share, commit or paste): figcraft://join?file=2f2e&token=t\n\
+             Scope: page backend code (id 7) and its subpages Diff engine (id 8). Implement this part of the map only; other pages are out of scope.\n\
+             Code scope (the paths its cards cite): service/src"
+        );
+        let whole = format_prompt(
+            "mindmap",
+            None,
+            &PromptScope {
+                page: Some(("Mindmap".into(), 1)),
+                ..PromptScope::default()
+            },
+            &MapDiff::default(),
+            &CodeDiff::default(),
+            false,
+            "",
+        );
+        assert!(
+            whole.ends_with(
+                "Code scope: the whole repository (the page cites no repository paths)."
+            ),
+            "{whole}"
+        );
     }
 
     fn git_ok(dir: &std::path::Path, args: &[&str]) -> bool {

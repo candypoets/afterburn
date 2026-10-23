@@ -391,19 +391,19 @@ impl ProjectService {
 
     /// Compare a map snapshot with the last successful sync and with the repository.
     ///
-    /// This is a read-only request: it reads the last snapshot through [`Store::last_sync`] (no
-    /// legacy import and no write) and runs `git` without touching the repository. With no last
-    /// sync every node is reported as added and the code lists stay empty.
-    pub fn diff(&self, query: &str, map: &MapSnapshot) -> Result<DiffResult> {
+    /// This is a read-only request: it reads the store file without the legacy import or any write,
+    /// and runs `git` without touching the repository. With `page`, only that page and its subpages
+    /// are compared, each with its own last sync, and the code side is limited to the paths their
+    /// cards cite. With no earlier sync every node is reported as added and the code lists stay
+    /// empty.
+    pub fn diff(&self, query: &str, map: &MapSnapshot, page: Option<u64>) -> Result<DiffResult> {
         let workspace = self.find_workspace_readonly(query)?;
-        let last = self.store.last_sync(&workspace.id)?;
-        let map_diff = sync::diff_maps(map, last.as_ref().map(|last| &last.map));
-        let last_commit = last.as_ref().map(|last| last.commit.as_str());
-        let code = sync::code_diff(workspace.path.as_deref(), last_commit);
+        let record = self.store.all_readonly()?.remove(&workspace.id);
+        let plan = plan_sync(&workspace, record.as_ref(), map, page)?;
         Ok(DiffResult {
-            last,
-            map: map_diff,
-            code,
+            last: plan.last,
+            map: plan.map_diff,
+            code: plan.code,
         })
     }
 
@@ -419,6 +419,7 @@ impl ProjectService {
         target: &Target,
         note: &str,
         map: &MapSnapshot,
+        page: Option<u64>,
     ) -> Result<SyncStarted> {
         let workspace = self.find_workspace_readonly(query)?;
         agent::preflight(&self.herdr, &workspace, target)?;
@@ -428,18 +429,29 @@ impl ProjectService {
                 workspace.id, workspace.label
             ))
         })?;
-        let last = record.last_sync;
-        let map_diff = sync::diff_maps(map, last.as_ref().map(|last| &last.map));
-        let last_commit = last.as_ref().map(|last| last.commit.as_str());
-        let code = sync::code_diff(workspace.path.as_deref(), last_commit);
+        let plan = plan_sync(&workspace, Some(&record), map, page)?;
+        let scope = sync::PromptScope {
+            document: record.file.clone(),
+            edit: record.edit.clone(),
+            page: page.and_then(|id| page_name(&plan.map, id).map(|name| (name, id))),
+            subpages: plan
+                .map
+                .pages
+                .iter()
+                .filter(|candidate| Some(candidate.id) != page && page.is_some())
+                .map(|candidate| (candidate.name.clone(), candidate.id))
+                .collect(),
+        };
         let prompt = sync::format_prompt(
             &workspace.label,
             workspace.path.as_deref(),
-            &map_diff,
-            &code,
-            last.is_some(),
+            &scope,
+            &plan.map_diff,
+            &plan.code,
+            plan.last.is_some(),
             note,
         );
+        let code = plan.code;
 
         let agent = agent::ensure_with_prompt(&self.herdr, &workspace, target, &prompt);
         if !agent.prompted {
@@ -462,7 +474,8 @@ impl ProjectService {
             started: time::now_iso(),
             started_secs: time::now_secs(),
             head: code.head.clone(),
-            map_snapshot: map.clone(),
+            map_snapshot: plan.map,
+            page,
             pane,
             agent: agent.clone(),
             state: JobState::InFlight,
@@ -525,19 +538,32 @@ impl ProjectService {
                 self.fail_job(job, reason)
             }
             JobState::Done => {
-                let last = LastSync {
-                    commit: job.head.clone().unwrap_or_default(),
-                    at: time::now_iso(),
+                let commit = job.head.clone().unwrap_or_default();
+                let at = time::now_iso();
+                let pages = sync::per_page(&job.map_snapshot)
+                    .into_iter()
+                    .map(|(page, map)| {
+                        let last = LastSync {
+                            commit: commit.clone(),
+                            at: at.clone(),
+                            map,
+                        };
+                        (page, last)
+                    })
+                    .collect();
+                let project = job.page.is_none().then(|| LastSync {
+                    commit: commit.clone(),
+                    at: at.clone(),
                     map: job.map_snapshot.clone(),
-                };
-                match self.store.set_last_sync(&job.workspace, last)? {
+                });
+                match self.store.record_sync(&job.workspace, project, pages)? {
                     Some(record) => {
                         job.state = JobState::Done;
                         job.reason = None;
                         self.save_job(&job)?;
                         Ok(SyncStatusResult {
                             job: job.view(),
-                            last: record.last_sync,
+                            last: job_baseline(&job, &record),
                         })
                     }
                     None => self.fail_job(job, "project record no longer exists".to_string()),
@@ -585,7 +611,7 @@ impl ProjectService {
         let last = self
             .store
             .get(&job.workspace)?
-            .and_then(|record| record.last_sync);
+            .and_then(|record| job_baseline(&job, &record));
         Ok(SyncStatusResult {
             job: job.view(),
             last,
@@ -733,6 +759,7 @@ impl ProjectService {
             built,
             created: time::now_iso(),
             last_sync: None,
+            page_syncs: BTreeMap::new(),
             extra: BTreeMap::new(),
         };
         eprintln!("mindmap-service: published {} as {}", workspace.label, file);
@@ -821,6 +848,84 @@ fn git_branch(path: &str) -> Option<String> {
     }
     let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!branch.is_empty() && branch != "HEAD").then_some(branch)
+}
+
+/// What a diff or a sync compares: the synced pages, their baseline, and both diffs.
+struct SyncPlan {
+    /// The snapshot limited to the synced pages.
+    map: MapSnapshot,
+    /// The baseline the diff compares with, `None` on a first sync.
+    last: Option<LastSync>,
+    map_diff: MapDiff,
+    code: CodeDiff,
+}
+
+/// Limit `map` to `page` and its subpages (or keep it whole), find each page's last sync, and read
+/// both diffs. A page sync limits the code side to the paths the page's cards cite.
+fn plan_sync(
+    workspace: &WorkspaceView,
+    record: Option<&ProjectRecord>,
+    map: &MapSnapshot,
+    page: Option<u64>,
+) -> Result<SyncPlan> {
+    let scope = match page {
+        Some(page) => {
+            let pages = sync::subtree(map, page);
+            if pages.is_empty() {
+                return Err(Error::new(format!(
+                    "page {page} is not in the map snapshot"
+                )));
+            }
+            Some(pages)
+        }
+        None => None,
+    };
+    let map = match &scope {
+        Some(pages) => sync::scoped(map, pages),
+        None => map.clone(),
+    };
+    let empty = BTreeMap::new();
+    let last = sync::baseline(
+        &map,
+        scope.as_ref(),
+        record.map_or(&empty, |record| &record.page_syncs),
+        record.and_then(|record| record.last_sync.as_ref()),
+    );
+    let map_diff = sync::diff_maps(&map, last.as_ref().map(|last| &last.map));
+    let code_scope = match scope {
+        Some(_) => sync::code_scope(workspace.path.as_deref(), &map),
+        None => Vec::new(),
+    };
+    let code = sync::code_diff(
+        workspace.path.as_deref(),
+        last.as_ref().map(|last| last.commit.as_str()),
+        &code_scope,
+    );
+    Ok(SyncPlan {
+        map,
+        last,
+        map_diff,
+        code,
+    })
+}
+
+/// The synced page's name in a snapshot.
+fn page_name(map: &MapSnapshot, id: u64) -> Option<String> {
+    map.pages
+        .iter()
+        .find(|page| page.id == id)
+        .map(|page| page.name.clone())
+}
+
+/// The baseline a job's pages now have, for `sync_status`'s `last`.
+fn job_baseline(job: &SyncJob, record: &ProjectRecord) -> Option<LastSync> {
+    let scope = job.page.map(|page| sync::subtree(&job.map_snapshot, page));
+    sync::baseline(
+        &job.map_snapshot,
+        scope.as_ref(),
+        &record.page_syncs,
+        record.last_sync.as_ref(),
+    )
 }
 
 #[cfg(test)]

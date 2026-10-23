@@ -658,3 +658,180 @@ fn a_fake_agent_finishes_a_sync_and_writes_last_sync() {
         "{stored}"
     );
 }
+
+#[test]
+fn a_page_sync_covers_its_subpages_and_records_only_them() {
+    let _guard = PORT_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let Some(fixture) = FixtureRepo::new() else {
+        eprintln!("skipping page Sync test: could not create a git fixture");
+        return;
+    };
+    let Some(fake) = FakeHerdr::new(&fixture.dir) else {
+        eprintln!("skipping page Sync test: needs a Unix executable script");
+        return;
+    };
+    let Some(service) = start_service(Some(&fake.script)) else {
+        return;
+    };
+    let head = fixture.head.clone();
+    let previous = fixture.previous.clone();
+
+    // Root 2 ("Backend") with subpage 3 ("Diff"), and an unrelated root 1.
+    let map = json!({
+        "pages": [
+            {"id": 1, "name": "Mindmap"},
+            {"id": 2, "name": "Backend"},
+            {"id": 3, "name": "Diff", "parent": 2}
+        ],
+        "nodes": [
+            {"id": 10, "name": "Card Elsewhere", "parent": null, "page": 1, "kind": "frame", "text": "x"},
+            {"id": 20, "name": "Card Server", "parent": null, "page": 2, "kind": "frame", "text": "docs/none.md:3"},
+            {"id": 30, "name": "Card Numstat", "parent": null, "page": 3, "kind": "frame", "text": "y"}
+        ]
+    });
+    let project_map = json!({"pages": [{"id": 1, "name": "Mindmap"}], "nodes": []});
+    let record = json!({
+        "wX": {
+            "id": "wX",
+            "label": "mindmap",
+            "path": fixture.dir.to_string_lossy(),
+            "file": "file-id",
+            "edit": "figcraft://join?file=file-id&token=t",
+            "built": true,
+            "last_sync": {"commit": previous, "at": "2026-01-01T00:00:00Z", "map": project_map}
+        }
+    });
+    fs::write(
+        service.data.join("projects.json"),
+        serde_json::to_vec_pretty(&record).expect("serialize the scratch record"),
+    )
+    .expect("write the scratch record");
+
+    let Some(mut client) = Client::connect() else {
+        panic!("scratch service did not accept a second connection");
+    };
+    let refused = client
+        .request(&json!({"id": 1, "method": "diff", "workspace": "wX", "map": map, "page": 404}));
+    assert_eq!(
+        refused.get("ok").and_then(Value::as_bool),
+        Some(false),
+        "{refused}"
+    );
+
+    let started = client.request(&json!({
+        "id": 2,
+        "method": "sync",
+        "workspace": "wX",
+        "target": "pane:wX:p2",
+        "map": map,
+        "page": 2
+    }));
+    assert_eq!(
+        started.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "{started}"
+    );
+    let job = started
+        .pointer("/job/id")
+        .and_then(Value::as_str)
+        .expect("sync returned a job id")
+        .to_string();
+
+    let prompt = fake.prompt();
+    assert!(prompt.contains("Document: file-id"), "{prompt}");
+    assert!(
+        prompt.contains("Scope: page Backend (id 2) and its subpages Diff (id 3)."),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Code scope: the whole repository (the page cites no repository paths)."),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("DESIGN CHANGES SINCE first sync:"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("+ Card Server (Backend)"), "{prompt}");
+    assert!(prompt.contains("+ Card Numstat (Diff)"), "{prompt}");
+    assert!(!prompt.contains("Card Elsewhere"), "{prompt}");
+
+    fake.set_status("working");
+    let _ = client.request(&json!({"id": 3, "method": "sync_status", "job": job}));
+    fake.set_status("idle");
+    let finished = client.request(&json!({"id": 4, "method": "sync_status", "job": job}));
+    assert_eq!(
+        finished.pointer("/job/state").and_then(Value::as_str),
+        Some("done"),
+        "{finished}"
+    );
+    assert_eq!(
+        finished.pointer("/last/commit").and_then(Value::as_str),
+        Some(head.as_str()),
+        "{finished}"
+    );
+
+    let stored: Value = serde_json::from_slice(
+        &fs::read(service.data.join("projects.json")).expect("read the scratch store"),
+    )
+    .expect("parse the scratch store");
+    assert_eq!(
+        stored
+            .pointer("/wX/last_sync/commit")
+            .and_then(Value::as_str),
+        Some(previous.as_str()),
+        "a page sync must leave the project sync alone: {stored}"
+    );
+    for page in ["2", "3"] {
+        assert_eq!(
+            stored
+                .pointer(&format!("/wX/page_syncs/{page}/commit"))
+                .and_then(Value::as_str),
+            Some(head.as_str()),
+            "{stored}"
+        );
+    }
+    assert!(stored.pointer("/wX/page_syncs/1").is_none(), "{stored}");
+
+    // The synced subtree is clean now; the subpage alone too; the other root still drifts.
+    let page_diff = client
+        .request(&json!({"id": 5, "method": "diff", "workspace": "wX", "map": map, "page": 2}));
+    assert_eq!(
+        page_diff.pointer("/last/commit").and_then(Value::as_str),
+        Some(head.as_str()),
+        "{page_diff}"
+    );
+    for list in ["added", "removed", "changed"] {
+        assert_eq!(
+            page_diff
+                .pointer(&format!("/map/{list}"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0),
+            "{page_diff}"
+        );
+    }
+    let subpage_diff = client
+        .request(&json!({"id": 6, "method": "diff", "workspace": "wX", "map": map, "page": 3}));
+    assert_eq!(
+        subpage_diff
+            .pointer("/map/added")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(0),
+        "{subpage_diff}"
+    );
+    let other = client
+        .request(&json!({"id": 7, "method": "diff", "workspace": "wX", "map": map, "page": 1}));
+    assert_eq!(
+        other.pointer("/last/commit").and_then(Value::as_str),
+        Some(previous.as_str()),
+        "{other}"
+    );
+    assert_eq!(
+        other.pointer("/map/added/0/name").and_then(Value::as_str),
+        Some("Card Elsewhere"),
+        "{other}"
+    );
+}

@@ -62,9 +62,13 @@ pub struct ProjectRecord {
     /// Creation time, `YYYY-MM-DDTHH:MM:SSZ`.
     #[serde(default)]
     pub created: String,
-    /// The last successful sync, when there was one.
+    /// The last successful sync of the whole map, when there was one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<LastSync>,
+    /// Each page's last successful sync, keyed by page id: the commit, the time, and that page's
+    /// own cards. A page sync writes its page and subpages; a project sync writes every page.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub page_syncs: BTreeMap<String, LastSync>,
     /// Fields a newer writer added that this binary does not know about, preserved verbatim.
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, Value>,
@@ -126,19 +130,6 @@ impl Store {
         self.read_file(&self.path)
     }
 
-    /// The last successful sync for one workspace, read without importing legacy records.
-    ///
-    /// `diff` must not write anything, so this only reads the current store file. Python-era
-    /// records never had `last_sync`, so skipping the one-time import here loses nothing.
-    pub fn last_sync(&self, id: &str) -> Result<Option<LastSync>> {
-        let _guard = self
-            .lock
-            .lock()
-            .map_err(|_| Error::new("project record lock poisoned"))?;
-        let records = self.read_file(&self.path)?;
-        Ok(records.get(id).and_then(|record| record.last_sync.clone()))
-    }
-
     /// Insert or replace one record, preserving the others.
     pub fn upsert(&self, record: ProjectRecord) -> Result<()> {
         let _guard = self
@@ -150,12 +141,17 @@ impl Store {
         self.save_locked(&records)
     }
 
-    /// Set only `last_sync` on an existing record, preserving every other field.
+    /// Record a finished sync: each page's own state, and `project` when the whole map was synced.
     ///
-    /// Reading and writing happen under the store lock, so two finished syncs cannot lose each
-    /// other's update. Returns `None` when the workspace has no record; a sync job then fails
-    /// rather than inventing one.
-    pub fn set_last_sync(&self, id: &str, last: LastSync) -> Result<Option<ProjectRecord>> {
+    /// Every other field is preserved. Reading and writing happen under the store lock, so two
+    /// finished syncs cannot lose each other's update. Returns `None` when the workspace has no
+    /// record; a sync job then fails rather than inventing one.
+    pub fn record_sync(
+        &self,
+        id: &str,
+        project: Option<LastSync>,
+        pages: Vec<(u64, LastSync)>,
+    ) -> Result<Option<ProjectRecord>> {
         let _guard = self
             .lock
             .lock()
@@ -164,7 +160,12 @@ impl Store {
         let Some(record) = records.get_mut(id) else {
             return Ok(None);
         };
-        record.last_sync = Some(last);
+        if let Some(project) = project {
+            record.last_sync = Some(project);
+        }
+        for (page, last) in pages {
+            record.page_syncs.insert(page.to_string(), last);
+        }
         self.save_locked(&records)?;
         Ok(records.get(id).cloned())
     }
@@ -300,6 +301,7 @@ mod tests {
                 pages: vec![MapPage {
                     id: 1,
                     name: "Mindmap".into(),
+                    parent: None,
                 }],
                 nodes: vec![MapNode {
                     id: 36,
@@ -314,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn set_last_sync_preserves_fields_it_does_not_own() {
+    fn record_sync_preserves_fields_it_does_not_own() {
         let dir = unique_dir("last-sync");
         std::fs::create_dir_all(&dir).unwrap_or(());
         std::fs::write(
@@ -335,9 +337,10 @@ mod tests {
         let store = Store::new(&dir, dir.join("legacy").join("projects.json"));
 
         let saved = store
-            .set_last_sync("wX", last_sync())
+            .record_sync("wX", Some(last_sync()), vec![(1, last_sync())])
             .unwrap_or_default()
             .unwrap_or_default();
+        assert_eq!(saved.page_syncs.get("1"), Some(&last_sync()));
         assert_eq!(saved.file.as_deref(), Some("f1"));
         assert_eq!(saved.view.as_deref(), Some("v1"));
         assert!(saved.built);
@@ -354,9 +357,21 @@ mod tests {
         assert!(raw.contains("\"last_sync\""), "{raw}");
         assert!(raw.contains("\"future_field\""), "{raw}");
         assert!(store
-            .set_last_sync("missing", last_sync())
+            .record_sync("missing", Some(last_sync()), Vec::new())
             .unwrap_or_default()
             .is_none());
+
+        // A page sync leaves the project-wide sync alone.
+        let page_only = LastSync {
+            commit: "def5678".into(),
+            ..last_sync()
+        };
+        let saved = store
+            .record_sync("wX", None, vec![(1, page_only.clone())])
+            .unwrap_or_default()
+            .unwrap_or_default();
+        assert_eq!(saved.last_sync, Some(last_sync()));
+        assert_eq!(saved.page_syncs.get("1"), Some(&page_only));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -376,7 +391,6 @@ mod tests {
         .unwrap_or(());
         let data = dir.join("data");
         let store = Store::new(&data, legacy);
-        assert_eq!(store.last_sync("wP").unwrap_or_default(), None);
         assert!(store.all_readonly().unwrap_or_default().is_empty());
         assert!(
             !data.join("projects.json").exists(),
