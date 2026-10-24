@@ -423,6 +423,9 @@ pub struct State {
     started: bool,
     /// The workspace pane is open beside the map. It survives a switch between workspaces.
     pub pane_open: bool,
+    /// A repository with several worktrees shows its worktree list; this shows the selected
+    /// worktree's own detail (its Init) instead, after Open on a worktree without a map.
+    pub worktree_init: bool,
 }
 
 /// One open machine's workspaces, listed beside the machine in use.
@@ -524,6 +527,7 @@ impl State {
 
     /// Select `workspace` and put the Init target back on its first agent (or first CLI).
     pub fn select(&mut self, workspace: &str) {
+        self.worktree_init = false;
         self.selected = Some(workspace.to_string());
         self.picker_open = false;
         self.error = None;
@@ -562,6 +566,21 @@ impl State {
         self.join_workspace = Some(workspace.to_string());
         self.retry = Some(Retry::Action { workspace: workspace.to_string(), init, target: target.clone() });
         self.start(ctx, Request::Act { workspace: workspace.to_string(), init, target });
+    }
+
+    /// Stop waiting for an Open: its reply is dropped and the current map stays. A join the
+    /// engine already started is left to finish in the background.
+    pub fn cancel_open(&mut self) {
+        if matches!(self.busy, Some(Busy::Open { .. })) {
+            self.rx = None;
+            self.busy = None;
+        }
+        self.join = None;
+        self.join_workspace = None;
+        self.pending_live = None;
+        self.pending_route = None;
+        self.error = None;
+        self.retry = None;
     }
 
     /// Do again what failed.
@@ -1538,7 +1557,9 @@ fn detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect, band: f32) {
         egui::ScrollArea::vertical().id_salt("workspaces_detail").auto_shrink([false, false]).show(ui, |ui| {
             ui.set_max_width(inner.width().min(760.0));
             ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+            let worktrees = selected.as_ref().map(|w| worktrees_of(&app.ws.rows, w)).unwrap_or_default();
             match &selected {
+                Some(w) if worktrees.len() > 1 && !app.ws.worktree_init => project_detail(app, ui, s, w, &worktrees),
                 Some(w) => workspace_detail(app, ui, s, w),
                 None => intro(app, ui, s),
             }
@@ -1578,6 +1599,13 @@ fn intro(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
 fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     let kind = w.map_state();
     let ctx = ui.ctx().clone();
+    // Reached from a repository's worktree list: the way back to it.
+    if app.ws.worktree_init && worktrees_of(&app.ws.rows, w).len() > 1 {
+        if link(ui, s, Id::new("workspaces_all_worktrees"), "←  All worktrees", s.muted) {
+            app.ws.worktree_init = false;
+        }
+        ui.add_space(10.0);
+    }
     eyebrow(ui, s, "SELECTED WORKSPACE");
     ui.add_space(6.0);
     ui.label(egui::RichText::new(w.name()).font(semibold(26.0)).color(s.text));
@@ -1664,31 +1692,6 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
         }
     }
 
-    let branches = grouped(&app.ws.rows).into_iter().find(|(_, all)| all.iter().any(|b| b.id == w.id)).map(|(_, all)| all).unwrap_or_default();
-    if branches.len() > 1 {
-        ui.add_space(24.0);
-        divider(ui, s);
-        ui.add_space(16.0);
-        eyebrow(ui, s, "BRANCHES");
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-            for branch in &branches {
-                let active = app.active_workspace.as_deref() == Some(branch.id.as_str());
-                let kind = branch.map_state();
-                let label = format!("{}  ·  {}", branch_label(branch), kind.badge());
-                let enabled = app.ws.busy.is_none();
-                if ghost_button(ui, s, Id::new(("workspace_branch", &branch.id)), &label, enabled, false).clicked() && enabled && !active {
-                    if kind == MapState::Map {
-                        app.ws.act(&ctx, &branch.id, false);
-                    } else {
-                        app.ws.select(&branch.id);
-                    }
-                }
-            }
-        });
-    }
-
     ui.add_space(24.0);
     divider(ui, s);
     ui.add_space(17.0);
@@ -1703,6 +1706,172 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     sync_block(ui, s, w);
     ui.add_space(26.0);
     hint(ui, s, "No map yet? The row says INIT — open it and press Init map.");
+}
+
+/// The worktrees of `w`'s repository: the main checkout first, then the linked ones by branch.
+fn worktrees_of(rows: &[Workspace], w: &Workspace) -> Vec<Workspace> {
+    let key = repo_key(w);
+    let mut all: Vec<Workspace> = rows.iter().filter(|row| repo_key(row) == key).cloned().collect();
+    all.sort_by(|a, b| a.worktree.cmp(&b.worktree).then_with(|| branch_label(a).cmp(&branch_label(b))));
+    all
+}
+
+/// What the selected worktree's line says about its map.
+fn map_line(kind: MapState) -> &'static str {
+    match kind {
+        MapState::Map => "map ready",
+        MapState::Empty => "empty map",
+        MapState::None => "no map yet",
+    }
+}
+
+/// A repository with several worktrees (the Branches design): choose a worktree, then open it.
+/// Every branch is a folder of its own; choosing one never checks out a branch anywhere.
+fn project_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace, worktrees: &[Workspace]) {
+    let ctx = ui.ctx().clone();
+    let repo = w.repo.clone().filter(|r| !r.trim().is_empty()).unwrap_or_else(|| worktrees.first().map(|b| b.name().to_string()).unwrap_or_default());
+    #[cfg(not(target_arch = "wasm32"))]
+    let machine = app.ws.hosts.selected.as_ref().map(|host| host.name.clone()).unwrap_or_else(|| "This computer".to_string());
+    #[cfg(target_arch = "wasm32")]
+    let machine = "This computer".to_string();
+    eyebrow(ui, s, "SELECTED PROJECT");
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(&repo).font(semibold(26.0)).color(s.text));
+    ui.add_space(14.0);
+    ui.label(egui::RichText::new(format!("{machine}  ·  {} worktrees", worktrees.len())).font(mono(11.0)).color(s.muted));
+    ui.add_space(21.0);
+    paragraph(ui, "Choose a worktree. Its map, agents and Sync stay with that folder.", 12.5, s.muted);
+    ui.add_space(34.0);
+    eyebrow(ui, s, "OPEN A WORKTREE");
+    ui.add_space(12.0);
+    let width = ui.available_width().min(600.0);
+    let mut chosen = None;
+    for (i, branch) in worktrees.iter().enumerate() {
+        if i > 0 {
+            ui.add_space(8.0);
+        }
+        if worktree_card(ui, s, branch, width, branch.id == w.id) {
+            chosen = Some(branch.id.clone());
+        }
+    }
+    if let Some(id) = chosen {
+        app.ws.select(&id);
+    }
+
+    let kind = w.map_state();
+    let branch = branch_label(w);
+    ui.add_space(16.0);
+    let hint = format!("Selected: {branch}  ·  {}  ·  {}", agents_line(w).replace(" · ", " "), map_line(kind));
+    ui.label(egui::RichText::new(hint).font(regular(10.0)).color(s.map_ink));
+    ui.add_space(9.0);
+    let busy = app.ws.busy.clone();
+    let label = match &busy {
+        Some(Busy::Open { workspace, .. }) if workspace == &w.id => "Opening…".to_string(),
+        _ => format!("Open {branch}  →"),
+    };
+    if accent_button(ui, s, Id::new(("worktree_open", &w.id)), &label, busy.is_none()) {
+        if kind == MapState::Map {
+            app.ws.act(&ctx, &w.id, false);
+        } else {
+            // A worktree without a map opens its Init; no agent starts until asked.
+            app.ws.worktree_init = true;
+        }
+    }
+    if let Some(error) = app.ws.error.clone() {
+        ui.add_space(16.0);
+        if error_card(ui, s, &error, app.ws.busy.is_some()) {
+            app.ws.retry(&ctx);
+        }
+    }
+    ui.add_space(16.0);
+    ui.scope(|ui| {
+        ui.set_max_width(width);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "Opens the map in the selected worktree. A worktree without a map opens Init; choosing it never starts an agent automatically.",
+                )
+                .font(mono(11.0))
+                .color(s.muted),
+            )
+            .wrap(),
+        );
+    });
+}
+
+/// One worktree in the project detail: branch, path, and its map state; the chosen one in the
+/// accent with a check.
+fn worktree_card(ui: &mut Ui, s: &Skin, w: &Workspace, width: f32, chosen: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 58.0), Sense::click());
+    let kind = w.map_state();
+    a11y::button(&resp, &format!("{} · {}", branch_label(w), kind.badge()));
+    let (fill, rule) = if chosen {
+        (with_alpha(s.accent, if s.panel == Color32::WHITE { 18 } else { 40 }), s.accent)
+    } else if resp.hovered() {
+        (s.soft, s.border)
+    } else {
+        (s.panel, s.border)
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
+    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, rule), StrokeKind::Inside);
+    focus_ring(ui, s, rect, &resp, 5);
+    let state = match kind {
+        MapState::Map => "MAP",
+        MapState::Empty => "EMPTY",
+        MapState::None => "NO MAP",
+    };
+    let tint = if chosen {
+        s.accent
+    } else if kind == MapState::Map {
+        s.map_ink
+    } else {
+        s.muted
+    };
+    let state_x = rect.max.x - 84.0;
+    // The monospace face has no check glyph: the mark is drawn.
+    if chosen {
+        check_mark(ui, pos2(state_x - 12.0, rect.min.y + 15.5), tint);
+    }
+    ui.painter().text(pos2(state_x, rect.min.y + 10.0), Align2::LEFT_TOP, state, mono(9.0), tint);
+    let room = (state_x - 12.0 - (rect.min.x + 14.0)).max(40.0);
+    let name = widgets::elide_font(ui, &branch_label(w), room, regular(12.0));
+    ui.painter().text(pos2(rect.min.x + 14.0, rect.min.y + 8.0), Align2::LEFT_TOP, name, regular(12.0), s.text);
+    let path = w.path.as_deref().unwrap_or("no folder");
+    let path = widgets::elide_start_font(ui, path, rect.width() - 28.0, mono(9.0));
+    ui.painter().text(pos2(rect.min.x + 14.0, rect.min.y + 32.0), Align2::LEFT_TOP, path, mono(9.0), s.muted);
+    resp.clicked()
+}
+
+/// A small drawn check mark centred on `c`.
+pub(crate) fn check_mark(ui: &Ui, c: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.3, color);
+    ui.painter().line_segment([pos2(c.x - 3.5, c.y), pos2(c.x - 1.0, c.y + 2.5)], stroke);
+    ui.painter().line_segment([pos2(c.x - 1.0, c.y + 2.5), pos2(c.x + 3.5, c.y - 2.5)], stroke);
+}
+
+/// The accent call to action of the worktree list: 34 pt, label 12 pt from the left.
+fn accent_button(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: bool) -> bool {
+    let width = (text_width(ui, label, semibold(11.0)) + 24.0).max(236.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
+    let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+    a11y::button(&resp, label);
+    let fill = if !enabled {
+        s.soft
+    } else if resp.hovered() {
+        Color32::from_rgb(0xC2, 0x55, 0x3E)
+    } else {
+        s.accent
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    ui.painter().text(
+        pos2(rect.min.x + 12.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        semibold(11.0),
+        if enabled { Color32::WHITE } else { s.faint },
+    );
+    focus_ring(ui, s, rect, &resp, 6);
+    resp.clicked() && enabled
 }
 
 /// The action's label, including what the service is doing while it works.
