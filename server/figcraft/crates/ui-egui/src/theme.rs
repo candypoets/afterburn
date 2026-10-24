@@ -287,7 +287,26 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
             }
         }
     }
+    // The map client's display serif for big titles: Charter (macOS) or another system serif,
+    // else the UI face. The family always exists, so `serif()` never names a missing one.
+    let mut display: Vec<String> = Vec::new();
+    if system
+        && let Some(face) = SERIF_FAMILIES.iter().find_map(|family| figcraft_text::find_face(family, "Regular").filter(|face| face.family == *family))
+    {
+        fonts.font_data.insert("display-serif".into(), Arc::new(font_data(&face)));
+        display.push("display-serif".into());
+    }
+    display.extend(fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
+    fonts.families.insert(FontFamily::Name("serif".into()), display);
     ctx.set_fonts(fonts);
+}
+
+/// System serifs for display titles, in order of preference.
+const SERIF_FAMILIES: [&str; 6] = ["Charter", "Georgia", "Iowan Old Style", "Noto Serif", "DejaVu Serif", "Liberation Serif"];
+
+/// The display serif (Charter where the system has it) for the map client's large titles.
+pub fn serif(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("serif".into()))
 }
 
 /// The glyphs macOS shortcuts are written with ([`figcraft_engine::keymap::display`]).

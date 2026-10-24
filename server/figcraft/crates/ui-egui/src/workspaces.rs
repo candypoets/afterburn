@@ -34,8 +34,6 @@ const MACHINE_H: f32 = 30.0;
 const PLUS_H: f32 = 26.0;
 /// How far machine rows and the plus rows sit in from the sidebar's edges.
 const INSET: f32 = 8.0;
-/// The agent menu's width (it shrinks to fit a narrow window).
-const PICKER_W: f32 = 360.0;
 
 /// How long to wait for a connection to the node.
 /// How long the workspace list may take to answer.
@@ -164,23 +162,6 @@ impl Target {
             Target::Existing { kind, .. } | Target::New { kind } => kind,
         }
     }
-
-    /// What the detail says about the choice: `kimi · idle` or `start claude`.
-    fn summary(&self) -> String {
-        match self {
-            Target::Existing { kind, status, .. } => {
-                let kind = display_kind(kind);
-                let status = status.trim();
-                if status.is_empty() { kind.to_string() } else { format!("{kind} · {status}") }
-            }
-            Target::New { kind } => format!("start {}", display_kind(kind)),
-        }
-    }
-
-    /// Whether this is the agent at `pane`.
-    fn is_at(&self, pane: &str) -> bool {
-        matches!(self, Target::Existing { pane: chosen, .. } if chosen == pane)
-    }
 }
 
 /// What the workspace has: a live map, an empty document, or no document yet.
@@ -230,33 +211,23 @@ impl Workspace {
     fn name(&self) -> &str {
         if self.label.trim().is_empty() { &self.id } else { &self.label }
     }
-
-    /// Whether Init has an agent to ask or a CLI to start.
-    fn has_agents(&self, clis: &[String]) -> bool {
-        !self.agents_detail.is_empty()
-            || self.agents > 0
-            || self.agent_names.iter().any(|name| !name.trim().is_empty())
-            || clis.iter().any(|kind| !kind.trim().is_empty())
-    }
 }
 
-/// The target a freshly selected workspace starts on: its focused agent, else a non-blocked one,
-/// else any agent; with no agent, the first installed CLI; with neither, none (the service chooses).
+/// The target a freshly selected workspace starts on: an agent that can be picked (not busy),
+/// Herdr's focused one first; with none, the first installed CLI; with neither, none (the service
+/// chooses).
 fn default_target(w: &Workspace, clis: &[String]) -> Option<Target> {
-    let agent = w
-        .agents_detail
-        .iter()
-        .find(|agent| agent.focused)
-        .or_else(|| w.agents_detail.iter().find(|agent| !is_blocked(&agent.status)))
-        .or_else(|| w.agents_detail.first());
+    let free = |agent: &&AgentDetail| !agent_busy(&agent.status);
+    let agent = w.agents_detail.iter().filter(free).find(|agent| agent.focused).or_else(|| w.agents_detail.iter().find(free));
     if let Some(agent) = agent {
         return Some(Target::Existing { pane: agent.pane.clone(), kind: agent.kind.clone(), status: agent.status.clone() });
     }
     clis.iter().map(|kind| kind.trim()).find(|kind| !kind.is_empty()).map(|kind| Target::New { kind: kind.to_string() })
 }
 
-fn is_blocked(status: &str) -> bool {
-    status.trim().eq_ignore_ascii_case("blocked")
+/// An agent in the middle of something (or waiting on its human) can't take Init.
+fn agent_busy(status: &str) -> bool {
+    matches!(status.trim().to_ascii_lowercase().as_str(), "working" | "busy" | "running" | "thinking" | "blocked")
 }
 
 /// An agent kind as shown: the service may not know it.
@@ -408,8 +379,6 @@ pub struct State {
     pub node_version: Option<String>,
     /// What Init should use for the selected workspace; `None` lets the service choose.
     pub target: Option<Target>,
-    /// The Init agent menu is open (it belongs to the screen, not to a row).
-    picker_open: bool,
     /// The channel a request's reply arrives on.
     rx: Option<Receiver<(Kind, Result<ServiceReply, String>)>>,
     /// The link the screen joins now (then shows the map).
@@ -520,7 +489,6 @@ impl State {
             return;
         }
         self.error = None;
-        self.picker_open = false;
         self.retry = Some(Retry::List);
         self.start(ctx, Request::List);
     }
@@ -529,7 +497,6 @@ impl State {
     pub fn select(&mut self, workspace: &str) {
         self.worktree_init = false;
         self.selected = Some(workspace.to_string());
-        self.picker_open = false;
         self.error = None;
         self.target = self.rows.iter().find(|w| w.id == workspace).and_then(|w| default_target(w, &self.clis));
     }
@@ -560,7 +527,6 @@ impl State {
         if init {
             self.target = target.clone();
         }
-        self.picker_open = false;
         self.error = None;
         // Open and Init both publish the workspace's map; remember which one for the join.
         self.join_workspace = Some(workspace.to_string());
@@ -600,13 +566,11 @@ impl State {
     fn reconcile_target(&mut self) {
         let Some(id) = self.selected.as_deref() else {
             self.target = None;
-            self.picker_open = false;
             return;
         };
         let Some(w) = self.rows.iter().find(|w| w.id == id) else {
             self.selected = None;
             self.target = None;
-            self.picker_open = false;
             return;
         };
         let refreshed = match &self.target {
@@ -677,7 +641,6 @@ impl State {
                     self.node_version = reply.node.filter(|v| !v.trim().is_empty());
                     if self.selected.is_none() {
                         self.target = None;
-                        self.picker_open = false;
                         // The detail always shows a workspace: Herdr's focused one, else the first.
                         if let Some(id) = self.rows.iter().find(|w| w.focused).or_else(|| self.rows.first()).map(|w| w.id.clone()) {
                             self.select(&id);
@@ -751,6 +714,7 @@ struct Skin {
     muted: Color32,
     faint: Color32,
     accent: Color32,
+    accent_hover: Color32,
     selected: Color32,
     soft: Color32,
     map_ink: Color32,
@@ -774,6 +738,7 @@ impl Skin {
                 muted: t.text_secondary,
                 faint: t.text_tertiary,
                 accent: Color32::from_rgb(0xD9, 0x7A, 0x5F),
+                accent_hover: Color32::from_rgb(0xE8, 0x8E, 0x75),
                 selected: Color32::from_rgb(0x3A, 0x30, 0x2C),
                 soft: t.hover,
                 map_ink: Color32::from_rgb(0x7F, 0xBD, 0xB5),
@@ -794,6 +759,7 @@ impl Skin {
                 muted: Color32::from_rgb(0x6E, 0x6C, 0x68),
                 faint: Color32::from_rgb(0x9A, 0x96, 0x8F),
                 accent: Color32::from_rgb(0xB5, 0x45, 0x2F),
+                accent_hover: Color32::from_rgb(0xC2, 0x55, 0x3E),
                 selected: Color32::from_rgb(0xF1, 0xF0, 0xED),
                 soft: Color32::from_rgb(0xF7, 0xF6, 0xF3),
                 map_ink: Color32::from_rgb(0x2F, 0x6F, 0x6A),
@@ -1160,7 +1126,6 @@ fn switch_to(app: &mut FigApp, host: &crate::node_hosts::Host, id: Option<&str>)
     app.ws.error = None;
     app.ws.selected = None;
     app.ws.target = None;
-    app.ws.picker_open = false;
     if let Some(id) = id {
         app.ws.select(id);
     }
@@ -1598,7 +1563,6 @@ fn intro(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
 
 fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     let kind = w.map_state();
-    let ctx = ui.ctx().clone();
     // Reached from a repository's worktree list: the way back to it.
     if app.ws.worktree_init && worktrees_of(&app.ws.rows, w).len() > 1 {
         if link(ui, s, Id::new("workspaces_all_worktrees"), "←  All worktrees", s.muted) {
@@ -1606,6 +1570,11 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
         }
         ui.add_space(10.0);
     }
+    if kind != MapState::Map {
+        init_detail(app, ui, s, w);
+        return;
+    }
+    let ctx = ui.ctx().clone();
     eyebrow(ui, s, "SELECTED WORKSPACE");
     ui.add_space(6.0);
     ui.label(egui::RichText::new(w.name()).font(semibold(26.0)).color(s.text));
@@ -1617,56 +1586,21 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
         paragraph(ui, explanation(kind), 12.5, s.muted);
     });
 
-    // Open map (or Init) and the agents beside it. For Init the agents button picks who draws.
+    // Open map and the agents beside it.
     ui.add_space(32.0);
     let busy = app.ws.busy.clone();
     let busy_here = busy.as_ref().is_some_and(|b| b.for_workspace(&w.id));
-    let init = kind != MapState::Map;
-    let target = if init { app.ws.target.clone() } else { None };
-    let can_init = !init || w.has_agents(&app.ws.clis);
-    let enabled = busy.is_none() && can_init;
-    let menu_available = !w.agents_detail.is_empty() || app.ws.clis.iter().any(|kind| !kind.trim().is_empty());
-    let label = action_label(kind, w, target.as_ref(), busy.as_ref());
+    let label = action_label(kind, w, None, busy.as_ref());
     let mut run = false;
-    let mut toggle = false;
-    let mut anchor = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
-        if primary_button(ui, s, Id::new(("workspace_action", &w.id)), &label, enabled) {
+        if primary_button(ui, s, Id::new(("workspace_action", &w.id)), &label, busy.is_none()) {
             run = true;
         }
-        if init {
-            let choice = match target.as_ref() {
-                Some(target) => target.summary(),
-                None => "Choose agent".to_string(),
-            };
-            let resp = ghost_button(ui, s, Id::new(("workspace_action", &w.id)).with("menu"), &choice, menu_available && busy.is_none(), true);
-            toggle = resp.clicked() && menu_available && busy.is_none();
-            anchor = Some(resp);
-        } else {
-            ghost_button(ui, s, Id::new(("workspace_agents", &w.id)), &agents_line(w), true, false);
-        }
+        ghost_button(ui, s, Id::new(("workspace_agents", &w.id)), &agents_line(w), true, false);
     });
-    if toggle {
-        app.ws.picker_open = !app.ws.picker_open;
-    }
     if run {
-        app.ws.picker_open = false;
-        app.ws.act(&ctx, &w.id, init);
-    } else if init
-        && app.ws.picker_open
-        && let Some(anchor) = anchor
-    {
-        agent_picker(app, ui, s, w, &anchor);
-    }
-    if init && !can_init {
-        ui.add_space(10.0);
-        paragraph(
-            ui,
-            "No agent is in this workspace and no agent CLI is installed to start one. Install codex, claude or kimi, then Refresh.",
-            11.0,
-            s.muted,
-        );
+        app.ws.act(&ctx, &w.id, false);
     }
     if busy_here {
         let line = match &busy {
@@ -1874,6 +1808,270 @@ fn accent_button(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: bool) -> b
     resp.clicked() && enabled
 }
 
+/// One choice in AGENT FOR THIS MAP: an agent already in the workspace, or a CLI to start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentChoice {
+    target: Target,
+    label: String,
+    /// Busy agents are shown but can't be picked.
+    busy: bool,
+}
+
+/// The agents in the workspace first (busy ones disabled), then the installed CLIs as new agents.
+/// A CLI whose kind already runs here reads `new <kind>`.
+fn agent_choices(w: &Workspace, clis: &[String]) -> Vec<AgentChoice> {
+    let mut out: Vec<AgentChoice> = w
+        .agents_detail
+        .iter()
+        .map(|agent| {
+            let busy = agent_busy(&agent.status);
+            let kind = display_kind(&agent.kind);
+            AgentChoice {
+                target: Target::Existing { pane: agent.pane.clone(), kind: agent.kind.clone(), status: agent.status.clone() },
+                label: if busy { format!("{kind} · {}", agent.status.trim()) } else { kind.to_string() },
+                busy,
+            }
+        })
+        .collect();
+    for kind in clis.iter().map(|kind| kind.trim()).filter(|kind| !kind.is_empty()) {
+        let here = w.agents_detail.iter().any(|agent| agent.kind.trim().eq_ignore_ascii_case(kind));
+        out.push(AgentChoice {
+            target: Target::New { kind: kind.to_string() },
+            label: if here { format!("new {kind}") } else { kind.to_string() },
+            busy: false,
+        });
+    }
+    out
+}
+
+/// The line under Init: who will draw, and why the busy ones can't.
+fn init_hint(target: Option<&Target>, choices: &[AgentChoice]) -> String {
+    let mut parts = Vec::new();
+    match target {
+        Some(Target::Existing { kind, status, .. }) => {
+            let status = status.trim();
+            parts.push(if status.is_empty() || status.eq_ignore_ascii_case("unknown") {
+                format!("{} is already here", display_kind(kind))
+            } else {
+                format!("{} is {status}", display_kind(kind))
+            });
+        }
+        Some(Target::New { kind }) => parts.push(format!("a new {} starts in the workspace", display_kind(kind))),
+        None => {}
+    }
+    let busy: Vec<String> = choices
+        .iter()
+        .filter(|choice| choice.busy)
+        .filter_map(|choice| match &choice.target {
+            Target::Existing { kind, status, .. } => Some(format!("{} is {}", display_kind(kind), status.trim())),
+            Target::New { .. } => None,
+        })
+        .collect();
+    match busy.len() {
+        0 => {}
+        1 => parts.push(format!("{}, so it can't be picked", busy.join(""))),
+        _ => parts.push(format!("{}, so they can't be picked", busy.join(" · "))),
+    }
+    parts.join(" · ")
+}
+
+/// The chosen agent turned busy after it was picked: the second step names what it is doing.
+fn turned_busy<'a>(w: &'a Workspace, target: Option<&Target>) -> Option<&'a AgentDetail> {
+    match target {
+        Some(Target::Existing { pane, .. }) => w.agents_detail.iter().find(|agent| &agent.pane == pane && agent_busy(&agent.status)),
+        _ => None,
+    }
+}
+
+/// A workspace without a map (the design's Empty map): pick the agent, then Init with it.
+fn init_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
+    let ctx = ui.ctx().clone();
+    let origin = ui.cursor().min.y;
+    ui.add_space(52.0);
+    ui.label(egui::RichText::new("NO MAP YET").font(mono(9.0)).color(s.accent));
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(w.name()).font(semibold(26.0)).color(s.text));
+    ui.add_space(6.0);
+    let meta = [w.path.clone().unwrap_or_else(|| "no folder".to_string()), branch_label(w), agents_line(w)].join("  ·  ");
+    ui.add(egui::Label::new(egui::RichText::new(meta).font(mono(11.0)).color(s.muted)).truncate());
+    ui.add_space(12.0);
+    ui.scope(|ui| {
+        ui.set_max_width(560.0);
+        let text = match w.map_state() {
+            MapState::Empty => {
+                "A document exists, but its map is empty. Init asks one agent to read the repository, name the areas and draw the first overview. Pick who: the agent already here, or a new CLI."
+            }
+            _ => {
+                "No document yet. Init opens a live design and asks one agent to read the repository, name the areas and draw the first overview. Pick who: the agent already here, or a new CLI."
+            }
+        };
+        let mut job = egui::text::LayoutJob::single_section(
+            text.to_string(),
+            egui::TextFormat { font_id: regular(12.5), color: s.muted, line_height: Some(18.0), ..Default::default() },
+        );
+        job.wrap.max_width = ui.available_width();
+        ui.label(job);
+    });
+
+    let busy = app.ws.busy.clone();
+    let busy_here = busy.as_ref().is_some_and(|b| b.for_workspace(&w.id));
+    let choices = agent_choices(w, &app.ws.clis);
+    let target = app.ws.target.clone();
+    ui.add_space(10.0);
+    ui.label(egui::RichText::new("AGENT FOR THIS MAP").font(mono(9.0)).color(s.muted));
+    ui.add_space(6.0);
+    if choices.is_empty() {
+        paragraph(
+            ui,
+            "No agent is in this workspace and no agent CLI is installed to start one. Install codex, claude or kimi, then Refresh.",
+            11.0,
+            s.muted,
+        );
+    } else {
+        let mut picked = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+            for (index, choice) in choices.iter().enumerate() {
+                let selected = target.as_ref() == Some(&choice.target);
+                if agent_chip(ui, s, Id::new(("init_agent", &w.id, index)), choice, selected, busy.is_none()) {
+                    picked = Some(choice.target.clone());
+                }
+            }
+        });
+        if let Some(target) = picked {
+            app.ws.target = Some(target);
+        }
+    }
+    let target = app.ws.target.clone();
+
+    ui.add_space(16.0);
+    if let Some(agent) = turned_busy(w, target.as_ref()) {
+        // The second step: the picked agent is now busy; say with what, and let the human decide.
+        let task = agent.title.as_deref().map(agent_task).filter(|task| !task.is_empty());
+        let line = match task {
+            Some(task) => format!("{} turned {} after you picked it: {task}", display_kind(&agent.kind), agent.status.trim()),
+            None => format!("{} turned {} after you picked it.", display_kind(&agent.kind), agent.status.trim()),
+        };
+        ui.add(egui::Label::new(egui::RichText::new(line).font(mono(10.0)).color(s.accent)).wrap());
+        ui.add_space(10.0);
+        let mut anyway = false;
+        let mut other = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            anyway = init_button(ui, s, Id::new(("init_anyway", &w.id)), &format!("Ask {} anyway", display_kind(&agent.kind)), busy.is_none());
+            other = ghost_button(ui, s, Id::new(("init_other", &w.id)), "Pick another", busy.is_none(), false).clicked();
+        });
+        if anyway {
+            app.ws.act(&ctx, &w.id, true);
+        } else if other {
+            app.ws.target = default_target(w, &app.ws.clis);
+        }
+    } else {
+        let label = action_label(w.map_state(), w, target.as_ref(), busy.as_ref());
+        let enabled = busy.is_none() && !choices.is_empty() && target.is_some();
+        if init_button(ui, s, Id::new(("workspace_action", &w.id)), &label, enabled) {
+            app.ws.act(&ctx, &w.id, true);
+        }
+        ui.add_space(12.0);
+        let hint = if busy_here {
+            match &busy {
+                Some(Busy::Open { target: Some(Target::New { kind }), .. }) => {
+                    format!("the node is starting {}; the map appears as it draws", display_kind(kind))
+                }
+                Some(Busy::Open { target: Some(Target::Existing { kind, .. }), .. }) => {
+                    format!("the node is asking {}; the map appears as it draws", display_kind(kind))
+                }
+                _ => "the node is starting the agent; the map appears as it draws".to_string(),
+            }
+        } else {
+            init_hint(target.as_ref(), &choices)
+        };
+        if !hint.is_empty() {
+            ui.add(egui::Label::new(egui::RichText::new(hint).font(mono(10.0)).color(s.muted)).wrap());
+        }
+    }
+    if let Some(error) = app.ws.error.clone() {
+        ui.add_space(16.0);
+        if error_card(ui, s, &error, app.ws.busy.is_some()) {
+            app.ws.retry(&ctx);
+        }
+    }
+    // The foot note sits low on the screen, as the design places it.
+    let foot_at = origin + 432.0;
+    let gap = (foot_at - ui.cursor().min.y).max(28.0);
+    ui.add_space(gap);
+    ui.scope(|ui| {
+        ui.set_max_width(600.0);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "Pick an idle agent, then press Init. A busy agent is disabled; if one turns busy after the list opens, a second step names what it is doing.",
+                )
+                .font(mono(9.0))
+                .color(s.muted),
+            )
+            .wrap(),
+        );
+    });
+}
+
+/// One agent chip: dark when chosen, white otherwise; a busy agent is greyed with a red dot.
+fn agent_chip(ui: &mut Ui, s: &Skin, id: Id, choice: &AgentChoice, selected: bool, enabled: bool) -> bool {
+    let font = if selected { semibold(10.0) } else { regular(10.0) };
+    let dot = if choice.busy { 10.0 } else { 0.0 };
+    let width = text_width(ui, &choice.label, font.clone()) + 24.0 + dot;
+    let (rect, _) = ui.allocate_exact_size(vec2(width.max(66.0), 26.0), Sense::hover());
+    let pickable = enabled && !choice.busy;
+    let resp = ui.interact(rect, id, if pickable { Sense::click() } else { Sense::hover() });
+    a11y::button(&resp, &choice.label);
+    let (fill, stroke, ink) = if selected {
+        (s.primary, s.primary, s.on_primary)
+    } else if choice.busy {
+        (s.soft, s.border, s.faint)
+    } else if resp.hovered() && pickable {
+        (s.soft, s.border, s.text)
+    } else {
+        (s.panel, s.border, s.text)
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, stroke), StrokeKind::Inside);
+    if choice.busy {
+        ui.painter().circle_filled(pos2(rect.min.x + 13.0, rect.center().y), 3.0, s.accent);
+    }
+    ui.painter().text(pos2(rect.min.x + 12.0 + dot, rect.center().y), Align2::LEFT_CENTER, &choice.label, font, ink);
+    focus_ring(ui, s, rect, &resp, 6);
+    let resp = if choice.busy { resp.on_hover_text("Busy: it can't take Init now") } else { resp };
+    resp.clicked() && pickable
+}
+
+/// The accent Init button: 34 pt tall, 16 pt of padding.
+fn init_button(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: bool) -> bool {
+    let width = text_width(ui, label, semibold(12.0)) + 32.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(width.max(110.0), 34.0), Sense::hover());
+    let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+    a11y::button(&resp, label);
+    let fill = if !enabled {
+        s.soft
+    } else if resp.hovered() {
+        s.accent_hover
+    } else {
+        s.accent
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    if !enabled {
+        ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, s.border), StrokeKind::Inside);
+    }
+    ui.painter().text(
+        pos2(rect.min.x + 16.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        label,
+        semibold(12.0),
+        if enabled { Color32::WHITE } else { s.faint },
+    );
+    focus_ring(ui, s, rect, &resp, 6);
+    resp.clicked() && enabled
+}
+
 /// The action's label, including what the service is doing while it works.
 fn action_label(kind: MapState, w: &Workspace, target: Option<&Target>, busy: Option<&Busy>) -> String {
     if let Some(Busy::Open { workspace, init, target: asking }) = busy
@@ -1892,7 +2090,7 @@ fn action_label(kind: MapState, w: &Workspace, target: Option<&Target>, busy: Op
         MapState::Map => kind.action().to_string(),
         MapState::Empty | MapState::None => match target {
             Some(Target::Existing { kind, .. }) => format!("Init with {}", display_kind(kind)),
-            Some(Target::New { kind }) => format!("Start {}", display_kind(kind)),
+            Some(Target::New { kind }) => format!("Init with {}", display_kind(kind)),
             None => "Init map".to_string(),
         },
     }
@@ -2196,140 +2394,6 @@ fn outline_button_at(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, ena
     resp.clicked() && enabled
 }
 
-/// The Init agent picker: an egui popup anchored below the split button. Clicking a row closes it,
-/// and egui's popup handling closes it on a click outside or Escape; it re-aligns to stay in the
-/// window. No native window is involved.
-fn agent_picker(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace, anchor: &Response) {
-    let mut open = app.ws.picker_open;
-    let chosen = app.ws.target.clone();
-    let clis = app.ws.clis.clone();
-    let ctx = ui.ctx().clone();
-    let id = Id::new(("workspace_action", &w.id)).with("menu").with("popup");
-    let width = PICKER_W.min((ctx.content_rect().width() - 24.0).max(120.0));
-    let frame = egui::Frame::NONE
-        .fill(s.panel)
-        .stroke(Stroke::new(1.0, s.border))
-        .corner_radius(CornerRadius::same(8))
-        .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(38) })
-        .inner_margin(egui::Margin::symmetric(12, 11));
-    let mut picked = None;
-    egui::Popup::new(id, ctx, anchor, anchor.layer_id)
-        .width(width)
-        .gap(6.0)
-        .align(egui::RectAlign::BOTTOM_START)
-        .frame(frame)
-        .open_bool(&mut open)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| {
-            picked = picker_body(ui, s, w, chosen.as_ref(), &clis);
-        });
-    if let Some(target) = picked {
-        app.ws.target = Some(target);
-        open = false;
-    }
-    app.ws.picker_open = open;
-}
-
-/// The picker's contents; a click on an existing agent or a CLI returns the target it picked.
-fn picker_body(ui: &mut Ui, s: &Skin, w: &Workspace, chosen: Option<&Target>, clis: &[String]) -> Option<Target> {
-    let mut picked = None;
-    ui.set_width(ui.available_width());
-    ui.spacing_mut().item_spacing = vec2(6.0, 2.0);
-    eyebrow(ui, s, "AGENTS IN THIS WORKSPACE");
-    ui.add_space(1.0);
-    if w.agents_detail.is_empty() {
-        paragraph(ui, "No agents in this workspace yet.", 11.0, s.muted);
-    } else {
-        for agent in &w.agents_detail {
-            let selected = chosen.is_some_and(|target| target.is_at(&agent.pane));
-            if picker_agent_row(ui, s, agent, selected) {
-                picked = Some(Target::Existing { pane: agent.pane.clone(), kind: agent.kind.clone(), status: agent.status.clone() });
-            }
-        }
-    }
-
-    ui.add_space(5.0);
-    divider(ui, s);
-    ui.add_space(5.0);
-    eyebrow(ui, s, "START A NEW AGENT");
-    ui.add_space(1.0);
-    let clis: Vec<&str> = clis.iter().map(|kind| kind.trim()).filter(|kind| !kind.is_empty()).collect();
-    if clis.is_empty() {
-        paragraph(ui, "No agent CLIs installed on the project host.", 11.0, s.muted);
-    } else {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-            for kind in clis {
-                let selected = matches!(chosen, Some(Target::New { kind: chosen }) if chosen.trim().eq_ignore_ascii_case(kind));
-                if picker_chip(ui, s, kind, selected) {
-                    picked = Some(Target::New { kind: kind.to_string() });
-                }
-            }
-        });
-    }
-    ui.add_space(9.0);
-    paragraph(ui, "The agent reads the repo and draws; 6–12 areas, every card sourced.", 10.5, s.faint);
-    picked
-}
-
-fn picker_agent_row(ui: &mut Ui, s: &Skin, agent: &AgentDetail, chosen: bool) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
-    let kind = display_kind(&agent.kind);
-    let status = agent.status.trim();
-    a11y::button(&resp, &if status.is_empty() { kind.to_string() } else { format!("{kind} · {status}") });
-    let hot = resp.hovered() || resp.has_focus();
-    if chosen || hot {
-        let fill = if chosen { s.selected } else { s.soft };
-        ui.painter().rect_filled(rect.shrink2(vec2(4.0, 1.0)), CornerRadius::same(5), fill);
-    }
-    let dot = pos2(rect.min.x + 8.0, rect.center().y);
-    ui.painter().circle_filled(dot, 3.0, status_color(status, s));
-    if agent.focused {
-        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, s.map_ink));
-    }
-    ui.painter().text(pos2(rect.min.x + 18.0, rect.center().y), Align2::LEFT_CENTER, kind, semibold(11.5), s.text);
-    if !status.is_empty() && !status.eq_ignore_ascii_case("unknown") {
-        let trail = if chosen { 22.0 } else { 8.0 };
-        ui.painter().text(pos2(rect.max.x - trail, rect.center().y), Align2::RIGHT_CENTER, status, mono(10.0), s.faint);
-    }
-    if chosen {
-        let c = pos2(rect.max.x - 10.0, rect.center().y);
-        let stroke = Stroke::new(1.6, s.accent);
-        ui.painter().line_segment([pos2(c.x - 4.0, c.y), pos2(c.x - 1.0, c.y + 3.5)], stroke);
-        ui.painter().line_segment([pos2(c.x - 1.0, c.y + 3.5), pos2(c.x + 4.5, c.y - 4.0)], stroke);
-    }
-    focus_ring(ui, s, rect.shrink2(vec2(4.0, 1.0)), &resp, 5);
-    resp.clicked()
-}
-
-fn picker_chip(ui: &mut Ui, s: &Skin, kind: &str, chosen: bool) -> bool {
-    let label = display_kind(kind);
-    let width = text_width(ui, label, semibold(10.5)) + 22.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
-    a11y::button(&resp, label);
-    let hot = resp.hovered() || resp.has_focus();
-    let fill = if chosen {
-        with_alpha(s.accent, if s.panel == Color32::WHITE { 12 } else { 28 })
-    } else if hot {
-        s.soft
-    } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
-    let border = if chosen {
-        s.accent
-    } else if hot {
-        with_alpha(s.accent, 140)
-    } else {
-        s.border
-    };
-    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, border), StrokeKind::Inside);
-    let ink = if chosen || hot { s.accent } else { s.text };
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(10.5), ink);
-    focus_ring(ui, s, rect, &resp, 5);
-    resp.clicked()
-}
-
 fn divider(ui: &mut Ui, s: &Skin) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
     ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, s.border));
@@ -2409,6 +2473,39 @@ mod branch_transition_tests {
 #[cfg(test)]
 mod detail_tests {
     use super::*;
+
+    fn agent(pane: &str, kind: &str, status: &str) -> AgentDetail {
+        AgentDetail { pane: pane.into(), kind: kind.into(), status: status.into(), ..AgentDetail::default() }
+    }
+
+    #[test]
+    fn init_offers_the_agents_here_then_new_clis_and_disables_busy_ones() {
+        let w = Workspace { agents_detail: vec![agent("w:p1", "kimi", "idle"), agent("w:p2", "codex", "working")], ..Workspace::default() };
+        let choices = agent_choices(&w, &["claude".into(), "codex".into()]);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["kimi", "codex · working", "claude", "new codex"]);
+        assert_eq!(choices.iter().map(|c| c.busy).collect::<Vec<_>>(), [false, true, false, false]);
+        assert_eq!(
+            default_target(&w, &["claude".into()]),
+            Some(Target::Existing { pane: "w:p1".into(), kind: "kimi".into(), status: "idle".into() }),
+            "a busy agent is never the default"
+        );
+        let hint = init_hint(Some(&choices[0].target), &choices);
+        assert_eq!(hint, "kimi is idle · codex is working, so it can't be picked");
+        assert_eq!(init_hint(Some(&Target::New { kind: "claude".into() }), &[]), "a new claude starts in the workspace");
+    }
+
+    #[test]
+    fn a_picked_agent_that_turns_busy_needs_a_second_step() {
+        let mut w = Workspace { agents_detail: vec![agent("w:p1", "kimi", "idle")], ..Workspace::default() };
+        let picked = Target::Existing { pane: "w:p1".into(), kind: "kimi".into(), status: "idle".into() };
+        assert!(turned_busy(&w, Some(&picked)).is_none());
+        w.agents_detail[0].status = "working".into();
+        assert!(turned_busy(&w, Some(&picked)).is_some());
+        assert!(turned_busy(&w, Some(&Target::New { kind: "kimi".into() })).is_none());
+        // With every agent busy, Init falls back to starting a CLI.
+        assert_eq!(default_target(&w, &["claude".into()]), Some(Target::New { kind: "claude".into() }));
+    }
 
     #[test]
     fn agent_task_drops_spinners_and_keeps_the_task_of_a_status_title() {
