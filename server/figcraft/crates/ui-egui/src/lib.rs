@@ -41,21 +41,50 @@ pub mod layout_panel;
 pub mod list_drag;
 pub mod live;
 pub mod live_text;
+pub mod map_action_catalog;
+pub mod map_actions;
+pub mod map_navigation;
+pub mod map_shell;
 pub mod measure_overlay;
 /// The read-only map client: no layers panel, no design panels, no tools.
 static MAP_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+thread_local! { static TEST_MAP_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+#[cfg(test)]
+pub(crate) fn with_map_mode<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_MAP_MODE.with(|v| v.set(self.0));
+        }
+    }
+    let _reset = Reset(TEST_MAP_MODE.with(|v| v.replace(true)));
+    f()
+}
 
 pub fn set_map_mode(on: bool) {
     MAP_MODE.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 pub fn map_mode() -> bool {
+    #[cfg(test)]
+    if TEST_MAP_MODE.with(|v| v.get()) {
+        return true;
+    }
     MAP_MODE.load(std::sync::atomic::Ordering::Relaxed) || std::env::var_os("MINDMAP_CLIENT").is_some()
 }
 
 /// What the human may do in map mode: look, navigate, ask and comment. Every
 /// command that would edit the document is refused, not just hidden.
 fn map_command_allowed(id: &str) -> bool {
+    if matches!(
+        id,
+        "edit.undo" | "edit.redo" | "file.new" | "file.open" | "file.save" | "file.saveAs" | "file.saveVersion" | "file.close" | "plugins.runLast"
+    ) {
+        return false;
+    }
     if id.starts_with("comment.") || id.starts_with("collab.") || id.starts_with("view.") {
         return true;
     }
@@ -247,6 +276,10 @@ mod live_share_tests;
 mod live_tests;
 #[cfg(test)]
 mod live_text_tests;
+#[cfg(test)]
+mod map_shortcut_tests;
+#[cfg(test)]
+mod map_surfaces_tests;
 #[cfg(test)]
 mod menu_aim_tests;
 #[cfg(test)]
@@ -590,6 +623,8 @@ pub struct UiState {
     pub home_view: home::Home,
     /// How the window's title bar is drawn (the desktop app sets it when it opens the window).
     pub title_bar: TitleBar,
+    /// The window is in fullscreen this frame (macOS hides the traffic lights there).
+    pub fullscreen: bool,
     /// Every icon on one screen, for reviewing the set (control channel `ui.set {iconGallery}`).
     pub icon_gallery: bool,
     /// A message at the bottom of the window and how long it has been showing.
@@ -623,8 +658,6 @@ pub struct UiState {
     pub layers_seen_sel: Vec<NodeId>,
     pub dark: bool,
     pub follow_system: bool,
-    /// The window is in fullscreen this frame (macOS hides the traffic lights there).
-    pub fullscreen: bool,
     pub tool_flyout: Option<&'static str>,
     pub last_error: Option<String>,
     /// Files dropped on the home screen or the canvas, opened once their card has been on screen
@@ -741,6 +774,7 @@ impl Default for UiState {
             home: map_mode(),
             home_view: home::Home::default(),
             title_bar: TitleBar::Native,
+            fullscreen: false,
             icon_gallery: false,
             toast: None,
             present: None,
@@ -774,7 +808,6 @@ impl Default for UiState {
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
             style_picker: None,
-            fullscreen: false,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,
@@ -830,6 +863,7 @@ pub struct FigApp {
     pub active_workspace: Option<String>,
     /// The bottom comment composer in map mode.
     pub compose: compose::State,
+    pub map_shell: map_shell::State,
     /// The Sync button and widget in map mode.
     pub sync: sync::State,
     /// The bottom status bar (the worktree and Page tree).
@@ -894,6 +928,7 @@ impl FigApp {
             first_map: first_map::State::default(),
             new_page: new_page::State::default(),
             compose: compose::State::default(),
+            map_shell: map_shell::State::default(),
             sync: sync::State::default(),
             status: status_bar::State::default(),
             onboarding: onboarding::State::default(),
@@ -1602,6 +1637,10 @@ impl FigApp {
         // focus on Escape before the frame, which cancels the field's edit and nothing else).
         let typing = std::mem::take(&mut self.field_focus) || a11y::field_focused(&ctx);
         let swallowed = shortcuts::swallowed_paste(self, &ctx);
+        if map_mode {
+            map_shell::poll(self, &ctx);
+            map_actions::begin(self, &ctx, typing);
+        }
         // A dialog that closed acts first, in the window it was opened from.
         self.poll_dialog(&ctx);
         // Control requests run first so their results reflect this frame.
@@ -1655,12 +1694,19 @@ impl FigApp {
                     return;
                 }
                 workspaces::show(self, ui);
+                map_shell::poll(self, &ctx);
             } else {
                 home::show(self, ui);
             }
             // The shortcuts panel belongs to the canvas; it doesn't hang over the home screen
             // (cleared after the home widgets, which may have just asked for it).
-            self.ui.shortcuts_panel = false;
+            if map_mode {
+                shortcuts::handle(self, &ctx, typing, swallowed);
+                map_navigation::show(self, &ctx);
+                menus::popups(self, &ctx);
+            } else {
+                self.ui.shortcuts_panel = false;
+            }
             dialogs::keys(self, &ctx);
             dialogs::show(self, &ctx);
             self.toast_ui(&ctx);
@@ -1668,6 +1714,13 @@ impl FigApp {
             return;
         }
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
+        if map_mode && hidden && self.ui.mac_inset() {
+            // AppKit still owns the traffic-light band in a windowed focus view.
+            egui::Panel::top("map_focus_titlebar").exact_size(MAC_BAND).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                let rect = ui.max_rect();
+                titlebar_drag(ui, rect);
+            });
+        }
         if !hidden && !map_mode {
             egui::Panel::left("left_rail")
                 .exact_size(56.0)
@@ -1715,7 +1768,7 @@ impl FigApp {
                     right::right_panel(self, ui)
                 });
         }
-        if map_mode {
+        if map_mode && !hidden {
             let all_pages: Vec<(figcraft_doc::NodeId, String)> =
                 self.session.doc().map(|d| d.pages.iter().filter_map(|p| d.node(*p).map(|n| (*p, n.name.clone()))).collect()).unwrap_or_default();
             let current = self.session.page().ok();
@@ -1736,6 +1789,7 @@ impl FigApp {
             let inset = self.ui.mac_inset();
             let header_h = if inset { MAC_BAND } else { 44.0 };
             egui::Panel::top("map_header").exact_size(header_h).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                a11y::region(&mut self.ui.nav, ui, a11y::Region::Toolbar, egui::accesskit::Role::Navigation, "Pages");
                 let rect = ui.max_rect();
                 ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
                 if self.ui.title_bar != TitleBar::Native {
@@ -1798,7 +1852,7 @@ impl FigApp {
                 });
             });
         }
-        if map_mode {
+        if map_mode && !hidden {
             // A root page has no path to show: the strip exists only while a subpage is open.
             let breadcrumb: Vec<(figcraft_doc::NodeId, String)> = self
                 .session
@@ -1853,7 +1907,7 @@ impl FigApp {
                 }
             }
         }
-        if map_mode && self.ws.pane_open {
+        if map_mode && !hidden && self.ws.pane_open {
             egui::Panel::left("workspace_pane")
                 .exact_size(300.0)
                 .resizable(false)
@@ -1877,6 +1931,7 @@ impl FigApp {
         });
         if map_mode {
             // The human comment surface: one bar at the bottom of the map.
+            map_shell::poll(self, &ctx);
             compose::show(self, &ctx);
             // The Sync button and widget, beside the map bar and above the composer.
             sync::show(self, &ctx);
@@ -1889,6 +1944,7 @@ impl FigApp {
             page_delete::show(self, &ctx);
             page_tree::show(self, &ctx);
             page_tree::maintain(self, &ctx);
+            map_navigation::show(self, &ctx);
         }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {

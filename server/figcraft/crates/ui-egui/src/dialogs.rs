@@ -59,6 +59,8 @@ pub(crate) fn window<'a>(title: &'a str, ctx: &Context) -> egui::Window<'a> {
 pub(crate) fn floating<'a>(title: &'a str, ctx: &Context) -> egui::Window<'a> {
     let t = Tokens::get(ctx);
     egui::Window::new(title)
+        // The map composer is a foreground Area; dialogs must appear above it.
+        .order(if crate::map_mode() { egui::Order::Foreground } else { egui::Order::Middle })
         .collapsible(false)
         .resizable(false)
         .frame(egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::same(20)))
@@ -360,7 +362,9 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::variables_panel::show(app, ctx);
     crate::dev_compare::show(app, ctx);
     crate::branch_ui::show(app, ctx);
-    if app.ui.export_preview {
+    if crate::map_mode() {
+        crate::export_panel::map_dialog(app, ctx);
+    } else if app.ui.export_preview {
         export_dialog(app, ctx);
     }
     color_profile_dialog(app, ctx);

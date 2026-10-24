@@ -113,6 +113,20 @@ pub fn record_recent(app: &mut FigApp, key: &str) {
 }
 
 pub fn invoke(app: &mut FigApp, id: &str) {
+    if crate::map_mode() {
+        if let Some(id) = map_action_id(id)
+            && let Some(ctx) = app.ui_context.clone()
+        {
+            crate::map_actions::run(app, &ctx, id);
+        }
+        return;
+    }
+    invoke_legacy(app, id);
+}
+
+/// Raw UI implementations for the map dispatcher (PNG export, preferences, etc.). This must
+/// never route back through `map_actions::run`; `invoke` is the user-facing entry point.
+pub(crate) fn invoke_legacy(app: &mut FigApp, id: &str) {
     match id {
         // Edit ▸ Delete (and the Delete binding) with an interaction open in the Prototype tab
         // removes that interaction, not the layer (#767).
@@ -734,6 +748,10 @@ const TOP_MENUS: &[&str] = &[
 ];
 
 pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
+    if crate::map_mode() {
+        map_popups(app, ctx);
+        return;
+    }
     let t = Tokens::get(ctx);
     // A closed menu forgets its open submenus (and a context menu opened somewhere else starts
     // afresh), so neither reopens with a stale submenu showing.
@@ -793,132 +811,125 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
         a11y::context_menu(app, ctx);
     }
     if let Some((pos, ids)) = app.ui.context_menu.clone() {
-        if crate::map_mode() {
-            // The human's map: Copy and Comment, never the editor's tools.
-            crate::compose::context_menu(app, ctx, pos);
-        } else {
-            if let Some(f) = ctx.memory(|m| m.focused()) {
-                a11y::popup(&mut app.ui.nav, f, Id::new("ctx_menu"));
-            }
-            let mut close = false;
-            let area = egui::Area::new(ctx_menu_id()).fixed_pos(pos).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
-                menu_frame(ui, &t, At { root: ctx_menu_id(), path: String::new() }, |ui| {
-                    if select_layer_menu(app, ui, pos, &t) {
-                        close = true;
-                    }
-                    let has_sel = !ids.is_empty();
-                    // Sections in the selection add a contents toggle naming what it will do.
-                    let section_toggle = app.session.doc().ok().and_then(|doc| {
-                        let secs: Vec<bool> = ids
-                            .iter()
-                            .filter_map(|i| doc.node(*i))
-                            .filter(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. }))
-                            .map(|n| n.hides_contents())
-                            .collect();
-                        (!secs.is_empty()).then(|| if secs.iter().all(|h| *h) { tr("Show section contents") } else { tr("Hide section contents") })
-                    });
-                    // Frames on the page (or in a section) convert to sections, and sections to frames.
-                    let convert = app.session.doc().ok().and_then(|doc| {
-                        let nodes: Vec<_> = ids.iter().filter_map(|i| doc.node(*i)).collect();
-                        let on_board = |n: &figcraft_doc::Node| {
-                            n.parent
-                                .and_then(|p| doc.node(p))
-                                .is_some_and(|p| p.is_page() || matches!(p.kind, figcraft_doc::NodeKind::Section { .. }))
-                        };
-                        if nodes.is_empty() {
-                            None
-                        } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. })) {
-                            Some((tr("Convert to frame"), "object.convertToFrame"))
-                        } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame) && on_board(n)) {
-                            Some((tr("Convert to section"), "object.convertToSection"))
-                        } else {
-                            None
-                        }
-                    });
-                    let mut entries: Vec<(&str, &str)> = if has_sel {
-                        vec![
-                            (tr("Copy"), "edit.copy"),
-                            (tr("Paste here"), "edit.paste"),
-                            (tr("Paste to replace"), "edit.pasteReplace"),
-                            ("-", ""),
-                            (tr("Bring to front"), "arrange.front"),
-                            (tr("Bring forward"), "arrange.forward"),
-                            (tr("Send backward"), "arrange.backward"),
-                            (tr("Send to back"), "arrange.back"),
-                            ("-", ""),
-                            (tr("Group selection"), "object.group"),
-                            (tr("Frame selection"), "object.frameSelection"),
-                            (tr("Wrap in new section"), "object.wrapInSection"),
-                            (tr("Ungroup"), "object.ungroup"),
-                            (tr("Flatten"), "vector.flatten"),
-                            (tr("Outline stroke"), "vector.outlineStroke"),
-                            (tr("Use as mask"), "object.mask"),
-                            ("-", ""),
-                            (tr("Add auto layout"), "layout.add"),
-                            (tr("Create component"), "component.create"),
-                            (tr("Detach instance"), "component.detach"),
-                            ("-", ""),
-                            (tr("Show/Hide"), "object.toggleVisible"),
-                            (tr("Lock/Unlock"), "object.toggleLock"),
-                            ("-", ""),
-                            (tr("Flip horizontal"), "object.flipH"),
-                            (tr("Flip vertical"), "object.flipV"),
-                            ("-", ""),
-                            (tr("Copy as CSS"), "edit.copyAsCss"),
-                            (tr("Copy as SVG"), "edit.copyAsSvg"),
-                            (tr("Copy as PNG"), "edit.copyAsPng"),
-                            ("-", ""),
-                            (tr("Delete"), "edit.delete"),
-                        ]
-                    } else {
-                        vec![
-                            (tr("Paste here"), "edit.paste"),
-                            ("-", ""),
-                            (tr("Select all"), "select.all"),
-                            ("-", ""),
-                            (tr("Show/Hide UI"), "view.toggleUi"),
-                            (tr("Zoom to fit"), "view.zoomFit"),
-                            (tr("Rulers"), "view.rulers"),
-                            (tr("Pixel grid"), "view.pixelGrid"),
-                        ]
+        if let Some(f) = ctx.memory(|m| m.focused()) {
+            a11y::popup(&mut app.ui.nav, f, Id::new("ctx_menu"));
+        }
+        let mut close = false;
+        let area = egui::Area::new(ctx_menu_id()).fixed_pos(pos).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
+            menu_frame(ui, &t, At { root: ctx_menu_id(), path: String::new() }, |ui| {
+                if select_layer_menu(app, ui, pos, &t) {
+                    close = true;
+                }
+                let has_sel = !ids.is_empty();
+                // Sections in the selection add a contents toggle naming what it will do.
+                let section_toggle = app.session.doc().ok().and_then(|doc| {
+                    let secs: Vec<bool> = ids
+                        .iter()
+                        .filter_map(|i| doc.node(*i))
+                        .filter(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. }))
+                        .map(|n| n.hides_contents())
+                        .collect();
+                    (!secs.is_empty()).then(|| if secs.iter().all(|h| *h) { tr("Show section contents") } else { tr("Hide section contents") })
+                });
+                // Frames on the page (or in a section) convert to sections, and sections to frames.
+                let convert = app.session.doc().ok().and_then(|doc| {
+                    let nodes: Vec<_> = ids.iter().filter_map(|i| doc.node(*i)).collect();
+                    let on_board = |n: &figcraft_doc::Node| {
+                        n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.is_page() || matches!(p.kind, figcraft_doc::NodeKind::Section { .. }))
                     };
-                    if let Some(label) = section_toggle
-                        && let Some(at) = entries.iter().position(|e| e.1 == "object.toggleLock")
-                    {
-                        entries.insert(at + 1, (label, "section.toggleContents"));
-                    }
-                    if let Some(entry) = convert
-                        && let Some(at) = entries.iter().position(|e| e.1 == "object.wrapInSection")
-                    {
-                        entries.insert(at + 1, entry);
-                    }
-                    // A right-clicked ruler guide (selected, with no layers) can be removed.
-                    if !has_sel && app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
-                        entries.splice(0..0, [(tr("Remove guide"), "guide.remove"), ("-", "")]);
-                    }
-                    for (label, id) in &entries {
-                        if *label == "-" {
-                            separator(ui);
-                            continue;
-                        }
-                        let sc = crate::shortcuts::shortcut(id).unwrap_or("");
-                        if item(ui, label, sc, available(id), false, &t) {
-                            if *id == "edit.paste" {
-                                let p = app.to_page(pos);
-                                paste(app, None, Some((p.x, p.y)));
-                            } else {
-                                invoke(app, id);
-                            }
-                            close = true;
-                        }
+                    if nodes.is_empty() {
+                        None
+                    } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Section { .. })) {
+                        Some((tr("Convert to frame"), "object.convertToFrame"))
+                    } else if nodes.iter().all(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame) && on_board(n)) {
+                        Some((tr("Convert to section"), "object.convertToSection"))
+                    } else {
+                        None
                     }
                 });
+                let mut entries: Vec<(&str, &str)> = if has_sel {
+                    vec![
+                        (tr("Copy"), "edit.copy"),
+                        (tr("Paste here"), "edit.paste"),
+                        (tr("Paste to replace"), "edit.pasteReplace"),
+                        ("-", ""),
+                        (tr("Bring to front"), "arrange.front"),
+                        (tr("Bring forward"), "arrange.forward"),
+                        (tr("Send backward"), "arrange.backward"),
+                        (tr("Send to back"), "arrange.back"),
+                        ("-", ""),
+                        (tr("Group selection"), "object.group"),
+                        (tr("Frame selection"), "object.frameSelection"),
+                        (tr("Wrap in new section"), "object.wrapInSection"),
+                        (tr("Ungroup"), "object.ungroup"),
+                        (tr("Flatten"), "vector.flatten"),
+                        (tr("Outline stroke"), "vector.outlineStroke"),
+                        (tr("Use as mask"), "object.mask"),
+                        ("-", ""),
+                        (tr("Add auto layout"), "layout.add"),
+                        (tr("Create component"), "component.create"),
+                        (tr("Detach instance"), "component.detach"),
+                        ("-", ""),
+                        (tr("Show/Hide"), "object.toggleVisible"),
+                        (tr("Lock/Unlock"), "object.toggleLock"),
+                        ("-", ""),
+                        (tr("Flip horizontal"), "object.flipH"),
+                        (tr("Flip vertical"), "object.flipV"),
+                        ("-", ""),
+                        (tr("Copy as CSS"), "edit.copyAsCss"),
+                        (tr("Copy as SVG"), "edit.copyAsSvg"),
+                        (tr("Copy as PNG"), "edit.copyAsPng"),
+                        ("-", ""),
+                        (tr("Delete"), "edit.delete"),
+                    ]
+                } else {
+                    vec![
+                        (tr("Paste here"), "edit.paste"),
+                        ("-", ""),
+                        (tr("Select all"), "select.all"),
+                        ("-", ""),
+                        (tr("Show/Hide UI"), "view.toggleUi"),
+                        (tr("Zoom to fit"), "view.zoomFit"),
+                        (tr("Rulers"), "view.rulers"),
+                        (tr("Pixel grid"), "view.pixelGrid"),
+                    ]
+                };
+                if let Some(label) = section_toggle
+                    && let Some(at) = entries.iter().position(|e| e.1 == "object.toggleLock")
+                {
+                    entries.insert(at + 1, (label, "section.toggleContents"));
+                }
+                if let Some(entry) = convert
+                    && let Some(at) = entries.iter().position(|e| e.1 == "object.wrapInSection")
+                {
+                    entries.insert(at + 1, entry);
+                }
+                // A right-clicked ruler guide (selected, with no layers) can be removed.
+                if !has_sel && app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
+                    entries.splice(0..0, [(tr("Remove guide"), "guide.remove"), ("-", "")]);
+                }
+                for (label, id) in &entries {
+                    if *label == "-" {
+                        separator(ui);
+                        continue;
+                    }
+                    let sc = crate::shortcuts::shortcut(id).unwrap_or("");
+                    if item(ui, label, sc, available(id), false, &t) {
+                        if *id == "edit.paste" {
+                            let p = app.to_page(pos);
+                            paste(app, None, Some((p.x, p.y)));
+                        } else {
+                            invoke(app, id);
+                        }
+                        close = true;
+                    }
+                }
             });
-            let clicked_outside = ctx.input(|i| i.pointer.any_pressed()) && !area.response.hovered() && !over_menu(ctx);
-            if close || clicked_outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                app.ui.context_menu = None;
-                forget_tree(ctx, ctx_menu_id());
-            }
+        });
+        let clicked_outside = ctx.input(|i| i.pointer.any_pressed()) && !area.response.hovered() && !over_menu(ctx);
+        if close || clicked_outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.ui.context_menu = None;
+            forget_tree(ctx, ctx_menu_id());
         }
     }
     crate::colorpicker::show(app, ctx);
@@ -998,6 +1009,10 @@ pub fn toggle_palette(ui: &mut crate::UiState) {
 /// sections, floating above the toolbar. Rows run on click; Up and Down move the highlight and
 /// Enter runs the highlighted row.
 fn palette(app: &mut FigApp, ctx: &egui::Context) {
+    if crate::map_mode() {
+        map_palette(app, ctx);
+        return;
+    }
     let Some(mut q) = app.ui.palette.clone() else { return };
     let t = Tokens::get(ctx);
     // Same centre and width as the toolbar pill (it centres on the canvas, not the window),
@@ -1121,6 +1136,9 @@ fn palette(app: &mut FigApp, ctx: &egui::Context) {
 /// The rows a palette tab shows for the query, by section: All has Recents, the commands by menu,
 /// then plugins and widgets; Assets this file's components and styles; Plugins & widgets those.
 pub(crate) fn palette_sections(app: &FigApp, q: &str, tab: PaletteTab) -> Vec<(String, Vec<ActionRow>)> {
+    if crate::map_mode() {
+        return map_command_sections(q);
+    }
     let mut out = match tab {
         PaletteTab::All => {
             let recents = app.session.prefs.recent_actions.iter().filter_map(|key| recent_row(app, key, q)).collect();
@@ -1142,6 +1160,12 @@ pub(crate) fn palette_sections(app: &FigApp, q: &str, tab: PaletteTab) -> Vec<(S
 /// Run a palette row: `command:<id>`, `plugin:<plugin>/<command>`, `widget:<plugin>`,
 /// `component:<node>` or `style:<id>`.
 pub(crate) fn run_action(app: &mut FigApp, key: &str) {
+    if crate::map_mode() {
+        if let Some(ctx) = app.ui_context.clone() {
+            activate_map_action(app, &ctx, key.strip_prefix("command:").unwrap_or(key));
+        }
+        return;
+    }
     if let Some(id) = key.strip_prefix("command:") {
         record_recent(app, key);
         invoke(app, id);
@@ -1225,6 +1249,9 @@ const MAX_HITS: usize = 60;
 /// group placed by its best row. Labels match in the UI language and in English. The Plugins
 /// menu's items come with the plugins ([`plugin_rows`]).
 pub(crate) fn command_sections(q: &str) -> Vec<(String, Vec<ActionRow>)> {
+    if crate::map_mode() {
+        return map_command_sections(q);
+    }
     let ql = q.trim().to_lowercase();
     let mut menu_of = std::collections::HashMap::new();
     for m in MENU.iter().filter(|m| m.label != SEP) {
@@ -1341,6 +1368,11 @@ fn asset_sections(app: &FigApp, q: &str) -> Vec<(String, Vec<ActionRow>)> {
 
 /// A recent action back as a row (gone commands, plugins or assets drop out).
 pub(crate) fn recent_row(app: &FigApp, key: &str, q: &str) -> Option<ActionRow> {
+    if crate::map_mode() {
+        let id = key.strip_prefix("command:").unwrap_or(key);
+        let action = crate::map_action_catalog::search(q, crate::shortcuts::platform()).into_iter().find(|a| a.id == id)?;
+        return Some(map_action_row(action));
+    }
     let ql = q.to_lowercase();
     if let Some(id) = key.strip_prefix("command:") {
         let spec = figcraft_engine::find_command(id);
@@ -1375,4 +1407,268 @@ pub(crate) fn recent_row(app: &FigApp, key: &str, q: &str) -> Option<ActionRow> 
         });
     }
     None
+}
+
+/// Legacy menu callers share the map vocabulary. Unknown/editor IDs never enter map dispatch.
+pub(crate) fn map_action_id(id: &str) -> Option<&'static str> {
+    if let Some(action) = crate::map_action_catalog::find(id) {
+        return Some(action.id);
+    }
+    Some(match id {
+        "app.actions" => "map.actions",
+        "help.shortcuts" => "map.help",
+        "edit.findReplace" => "map.search",
+        "file.open" | "file.openRecent" => "map.openWorkspace",
+        "file.new" => "map.newWorkspace",
+        "file.save" => "map.save",
+        "file.close" => "map.close",
+        "app.preferences" => "map.preferences",
+        "view.toggleUi" => "map.focusMode",
+        "view.fullscreen" => "map.fullscreen",
+        "page.select" => "map.pageTree",
+        "page.previous" | "view.prevPage" => "map.previousPage",
+        "page.next" | "view.nextPage" => "map.nextPage",
+        "view.leftSidebar" => "map.workspacePane",
+        "view.comments" => "map.comments",
+        "view.multiplayerCursors" => "map.cursors",
+        "view.nextRegion" => "map.nextRegion",
+        "view.previousRegion" => "map.previousRegion",
+        "app.contextMenu" | "view.contextMenu" => "map.contextMenu",
+        "view.zoomIn" => "map.zoomIn",
+        "view.zoomOut" => "map.zoomOut",
+        "view.zoom100" => "map.zoom100",
+        "view.zoomFit" => "map.zoomFit",
+        "view.zoomSelection" => "map.zoomSelection",
+        "select.all" => "map.selectAll",
+        "select.none" => "map.selectNone",
+        "select.children" => "map.openDetail",
+        "select.parent" => "map.parentPage",
+        "select.next" => "map.nextCard",
+        "select.previous" => "map.previousCard",
+        "select.area" => "map.selectArea",
+        "edit.copy" | "edit.copyAsText" => "map.copy",
+        "edit.copyAsPng" => "map.copyImage",
+        "file.export" => "map.export",
+        // Undo/redo, tools, mutations and plugins are deliberately not aliases.
+        _ => return None,
+    })
+}
+
+fn map_action_row(action: &crate::map_action_catalog::Action) -> ActionRow {
+    ActionRow {
+        key: format!("command:{}", action.id),
+        label: action.label.to_string(),
+        hint: figcraft_engine::keymap::display(action.keys(crate::shortcuts::platform()), crate::shortcuts::platform()),
+        tile: None,
+    }
+}
+
+pub(crate) fn map_command_sections(query: &str) -> Vec<(String, Vec<ActionRow>)> {
+    let mut sections: Vec<(String, Vec<ActionRow>)> = Vec::new();
+    for action in crate::map_action_catalog::search(query, crate::shortcuts::platform()) {
+        let row = map_action_row(action);
+        if let Some((_, rows)) = sections.iter_mut().find(|(group, _)| group == action.group) {
+            rows.push(row);
+        } else {
+            sections.push((action.group.to_string(), vec![row]));
+        }
+    }
+    sections
+}
+
+/// Both mouse and keyboard activation pass this guard before dispatch. The palette's Enter is
+/// consumed before it reaches the search field, and no event is forwarded to the composer.
+pub(crate) fn activate_map_action(app: &mut FigApp, ctx: &egui::Context, id: &str) -> bool {
+    let Some(action) = crate::map_action_catalog::find(id) else { return false };
+    if !crate::map_action_catalog::enabled(app, action) {
+        return false;
+    }
+    app.ui.palette = None;
+    if let Some(focus) = ctx.memory(|m| m.focused()) {
+        ctx.memory_mut(|m| m.surrender_focus(focus));
+    }
+    let ran = crate::map_actions::run(app, ctx, action.id);
+    if ran {
+        record_recent(app, &format!("command:{}", action.id));
+    }
+    ran
+}
+
+pub(crate) fn map_palette(app: &mut FigApp, ctx: &egui::Context) {
+    let Some(mut query) = app.ui.palette.clone() else { return };
+    let t = Tokens::get(ctx);
+    let (step, enter, escape) = ctx.input_mut(|i| {
+        (
+            i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as i64
+                - i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as i64,
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+        )
+    });
+    let pressed = ctx.input(|i| i.pointer.any_pressed());
+    let armed = std::mem::replace(&mut app.ui.palette_armed, false);
+    let mut picked = None;
+    let search_id = Id::new("map_action_search");
+    let area = egui::Area::new(Id::new("palette")).anchor(Align2::CENTER_TOP, vec2(0.0, 80.0)).order(egui::Order::Foreground).constrain(true).show(
+        ctx,
+        |ui| {
+            egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(12)).inner_margin(12).show(
+                ui,
+                |ui| {
+                    ui.set_width((ctx.content_rect().width() - 48.0).clamp(260.0, 650.0));
+                    let response =
+                        ui.add(egui::TextEdit::singleline(&mut query).id(search_id).hint_text("Search Mindmap actions").desired_width(f32::INFINITY));
+                    response.request_focus();
+                    if response.changed() {
+                        app.ui.palette_hi = 0;
+                    }
+                    let sections = map_command_sections(&query);
+                    let count: usize = sections.iter().map(|(_, rows)| rows.len()).sum();
+                    let hi = (app.ui.palette_hi as i64 + step).clamp(0, count.saturating_sub(1) as i64) as usize;
+                    app.ui.palette_hi = hi;
+                    if count == 0 {
+                        ui.label("No map actions match");
+                    }
+                    egui::ScrollArea::vertical()
+                        .max_height((ctx.content_rect().height() - 200.0).clamp(100.0, 460.0))
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let mut index = 0;
+                            for (group, rows) in &sections {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new(group).small().color(t.text_secondary));
+                                for row in rows {
+                                    let Some(action) = row.key.strip_prefix("command:").and_then(crate::map_action_catalog::find) else { continue };
+                                    let enabled = crate::map_action_catalog::enabled(app, action);
+                                    let hint = if action.keys(crate::shortcuts::platform()).is_empty() { "Actions palette" } else { &row.hint };
+                                    let text = format!("{}    {}\n{}", action.label, hint, action.scope);
+                                    let response = ui.add_enabled(
+                                        enabled,
+                                        egui::Button::new(text).selected(index == hi).wrap().min_size(vec2(ui.available_width(), 48.0)),
+                                    );
+                                    if response.clicked() || (enter && index == hi && enabled) {
+                                        picked = Some(action.id);
+                                    }
+                                    if step != 0 && index == hi {
+                                        response.scroll_to_me(None);
+                                    }
+                                    index += 1;
+                                }
+                            }
+                        });
+                    ui.label(
+                        egui::RichText::new("↑ ↓ Choose   Enter Run   Esc Close · Text actions require their own field")
+                            .small()
+                            .color(t.text_secondary),
+                    );
+                },
+            );
+        },
+    );
+    let on_toggle = app.ui.actions_rect.is_some_and(|rect| ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| rect.contains(p))));
+    let outside = pressed && !armed && !on_toggle && !area.response.contains_pointer();
+    if escape || outside {
+        app.ui.palette = None;
+        ctx.memory_mut(|m| m.surrender_focus(search_id));
+    } else if let Some(id) = picked {
+        activate_map_action(app, ctx, id);
+    } else {
+        app.ui.palette = Some(query);
+    }
+}
+
+fn map_popups(app: &mut FigApp, ctx: &egui::Context) {
+    if app.ui.main_menu {
+        let mut picked = None;
+        let area = egui::Area::new(main_menu_id()).fixed_pos(pos2(8.0, crate::tabs::HEIGHT + 48.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                for (group, rows) in map_command_sections("") {
+                    ui.menu_button(group, |ui| {
+                        for row in rows {
+                            let Some(action) = row.key.strip_prefix("command:").and_then(crate::map_action_catalog::find) else { continue };
+                            if ui
+                                .add_enabled(crate::map_action_catalog::enabled(app, action), egui::Button::new(action.label).shortcut_text(row.hint))
+                                .on_hover_text(action.scope)
+                                .clicked()
+                            {
+                                picked = Some(action.id);
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            });
+        });
+        if let Some(id) = picked {
+            app.ui.main_menu = false;
+            crate::map_actions::run(app, ctx, id);
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            || (ctx.input(|i| i.pointer.any_pressed()) && !area.response.contains_pointer() && !egui::Popup::is_any_open(ctx))
+        {
+            app.ui.main_menu = false;
+        }
+    }
+    if std::mem::take(&mut app.ui.key_menu) {
+        a11y::context_menu(app, ctx);
+    }
+    if let Some((pos, _)) = app.ui.context_menu.clone() {
+        map_context_menu(app, ctx, pos);
+    }
+    map_palette(app, ctx);
+}
+
+pub(crate) const MAP_CONTEXT_ACTIONS: &[&str] =
+    &["map.copy", "map.copyImage", "map.focusComposer", "map.openDetail", "map.zoomSelection", "map.parentPage"];
+
+/// The keyboard and pointer open the same map action menu; no editor menu is ever constructed.
+pub(crate) fn map_context_menu(app: &mut FigApp, ctx: &egui::Context, pos: egui::Pos2) {
+    let state_id = Id::new("map_context_highlight");
+    let seen_id = Id::new("map_context_position");
+    let previous = ctx.data(|d| d.get_temp::<egui::Pos2>(seen_id));
+    let mut hi = if previous == Some(pos) { ctx.data(|d| d.get_temp::<usize>(state_id)).unwrap_or(0) } else { 0 };
+    let (step, enter, escape) = ctx.input_mut(|i| {
+        (
+            i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as i64
+                - i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as i64,
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+        )
+    });
+    hi = (hi as i64 + step).clamp(0, MAP_CONTEXT_ACTIONS.len().saturating_sub(1) as i64) as usize;
+    let mut picked = None;
+    let area = egui::Area::new(Id::new("map_context_menu")).fixed_pos(pos).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.set_min_width(240.0);
+            for (index, id) in MAP_CONTEXT_ACTIONS.iter().enumerate() {
+                let Some(action) = crate::map_action_catalog::find(id) else { continue };
+                let enabled = crate::map_action_catalog::enabled(app, action);
+                let hint = figcraft_engine::keymap::display(action.keys(crate::shortcuts::platform()), crate::shortcuts::platform());
+                let response = ui.add_enabled(
+                    enabled,
+                    egui::Button::new(action.label).shortcut_text(hint).selected(index == hi).min_size(vec2(ui.available_width(), 28.0)),
+                );
+                if response.clicked() || (enter && index == hi && enabled) {
+                    picked = Some(action.id);
+                }
+                response.on_hover_text(action.scope);
+            }
+        });
+    });
+    ctx.data_mut(|d| {
+        d.insert_temp(state_id, hi);
+        d.insert_temp(seen_id, pos);
+    });
+    let outside = ctx.input(|i| i.pointer.any_pressed()) && !area.response.contains_pointer();
+    if let Some(id) = picked {
+        app.ui.context_menu = None;
+        crate::map_actions::run(app, ctx, id);
+    } else if escape || outside {
+        app.ui.context_menu = None;
+    }
+    if app.ui.context_menu.is_none() {
+        ctx.data_mut(|d| {
+            d.remove::<usize>(state_id);
+            d.remove::<egui::Pos2>(seen_id);
+        });
+    }
 }

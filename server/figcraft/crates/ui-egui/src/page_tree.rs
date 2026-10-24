@@ -194,7 +194,7 @@ pub fn maintain(app: &mut FigApp, ctx: &egui::Context) {
 
 /// The centered page tree popover and its shortcut.
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
-    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P)) {
+    if !crate::map_mode() && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P)) {
         app.page_tree.open = true;
         app.page_tree.just_opened = true;
     }

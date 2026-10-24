@@ -57,8 +57,8 @@ impl Region {
         Self::ALL.into_iter().find(|r| r.id().eq_ignore_ascii_case(s))
     }
 
-    fn index(self) -> usize {
-        self as usize
+    fn order() -> [Region; 4] {
+        if crate::map_mode() { [Region::Layers, Region::Toolbar, Region::Canvas, Region::Properties] } else { Self::ALL }
     }
 
     /// This region's entry of a per-region array.
@@ -140,15 +140,15 @@ impl Nav {
         self.pending = Some(Move::To(region));
     }
 
-    /// The region the point `p` is in (the toolbar floats over the canvas; the side panels scroll,
-    /// so a control scrolled below a panel's bottom still belongs to it).
+    /// The region the point `p` is in. Editor side panels own scrolled controls below their
+    /// bounds; map workspace/composer regions own only their actual rectangles.
     fn region_at(&self, p: Pos2) -> Option<Region> {
         let rect = |r: Region| *r.of(&self.last.rects);
         if rect(Region::Toolbar).is_some_and(|r| r.contains(p)) {
             return Some(Region::Toolbar);
         }
         for r in [Region::Layers, Region::Properties] {
-            if rect(r).is_some_and(|rect| rect.x_range().contains(p.x) && p.y >= rect.min.y) {
+            if rect(r).is_some_and(|rect| if crate::map_mode() { rect.contains(p) } else { rect.x_range().contains(p.x) && p.y >= rect.min.y }) {
                 return Some(r);
             }
         }
@@ -305,7 +305,7 @@ fn keys(app: &mut FigApp, ctx: &Context) {
         nav.keyboard = false;
         nav.opener = None;
         nav.refocus = 0;
-        if ctx.layer_id_at(p).is_none_or(|l| l == LayerId::background())
+        if ctx.layer_id_at(p).is_none_or(region_layer)
             && let Some(r) = nav.region_at(p)
         {
             nav.region = r;
@@ -313,16 +313,16 @@ fn keys(app: &mut FigApp, ctx: &Context) {
     }
     let focused = ctx.memory(|m| m.focused());
     let widget = focused.and_then(|id| last_widget(ctx, id));
-    let on_background = widget.is_none_or(|w| w.layer_id == LayerId::background());
+    let in_region_layer = widget.is_none_or(|w| region_layer(w.layer_id));
     // The control with the keyboard decides the region (a click into a field, a Tab in a panel);
     // a press elsewhere takes the keyboard from it later this frame.
-    if let Some(w) = widget.filter(|_| on_background && press.is_none())
+    if let Some(w) = widget.filter(|_| in_region_layer && press.is_none())
         && let Some(r) = app.ui.nav.region_at(w.rect.center())
     {
         app.ui.nav.region = r;
     }
     // Dialogs, the Actions palette and the presenter keep egui's own keyboard handling.
-    if blocked(app) {
+    if blocked(app, ctx) {
         app.ui.nav.pending = None;
         return;
     }
@@ -342,7 +342,7 @@ fn keys(app: &mut FigApp, ctx: &Context) {
         return;
     }
     popups(app, ctx, focused, widget);
-    if !on_background {
+    if !in_region_layer {
         return;
     }
     let region = app.ui.nav.region;
@@ -431,7 +431,12 @@ fn keys(app: &mut FigApp, ctx: &Context) {
     {
         // From the keyboard the canvas takes it; after the pointer (Escape in a field) only the
         // region changes.
-        if app.ui.nav.keyboard {
+        if crate::map_mode() {
+            // Returning from a map region is the entire Escape action. Do not let the later
+            // map shortcut pass also clear the selected cards (and their comment context).
+            ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
+            enter(app, ctx, Region::Canvas);
+        } else if app.ui.nav.keyboard {
             enter(app, ctx, Region::Canvas);
         } else {
             app.ui.nav.region = Region::Canvas;
@@ -453,9 +458,16 @@ fn binding_pressed(ctx: &Context, ids: &[&str]) -> Option<(&'static str, Key, Mo
     ctx.input(|i| {
         i.events.iter().find_map(|e| match e {
             Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
-                crate::shortcuts::lookup(keymap::Context::Canvas, *key, *physical_key, *modifiers)
-                    .filter(|b| ids.contains(&b.id))
-                    .map(|b| (b.id, *key, *modifiers))
+                let id = if crate::map_mode() {
+                    match crate::map_actions::lookup(crate::shortcuts::platform(), *key, *physical_key, *modifiers)?.id {
+                        "map.nextRegion" => NEXT_REGION,
+                        "map.previousRegion" => PREVIOUS_REGION,
+                        _ => return None,
+                    }
+                } else {
+                    crate::shortcuts::lookup(keymap::Context::Canvas, *key, *physical_key, *modifiers)?.id
+                };
+                ids.contains(&id).then_some((id, *key, *modifiers))
             }
             _ => None,
         })
@@ -510,6 +522,9 @@ pub fn end(app: &mut FigApp, ctx: &Context) {
     if !menus_open(app) {
         app.ui.nav.next.popup = None;
     }
+    if crate::map_mode() && blocked(app, ctx) {
+        return;
+    }
     let nav = &mut app.ui.nav;
     if nav.refocus > 0 {
         nav.refocus -= 1;
@@ -527,9 +542,10 @@ pub fn end(app: &mut FigApp, ctx: &Context) {
 }
 
 /// Dialogs, the palette, the presenter and the home screen have no regions.
-fn blocked(app: &FigApp) -> bool {
+fn blocked(app: &FigApp, ctx: &Context) -> bool {
     let u = &app.ui;
-    u.palette.is_some()
+    (crate::map_mode() && crate::map_actions::overlay_open(app, ctx))
+        || u.palette.is_some()
         || u.about
         || u.preferences
         || u.variables.is_some()
@@ -550,8 +566,9 @@ fn menus_open(app: &FigApp) -> bool {
 fn next_region(nav: &Nav, step: i32) -> Region {
     // A full turn at most each way.
     let step = step.clamp(-4, 4);
-    let n = Region::ALL.len() as i32;
-    let cur = nav.region.index() as i32;
+    let order = Region::order();
+    let n = order.len() as i32;
+    let cur = order.iter().position(|region| *region == nav.region).unwrap_or_default() as i32;
     let dir = step.signum();
     let mut i = cur;
     let mut left = step.abs();
@@ -560,11 +577,20 @@ fn next_region(nav: &Nav, step: i32) -> Region {
             break;
         }
         i = (i + dir).rem_euclid(n);
-        if Region::ALL.get(i as usize).is_some_and(|r| nav.shown(*r)) {
+        if order.get(i as usize).is_some_and(|r| nav.shown(*r)) {
             left -= 1;
         }
     }
-    Region::ALL.get(i as usize).copied().unwrap_or_default()
+    order.get(i as usize).copied().unwrap_or_default()
+}
+
+fn composer_layer() -> LayerId {
+    LayerId::new(Order::Foreground, Id::new("map_composer"))
+}
+
+/// The map composer floats over the canvas but participates in ordinary region navigation.
+fn region_layer(layer: LayerId) -> bool {
+    layer == LayerId::background() || (crate::map_mode() && layer == composer_layer())
 }
 
 /// Give `region` the keyboard: the canvas, or the region's preferred control, else its first.
@@ -647,16 +673,19 @@ fn step_within(app: &mut FigApp, ctx: &Context, region: Region, step: i32) {
 fn focusables(ctx: &Context, nav: &Nav, region: Region) -> Vec<(Id, Rect)> {
     let canvas = nav.last.canvas;
     let edges = [Id::new("left_panel").with("__resize"), Id::new("right_panel").with("__resize")];
+    let layer = if crate::map_mode() && region == Region::Properties { composer_layer() } else { LayerId::background() };
+    let area_background = layer.id.with("move");
     ctx.viewport(|v| {
         v.prev_pass
             .widgets
-            .get_layer(LayerId::background())
+            .get_layer(layer)
             .filter(|w| {
                 w.enabled
                     && w.sense.is_focusable()
                     && w.rect.is_positive()
                     && w.rect.is_finite()
                     && Some(w.id) != canvas
+                    && (!crate::map_mode() || w.id != area_background)
                     && !edges.contains(&w.id)
                     && nav.region_at(w.rect.center()) == Some(region)
             })
@@ -698,7 +727,7 @@ fn popups(app: &mut FigApp, ctx: &Context, focused: Option<Id>, widget: Option<e
     if !nav.keyboard {
         return;
     }
-    let Some(f) = focused.filter(|_| widget.is_some_and(|w| w.layer_id == LayerId::background())) else { return };
+    let Some(f) = focused.filter(|_| widget.is_some_and(|w| region_layer(w.layer_id))) else { return };
     let layer = match nav.last.popup {
         Some((opener, area)) if opener == f => LayerId::new(Order::Foreground, area),
         _ => {
@@ -1018,5 +1047,148 @@ impl Tip for Response {
         self.on_hover_ui(move |ui| {
             ui.label(tip.as_ref());
         })
+    }
+}
+
+#[cfg(test)]
+mod map_region_tests {
+    use super::*;
+    use figcraft_engine::Session;
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
+    }
+
+    fn press(key: Key, modifiers: Modifiers) -> Vec<Event> {
+        vec![
+            Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+            Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+        ]
+    }
+
+    // Draw only the region controls: no workspace network polling or full application shell.
+    fn frame(app: &mut FigApp, ctx: &Context, events: Vec<Event>) {
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(rect(0.0, 0.0, 1000.0, 800.0)), events, ..Default::default() }, |ui| {
+            begin(app, ui.ctx());
+            crate::map_actions::handle(app, ui.ctx(), false);
+            for (region, bounds) in [(Region::Layers, rect(0.0, 50.0, 180.0, 500.0)), (Region::Toolbar, rect(200.0, 0.0, 800.0, 40.0))] {
+                area(&mut app.ui.nav, region, bounds);
+                let response = ui.put(bounds.shrink(10.0), egui::Button::new(region.id()));
+                prefer(&mut app.ui.nav, region, response.id);
+            }
+            let response = ui.interact(rect(200.0, 50.0, 800.0, 750.0), Id::new("test_map_canvas"), egui::Sense::click());
+            canvas(&mut app.ui.nav, &response, String::new);
+            let composer = egui::Area::new(composer_layer().id).order(Order::Foreground).fixed_pos(egui::pos2(260.0, 600.0)).show(ui.ctx(), |ui| {
+                ui.set_width(400.0);
+                ui.add(egui::TextEdit::singleline(&mut app.compose.input).id(crate::compose::input_id()));
+                let _ = ui.button("Send");
+            });
+            area(&mut app.ui.nav, Region::Properties, composer.response.rect);
+            prefer(&mut app.ui.nav, Region::Properties, crate::compose::input_id());
+            end(app, ui.ctx());
+        });
+        output.textures_delta.clear();
+    }
+
+    fn setup() -> (FigApp, Context) {
+        let mut app = FigApp::new(Session::new(), Box::new(crate::NoServices));
+        app.ui.home = false;
+        let ctx = Context::default();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        (app, ctx)
+    }
+
+    #[test]
+    fn map_order_wraps_and_skips_hidden_regions() {
+        crate::with_map_mode(|| {
+            let mut nav = Nav::default();
+            nav.last.rects = [Some(rect(0.0, 0.0, 10.0, 10.0)); 4];
+            nav.region = Region::Layers;
+            for expected in [Region::Toolbar, Region::Canvas, Region::Properties, Region::Layers] {
+                nav.region = next_region(&nav, 1);
+                assert_eq!(nav.region, expected);
+            }
+            assert_eq!(next_region(&nav, -1), Region::Properties);
+            *Region::Properties.of_mut(&mut nav.last.rects) = None;
+            assert_eq!(next_region(&nav, -1), Region::Canvas);
+            nav.last.rects = [None; 4];
+            nav.region = Region::Canvas;
+            assert_eq!(next_region(&nav, 1), Region::Canvas);
+        });
+    }
+
+    #[test]
+    fn map_rectangles_do_not_claim_canvas_below_the_workspace_or_composer() {
+        crate::with_map_mode(|| {
+            let mut nav = Nav::default();
+            nav.last.rects = [
+                Some(rect(0.0, 0.0, 1000.0, 40.0)),
+                Some(rect(0.0, 40.0, 180.0, 400.0)),
+                Some(rect(0.0, 40.0, 1000.0, 760.0)),
+                Some(rect(260.0, 600.0, 400.0, 100.0)),
+            ];
+            assert_eq!(nav.region_at(egui::pos2(50.0, 450.0)), Some(Region::Canvas));
+            assert_eq!(nav.region_at(egui::pos2(300.0, 750.0)), Some(Region::Canvas));
+            assert_eq!(nav.region_at(egui::pos2(300.0, 650.0)), Some(Region::Properties));
+            assert!(region_layer(composer_layer()));
+            assert!(!region_layer(LayerId::new(Order::Foreground, Id::new("unrelated_overlay"))));
+        });
+    }
+
+    #[test]
+    fn f6_leaves_the_foreground_composer_and_shift_f6_returns_to_its_input() {
+        crate::with_map_mode(|| {
+            let (mut app, ctx) = setup();
+            app.ui.nav.go(Region::Properties);
+            frame(&mut app, &ctx, vec![]);
+            assert!(ctx.memory(|memory| memory.has_focus(crate::compose::input_id())));
+            let ids: Vec<_> = focusables(&ctx, &app.ui.nav, Region::Properties).into_iter().map(|entry| entry.0).collect();
+            assert!(ids.contains(&crate::compose::input_id()));
+            assert!(!ids.contains(&composer_layer().id.with("move")));
+            frame(&mut app, &ctx, press(Key::F6, Modifiers::NONE));
+            assert_eq!(app.ui.nav.region, Region::Layers);
+            frame(&mut app, &ctx, press(Key::F6, Modifiers::SHIFT));
+            assert_eq!(app.ui.nav.region, Region::Properties);
+            assert!(ctx.memory(|memory| memory.has_focus(crate::compose::input_id())));
+        });
+    }
+
+    #[test]
+    fn escape_returns_to_canvas_without_clearing_card_selection() {
+        crate::with_map_mode(|| {
+            let (mut app, ctx) = setup();
+            let page = app.session.page().unwrap();
+            let card = app.session.doc_mut().unwrap().create(page, figcraft_doc::NodeKind::Frame, "Card", 0.0, 0.0, 100.0, 100.0).unwrap();
+            app.session.set_selection(vec![card]);
+            app.ui.nav.go(Region::Properties);
+            frame(&mut app, &ctx, vec![]);
+            app.compose.input = "Keep this comment".into();
+            frame(&mut app, &ctx, press(Key::Escape, Modifiers::NONE));
+            assert_eq!(app.ui.nav.region, Region::Canvas);
+            assert_eq!(app.session.selection(), vec![card]);
+            assert_eq!(app.compose.input, "Keep this comment");
+            assert!(!ctx.input(|input| input.key_pressed(Key::Escape)));
+        });
+    }
+
+    #[test]
+    fn map_overlays_block_keyboard_and_queued_region_moves() {
+        crate::with_map_mode(|| {
+            let (mut app, ctx) = setup();
+            app.page_tree.open = true;
+            app.ui.nav.step(1);
+            frame(&mut app, &ctx, press(Key::F6, Modifiers::NONE));
+            assert_eq!(app.ui.nav.region, Region::Canvas);
+            assert!(app.ui.nav.pending.is_none());
+            app.page_tree.open = false;
+            crate::map_navigation::run(&mut app, &ctx, "map.search");
+            assert!(blocked(&app, &ctx));
+            app.ui.nav.step(-1);
+            frame(&mut app, &ctx, vec![]);
+            assert_eq!(app.ui.nav.region, Region::Canvas);
+            assert!(app.ui.nav.pending.is_none());
+        });
     }
 }

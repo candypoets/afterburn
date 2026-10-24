@@ -167,7 +167,7 @@ impl State {
     }
 
     /// Back to a new comment; the draft keeps whatever it had.
-    fn stop_editing(&mut self) {
+    pub(crate) fn stop_editing(&mut self) {
         if self.editing.take().is_some() {
             self.input.clear();
             self.focus_input = true;
@@ -233,15 +233,18 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         _ => "COMMENTING ON".to_string(),
     };
     let active = app.active_workspace.is_some();
-    draft_glow(app, ctx, page);
-    tree_panel(app, ctx, node_id, page, &included);
+    if app.session.ds().is_ok_and(|ds| ds.view.comments) {
+        draft_glow(app, ctx, page);
+        tree_panel(app, ctx, node_id, page, &included);
+    }
     // The workspace pane takes the left edge; the composer belongs to the canvas, not the pane.
-    let pane = if app.ws.pane_open { 300.0 } else { 0.0 };
+    let pane = if app.ws.pane_open && app.session.ds().is_ok_and(|ds| !ds.view.ui_hidden) { 300.0 } else { 0.0 };
     let width = (ctx.content_rect().width() - pane - PANEL_SIDE).clamp(PANEL_MIN_W, PANEL_MAX_W);
 
     let mut send = false;
     let mut clear = false;
-    egui::Area::new(Id::new("map_composer"))
+    let enabled = !crate::map_actions::blocking_overlay(app, ctx);
+    let composer = egui::Area::new(Id::new("map_composer"))
         .anchor(Align2::CENTER_BOTTOM, vec2(pane / 2.0, -(crate::status_bar::HEIGHT + PANEL_GAP)))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
@@ -252,6 +255,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                 .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(24) })
                 .inner_margin(Margin::symmetric(15, 12))
                 .show(ui, |ui| {
+                    if !enabled {
+                        ui.disable();
+                    }
                     ui.set_width((width - 30.0).max(40.0));
                     ui.spacing_mut().item_spacing.y = 0.0;
                     let names = Names { node: node.as_deref(), page: page_name.as_deref(), node_id, page_id: page };
@@ -260,6 +266,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     clear = out.clear;
                 });
         });
+    crate::a11y::area(&mut app.ui.nav, crate::a11y::Region::Properties, composer.response.rect);
+    crate::a11y::prefer(&mut app.ui.nav, crate::a11y::Region::Properties, input_id());
     if clear {
         app.run("select.none", serde_json::json!({}));
     }
@@ -347,8 +355,8 @@ fn body(
     // The field is multiline: Enter belongs to it. Shift+Enter turns the current text into a
     // draft comment (or saves the one being edited); Cmd+Enter sends the prompt and every draft.
     // Both are consumed before the field sees them.
-    let input_focused = ui.memory(|m| m.has_focus(input_id()));
-    let command_enter = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
+    let input_focused = ui.is_enabled() && ui.memory(|m| m.has_focus(input_id()));
+    let command_enter = input_focused && !state.menu_open && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
     let shift_enter = !command_enter && input_focused && ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Enter));
     if shift_enter {
         if state.editing.is_some() {
@@ -1337,7 +1345,7 @@ fn kind_label(kind: &str) -> &str {
     if kind.is_empty() { "agent" } else { kind }
 }
 
-fn input_id() -> Id {
+pub(crate) fn input_id() -> Id {
     Id::new("map_composer_input")
 }
 
@@ -1504,6 +1512,19 @@ mod tests {
         assert_eq!(bar.state.editing, None);
         assert!(bar.state.input.is_empty(), "the edit is not sent a second time as the prompt");
         assert_eq!(bar.state.drafts[0].text, "Fix the lane: Lane Shared is gone");
+    }
+
+    #[test]
+    fn send_chord_requires_the_composer_field_and_no_target_menu() {
+        let mut bar = Bar::new(&[("Alpha", "Keep this draft")]);
+        bar.state.input = "Unsent prompt".into();
+        bar.ctx.memory_mut(|m| m.surrender_focus(input_id()));
+        assert!(!bar.key(Key::Enter, Modifiers::COMMAND));
+        assert_eq!(bar.state.input, "Unsent prompt");
+        bar.ctx.memory_mut(|m| m.request_focus(input_id()));
+        bar.state.menu_open = true;
+        assert!(!bar.key(Key::Enter, Modifiers::COMMAND));
+        assert_eq!(bar.state.drafts.len(), 1);
     }
 
     #[test]

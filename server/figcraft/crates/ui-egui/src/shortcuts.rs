@@ -25,7 +25,7 @@ pub fn platform() -> Platform {
     }
 }
 
-fn note_platform(ctx: &Context) {
+pub(crate) fn note_platform(ctx: &Context) {
     PLATFORM.store(if ctx.os() == egui::os::OperatingSystem::Mac { 1 } else { 2 }, Ordering::Relaxed);
 }
 
@@ -97,6 +97,10 @@ fn cached_tip(label: &'static str, key: Option<&'static str>) -> &'static str {
 /// `swallowed`: what this frame's Cmd/Ctrl+V chords the shell swallowed ask for ([`swallowed_paste`]).
 pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool, swallowed: Swallowed) {
     note_platform(ctx);
+    if crate::map_mode() {
+        crate::map_actions::handle(app, ctx, typing);
+        return;
+    }
     // Text fields in panels own the keyboard (also the key that ends their editing).
     if typing || crate::a11y::field_focused(ctx) || app.ui.palette.is_some() {
         return;
@@ -313,7 +317,7 @@ fn key_event(app: &mut FigApp, key: Key, physical: Option<Key>, m: Modifiers, re
 /// F8): the arrows move it, Cmd/Ctrl+arrows or Shift+arrows move its far corner, sizing it (Shift
 /// with Cmd/Ctrl: five times as far), by 10 screen pixels; Enter selects what it covers like a
 /// marquee (Shift toggles, Cmd/Ctrl takes nested layers), Escape drops it.
-fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
+pub(crate) fn key_box(app: &mut FigApp, key: Key, m: Modifiers) -> bool {
     let Some(mut b) = app.ui.key_box else { return false };
     let size = m.shift || m.command;
     let step = if m.shift && m.command { 50.0 } else { 10.0 } / app.session.ds().map_or(1.0, |d| d.view.zoom.max(1e-6));

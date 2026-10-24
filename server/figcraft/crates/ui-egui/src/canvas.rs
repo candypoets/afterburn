@@ -33,6 +33,9 @@ pub struct CanvasState {
     pub preview_latency_ms: Option<f64>,
     pub refine_latency_ms: Option<f64>,
     dragging: bool,
+    map_drag: Option<MapDrag>,
+    /// Escape ended this map gesture; wait for its held buttons to be released.
+    cancelled_pointer: bool,
     space_pan: bool,
     middle_pan: Option<(Pos2, f64, f64)>,
     /// The zoom tool (Z held): zooming out (Alt) or in, and where its drag started.
@@ -64,6 +67,8 @@ impl Default for CanvasState {
             preview_latency_ms: None,
             refine_latency_ms: None,
             dragging: false,
+            map_drag: None,
+            cancelled_pointer: false,
             space_pan: false,
             middle_pan: None,
             cursor: None,
@@ -75,6 +80,15 @@ impl Default for CanvasState {
             pressure: None,
         }
     }
+}
+
+struct MapDrag {
+    document: u64,
+    page: NodeId,
+    start: Point,
+    base: Vec<NodeId>,
+    toggle: bool,
+    marquee: bool,
 }
 
 /// What the canvas shows while an IME composition is in progress: the document with the
@@ -490,10 +504,37 @@ fn zoom_tool(app: &mut FigApp, ui: &Ui, resp: &egui::Response, pos: Pos2, mods: 
     true
 }
 
-/// The pointer and keys on the canvas. False when something on it with a cursor of its own has
-/// the pointer (a comment pin, a ruler guide, a gradient or padding handle): the tool's cursor
-/// then doesn't show.
+/// Cancel a map selection or pan without letting its still-held pointer restart it.
+pub(crate) fn cancel_map_interaction(app: &mut FigApp) -> bool {
+    if !app.canvas.dragging && app.canvas.middle_pan.is_none() && !app.session.tool.busy() {
+        return false;
+    }
+    let _ = app.session.cancel_interaction();
+    if let Some(drag) = app.canvas.map_drag.take()
+        && drag.marquee
+        && app.session.ds().is_ok_and(|ds| ds.uid == drag.document && ds.page == drag.page)
+    {
+        app.session.set_selection(drag.base);
+    }
+    app.session.tool.overlay.marquee = None;
+    app.canvas.dragging = false;
+    app.canvas.middle_pan = None;
+    app.canvas.space_pan = false;
+    app.canvas.cancelled_pointer = true;
+    true
+}
+
+/// The pointer and keys on the canvas. False when a control with its own cursor owns the pointer.
 fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
+    if app.canvas.cancelled_pointer {
+        if ui.input(|input| input.pointer.any_down()) {
+            return true;
+        }
+        app.canvas.cancelled_pointer = false;
+    }
+    if crate::map_mode() {
+        return map_input(app, ui, resp);
+    }
     if crate::proto_canvas::input(app, ui, resp) {
         return true;
     }
@@ -567,7 +608,7 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
             ds.revision += 1;
         }
     }
-    if zoom_tool(app, ui, resp, pos, mods, editing_text || typing_elsewhere) {
+    if !crate::map_mode() && zoom_tool(app, ui, resp, pos, mods, editing_text || typing_elsewhere) {
         return true;
     }
     // Middle-button / space panning.
@@ -656,6 +697,132 @@ fn input(app: &mut FigApp, ui: &mut Ui, resp: &egui::Response) -> bool {
     true
 }
 
+/// Map pointer routing never calls editor tools, spacing/shape handles, prototype editing or
+/// import handlers. Selecting a card is independent of its lock state; dragging it never edits it.
+fn map_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response) -> bool {
+    let ctx = ui.ctx();
+    if crate::map_actions::overlay_open(app, ctx) {
+        cancel_map_interaction(app);
+        return false;
+    }
+    let (mods, scroll, zoom_delta, pos, space, primary, pressed, middle) = ctx.input(|input| {
+        (
+            input.modifiers,
+            input.smooth_scroll_delta,
+            input.zoom_delta(),
+            input.pointer.interact_pos(),
+            input.key_down(egui::Key::Space),
+            input.pointer.primary_down(),
+            input.pointer.primary_pressed(),
+            input.pointer.button_down(egui::PointerButton::Middle),
+        )
+    });
+    app.canvas.space_pan = space && !crate::a11y::field_focused(ctx);
+    app.session.tool.overlay.cursor = figcraft_engine::tools::Cursor::Default;
+    let pos = pos.or_else(|| app.canvas.last_pointer.map(|point| app.to_screen(point.x, point.y)));
+    let Some(pos) = pos else { return true };
+    let point = app.to_page(pos);
+    app.canvas.last_pointer = Some(point);
+    if resp.hovered()
+        && let Ok(ds) = app.session.ds_mut()
+    {
+        if (zoom_delta - 1.0).abs() > 1e-4 {
+            ds.view.set_zoom_at(ds.view.zoom * f64::from(zoom_delta), (point.x, point.y));
+            ds.revision += 1;
+        } else if scroll != egui::Vec2::ZERO {
+            ds.view.scroll(f64::from(scroll.x), f64::from(scroll.y), mods.shift);
+            ds.revision += 1;
+        }
+    }
+    if app.canvas.middle_pan.is_some() || (resp.hovered() && (middle || (app.canvas.space_pan && primary))) {
+        app.canvas.map_drag = None;
+        app.canvas.dragging = false;
+        app.session.tool.overlay.marquee = None;
+        if let Ok(ds) = app.session.ds_mut() {
+            if let Some((start, cx, cy)) = app.canvas.middle_pan {
+                let zoom = ds.view.zoom.max(1e-6);
+                ds.view.cx = cx - f64::from(pos.x - start.x) / zoom;
+                ds.view.cy = cy - f64::from(pos.y - start.y) / zoom;
+                ds.revision += 1;
+            } else {
+                app.canvas.middle_pan = Some((pos, ds.view.cx, ds.view.cy));
+            }
+        }
+        if !middle && !primary {
+            app.canvas.middle_pan = None;
+        }
+        return true;
+    }
+    let point = app.to_page(pos);
+    let target = app.session.ds().ok().and_then(|ds| {
+        crate::map_navigation::cards(&ds.doc, ds.page).into_iter().rev().find(|id| ds.doc.world_bounds(*id).is_some_and(|b| b.contains(point)))
+    });
+    if let Ok(ds) = app.session.ds_mut() {
+        ds.hover = if resp.hovered() { target } else { None };
+    }
+    if resp.secondary_clicked() {
+        open_context_menu(app, pos, false);
+        return true;
+    }
+    if resp.double_clicked() {
+        app.canvas.map_drag = None;
+        app.canvas.dragging = false;
+        app.session.tool.overlay.marquee = None;
+        if let Some(card) = target {
+            app.session.set_selection(vec![card]);
+            crate::map_navigation::run(app, ctx, "map.openDetail");
+        }
+        return true;
+    }
+    if pressed && resp.hovered() {
+        app.ui.layers_focus = false;
+        app.ui.key_box = None;
+        app.ui.nav.region = crate::a11y::Region::Canvas;
+        ctx.memory_mut(|memory| {
+            if let Some(id) = memory.focused() {
+                memory.surrender_focus(id);
+            }
+        });
+        let base = app.session.selection();
+        let mut selected = if mods.shift || target.is_some_and(|id| base.contains(&id)) { base.clone() } else { Vec::new() };
+        if let Some(id) = target {
+            if mods.shift && selected.contains(&id) {
+                selected.retain(|selected| *selected != id);
+            } else if !selected.contains(&id) {
+                selected.push(id);
+            }
+        }
+        app.canvas.map_drag = app.session.ds().ok().map(|ds| MapDrag {
+            document: ds.uid,
+            page: ds.page,
+            start: point,
+            base,
+            toggle: mods.shift,
+            marquee: target.is_none(),
+        });
+        app.canvas.dragging = app.canvas.map_drag.is_some();
+        app.session.set_selection(selected);
+    }
+    if let Some(drag) = app.canvas.map_drag.take() {
+        let same_page = app.session.ds().is_ok_and(|ds| ds.uid == drag.document && ds.page == drag.page);
+        if same_page && drag.marquee && pos.distance(app.to_screen(drag.start.x, drag.start.y)) >= 3.0 {
+            let bounds = figcraft_geom::Rect::from_points(drag.start, point);
+            app.session.tool.overlay.marquee = Some([bounds.x0, bounds.y0, bounds.x1, bounds.y1]);
+            if let Ok(doc) = app.session.doc() {
+                let ids = crate::map_navigation::box_selection(doc, drag.page, bounds, &drag.base, drag.toggle);
+                app.session.set_selection(ids);
+            }
+        }
+        if same_page && primary {
+            app.canvas.map_drag = Some(drag);
+        } else {
+            app.canvas.dragging = false;
+            app.session.tool.overlay.marquee = None;
+        }
+    }
+    true
+}
+
 /// Pointer event `kind` at screen point `pos`, to the tools.
 fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
     let ev = pointer_event(app, kind, pos, m);
@@ -673,6 +840,18 @@ fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
 /// open the context menu there.
 pub fn open_context_menu(app: &mut FigApp, pos: Pos2, deep: bool) {
     let p = app.to_page(pos);
+    if crate::map_mode() {
+        let target = app.session.ds().ok().and_then(|ds| {
+            crate::map_navigation::cards(&ds.doc, ds.page).into_iter().rev().find(|id| ds.doc.world_bounds(*id).is_some_and(|b| b.contains(p)))
+        });
+        if let Some(target) = target
+            && !app.session.selection().contains(&target)
+        {
+            app.session.set_selection(vec![target]);
+        }
+        app.ui.context_menu = Some((pos, app.session.selection()));
+        return;
+    }
     if let Ok(ds) = app.session.ds() {
         let (doc, page, sel, zoom) = (ds.doc.clone(), ds.page, ds.selection.clone(), ds.view.zoom.max(1e-6));
         if let Some(leaf) = app.session.hit(&doc, page, p, 2.0 / zoom) {

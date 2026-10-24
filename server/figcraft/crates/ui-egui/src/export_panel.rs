@@ -363,3 +363,224 @@ pub fn page_section(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId)
         save_one(app, &all, &setting, &file);
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MapExportScope {
+    Page,
+    Selection,
+}
+
+#[derive(Clone)]
+struct MapExportState {
+    document: u64,
+    page: NodeId,
+    scope: MapExportScope,
+    setting: ExportSetting,
+}
+
+impl MapExportState {
+    fn new(document: u64, page: NodeId, selection: &[NodeId], print: PrintSettings) -> Self {
+        Self {
+            document,
+            page,
+            scope: if selection.is_empty() { MapExportScope::Page } else { MapExportScope::Selection },
+            setting: ExportSetting { print, ..Default::default() },
+        }
+    }
+
+    fn ids(&self, doc: &Document, selection: &[NodeId]) -> Vec<NodeId> {
+        match self.scope {
+            MapExportScope::Page => doc.node(self.page).map(|page| page.children.clone()).unwrap_or_default(),
+            // A removed selection must not silently turn into a whole-page export.
+            MapExportScope::Selection => selection.iter().copied().filter(|id| doc.node(*id).is_some()).collect(),
+        }
+    }
+
+    fn file_name(&self, doc: &Document, ids: &[NodeId]) -> String {
+        match self.scope {
+            MapExportScope::Page => {
+                let page_name = doc.node(self.page).map_or("Page", |page| page.name.as_str());
+                format!("{page_name}.{}", self.setting.format.ext())
+            }
+            MapExportScope::Selection => suggested_name(doc, ids, &self.setting, "Selection"),
+        }
+    }
+}
+
+fn map_export_state_id() -> Id {
+    Id::new("map_export_options")
+}
+
+/// Map-only export review. Call every map frame, including when closed, so a fresh invocation
+/// chooses its default from the current selection. Options are local UI state, never node props.
+/// Only the explicit Export button opens the save picker; choosing a scope or format does not.
+pub(crate) fn map_dialog(app: &mut FigApp, ctx: &egui::Context) {
+    let state_id = map_export_state_id();
+    if !app.ui.export_preview {
+        ctx.data_mut(|data| data.remove::<MapExportState>(state_id));
+        return;
+    }
+    let Ok(ds) = app.session.ds() else {
+        app.ui.export_preview = false;
+        ctx.data_mut(|data| data.remove::<MapExportState>(state_id));
+        return;
+    };
+    let (doc, document, page) = (ds.doc.clone(), ds.uid, ds.page);
+    let selection = app.session.selection();
+    let mut state = ctx
+        .data(|data| data.get_temp::<MapExportState>(state_id))
+        .filter(|state| state.document == document && state.page == page)
+        .unwrap_or_else(|| MapExportState::new(document, page, &selection, app.ui.pdf_print));
+    let mut open = true;
+    let mut export = false;
+    let mut cancel = false;
+    crate::dialogs::window("Export map", ctx).open(&mut open).show(ctx, |ui| {
+        ui.set_width(360.0);
+        ui.label("Scope");
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut state.scope, MapExportScope::Page, "Page");
+            ui.add_enabled_ui(!selection.is_empty(), |ui| {
+                ui.selectable_value(&mut state.scope, MapExportScope::Selection, "Selection");
+            });
+        });
+        let ids = state.ids(&doc, &selection);
+        let page_name = doc.node(page).map_or("Page", |node| node.name.as_str());
+        match state.scope {
+            MapExportScope::Page => {
+                ui.label(format!("Page: {page_name}"));
+                ui.small("Export all content on this page as one file.");
+            }
+            MapExportScope::Selection => {
+                ui.label(format!("Selection: {} selected items as one file", ids.len()));
+            }
+        }
+        ui.add_space(8.0);
+        ui.label("Format");
+        egui::ComboBox::from_id_salt("map_export_format").selected_text(state.setting.format.label()).show_ui(ui, |ui| {
+            for format in ExportFormat::ALL {
+                ui.selectable_value(&mut state.setting.format, format, format.label());
+            }
+        });
+        if state.setting.format.is_raster() {
+            egui::ComboBox::from_id_salt("map_export_scale").selected_text(format!("{} scale", state.setting.size.label())).show_ui(ui, |ui| {
+                for value in [1.0, 2.0, 3.0] {
+                    let size = ExportSize::Scale { value };
+                    ui.selectable_value(&mut state.setting.size, size, size.label());
+                }
+            });
+        }
+        if state.setting.format == ExportFormat::Pdf {
+            ui.label("PDF print options");
+            if let Some(print) = print_options(ui, Id::new("map_export_print"), &state.setting.print) {
+                state.setting.print = print;
+            }
+        }
+        ui.add_space(8.0);
+        ui.label(format!("File: {}", state.file_name(&doc, &ids)));
+        if ids.is_empty() {
+            ui.label(match state.scope {
+                MapExportScope::Page => "This page has no content to export.",
+                MapExportScope::Selection => "Select cards or choose Page to export.",
+            });
+        }
+        ui.horizontal(|ui| {
+            cancel = ui.button("Cancel").clicked();
+            export = ui.add_enabled(!ids.is_empty(), egui::Button::new(format!("Export {}…", state.setting.format.label()))).clicked();
+        });
+    });
+    if !open || cancel {
+        app.ui.export_preview = false;
+        ctx.data_mut(|data| data.remove::<MapExportState>(state_id));
+    } else if export {
+        let ids = state.ids(&doc, &selection);
+        if !ids.is_empty() {
+            let file = state.file_name(&doc, &ids);
+            save_one(app, &ids, &state.setting, &file);
+            app.ui.export_preview = false;
+            ctx.data_mut(|data| data.remove::<MapExportState>(state_id));
+        }
+    } else {
+        ctx.data_mut(|data| data.insert_temp(state_id, state));
+    }
+}
+
+#[cfg(test)]
+mod map_export_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    fn document() -> (figcraft_engine::Session, NodeId, NodeId) {
+        let mut session = figcraft_engine::Session::new();
+        let first = session.execute("shape.rectangle", &json!({"name": "First card", "x": 0, "y": 0, "width": 80, "height": 40})).unwrap();
+        let second = session.execute("shape.rectangle", &json!({"name": "Second card", "x": 120, "y": 0, "width": 80, "height": 40})).unwrap();
+        (session, NodeId(first["id"].as_u64().unwrap()), NodeId(second["id"].as_u64().unwrap()))
+    }
+
+    #[test]
+    fn page_default_and_selection_export_have_explicit_distinct_targets() {
+        let (session, first, second) = document();
+        let ds = session.ds().unwrap();
+        let mut state = MapExportState::new(ds.uid, ds.page, &[], PrintSettings::default());
+        assert_eq!(state.scope, MapExportScope::Page);
+        assert_eq!(state.ids(&ds.doc, &[first]), vec![first, second], "Page ignores active selection");
+        assert_eq!(state.file_name(&ds.doc, &[first, second]), format!("{}.png", ds.doc.node(ds.page).unwrap().name));
+        state.scope = MapExportScope::Selection;
+        assert_eq!(state.ids(&ds.doc, &[second]), vec![second]);
+        assert!(state.ids(&ds.doc, &[]).is_empty(), "lost selection never exports the page");
+        assert_eq!(MapExportState::new(ds.uid, ds.page, &[first], PrintSettings::default()).scope, MapExportScope::Selection);
+    }
+
+    struct SaveSpy(Arc<AtomicUsize>);
+
+    impl crate::Services for SaveSpy {
+        fn pick_save(&mut self, _: &str, _: &str, _: &[&str]) -> crate::DialogFuture {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(std::future::ready(None))
+        }
+    }
+
+    fn frame(app: &mut FigApp, ctx: &egui::Context) {
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1000.0, 800.0))), ..Default::default() },
+            |ui| {
+                map_dialog(app, ui.ctx());
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn opening_changing_options_and_closing_do_not_export_or_change_document() {
+        let (session, first, _) = document();
+        let saves = Arc::new(AtomicUsize::new(0));
+        let mut app = FigApp::new(session, Box::new(SaveSpy(saves.clone())));
+        app.session.set_selection(vec![first]);
+        let document = serde_json::to_value(app.session.doc().unwrap()).unwrap();
+        let ctx = egui::Context::default();
+        app.ui.export_preview = true;
+        frame(&mut app, &ctx);
+        let mut state = ctx.data(|data| data.get_temp::<MapExportState>(map_export_state_id())).unwrap();
+        assert_eq!(state.scope, MapExportScope::Selection);
+        state.scope = MapExportScope::Page;
+        for format in ExportFormat::ALL {
+            state.setting.format = format;
+            ctx.data_mut(|data| data.insert_temp(map_export_state_id(), state.clone()));
+            frame(&mut app, &ctx);
+            assert_eq!(saves.load(Ordering::Relaxed), 0, "choosing {} is not confirmation", format.label());
+            assert!(app.pending_dialog.is_none());
+            assert!(state.file_name(app.session.doc().unwrap(), &[first]).ends_with(format.ext()));
+        }
+        app.ui.export_preview = false;
+        frame(&mut app, &ctx);
+        assert!(ctx.data(|data| data.get_temp::<MapExportState>(map_export_state_id())).is_none());
+        app.session.set_selection(vec![]);
+        app.ui.export_preview = true;
+        frame(&mut app, &ctx);
+        assert_eq!(ctx.data(|data| data.get_temp::<MapExportState>(map_export_state_id())).unwrap().scope, MapExportScope::Page);
+        assert_eq!(serde_json::to_value(app.session.doc().unwrap()).unwrap(), document);
+        assert_eq!(saves.load(Ordering::Relaxed), 0);
+    }
+}

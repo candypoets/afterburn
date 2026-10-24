@@ -43,7 +43,7 @@ pub struct State {
     pub open: bool,
     name: String,
     prompt: String,
-    busy: bool,
+    pub(crate) busy: bool,
     /// The page was created; a retry only sends the prompt again.
     created: bool,
     error: Option<String>,

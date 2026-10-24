@@ -98,6 +98,10 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     if !app.ui.shortcuts_panel {
         return;
     }
+    if crate::map_mode() {
+        show_map(app, ctx);
+        return;
+    }
     let t = Tokens::get(ctx);
     let platform = crate::shortcuts::platform();
     let width = (ctx.content_rect().width() - 48.0).clamp(480.0, 1040.0);
@@ -144,4 +148,88 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     if !open {
         app.ui.shortcuts_panel = false;
     }
+}
+
+/// Help is built from the same map registry as menus and the palette, including field-only
+/// bindings that cannot safely run from a palette search. Gestures live beside that registry.
+pub(crate) fn show_map(app: &mut FigApp, ctx: &Context) {
+    let t = Tokens::get(ctx);
+    let platform = crate::shortcuts::platform();
+    let width = (ctx.content_rect().width() - 48.0).clamp(280.0, 900.0);
+    let mut open = true;
+    crate::dialogs::window("Mindmap keyboard shortcuts", ctx).open(&mut open).show(ctx, |ui| {
+        ui.set_width(width);
+        ui.label("Canvas keys pause while typing. Text fields keep their own Copy, Cut, Paste, Select all and Undo/Redo.");
+        ui.label("Escape closes the active popup or interaction first; on the canvas it clears selection and keeps drafts.");
+        ui.add(egui::TextEdit::singleline(&mut app.ui.shortcuts_query).hint_text("Search map shortcuts and scope").desired_width(width));
+        let list = map_help_rows(&app.ui.shortcuts_query, platform);
+        egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 240.0).clamp(120.0, 480.0)).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                let mut group = "";
+                for row in &list {
+                    if row.group != group {
+                        group = row.group;
+                        ui.add_space(10.0);
+                        ui.heading(group);
+                    }
+                    ui.push_id(row.id.unwrap_or(row.label), |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.strong(row.label);
+                            ui.label(egui::RichText::new(&row.keys).monospace().color(t.text_secondary));
+                        });
+                        ui.label(egui::RichText::new(row.scope).small().color(t.text_secondary));
+                    });
+                    ui.add_space(4.0);
+                }
+                if list.is_empty() {
+                    ui.label("No map shortcuts match");
+                }
+            },
+        );
+    });
+    if !open {
+        app.ui.shortcuts_panel = false;
+    }
+}
+
+pub(crate) struct MapHelpRow {
+    pub(crate) id: Option<&'static str>,
+    pub(crate) group: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) keys: String,
+    pub(crate) scope: &'static str,
+}
+
+pub(crate) fn map_help_rows(query: &str, platform: Platform) -> Vec<MapHelpRow> {
+    let mut rows: Vec<_> = crate::map_action_catalog::search(query, platform)
+        .into_iter()
+        .map(|action| MapHelpRow {
+            id: Some(action.id),
+            group: action.group,
+            label: action.label,
+            keys: if action.keys(platform).is_empty() {
+                "Actions palette".to_string()
+            } else {
+                figcraft_engine::keymap::display(action.keys(platform), platform)
+            },
+            scope: action.scope,
+        })
+        .collect();
+    // Group in first-appearance order, including the palette-only actions at the catalog's tail.
+    let mut groups = Vec::new();
+    for action in crate::map_action_catalog::ACTIONS {
+        if !groups.contains(&action.group) {
+            groups.push(action.group);
+        }
+    }
+    let query = query.trim().to_lowercase();
+    for gesture in crate::map_action_catalog::GESTURES {
+        let keys = if platform == Platform::Mac { gesture.mac } else { gesture.other };
+        if [gesture.label, gesture.scope, keys, "Canvas + zoom"].iter().any(|text| text.to_lowercase().contains(&query)) {
+            rows.push(MapHelpRow { id: None, group: "Canvas + zoom", label: gesture.label, keys: keys.to_string(), scope: gesture.scope });
+        }
+    }
+    rows.sort_by_key(|row| groups.iter().position(|group| *group == row.group));
+    rows
 }

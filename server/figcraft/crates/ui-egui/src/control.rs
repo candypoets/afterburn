@@ -279,6 +279,21 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };
             let platform = crate::shortcuts::platform();
             use figcraft_engine::keymap::{Context, lookup, normalize};
+            if crate::map_mode() {
+                if crate::map_actions::overlay_open(app, ctx) {
+                    return Err("An overlay owns the keyboard; use ui.input for focused UI input.".into());
+                }
+                let action = crate::map_action_catalog::ACTIONS
+                    .iter()
+                    .find(|action| {
+                        !crate::map_actions::field_action(action.id)
+                            && !action.keys(platform).is_empty()
+                            && figcraft_engine::keymap::matches(action.keys(platform), platform, key, m)
+                    })
+                    .ok_or_else(|| format!("no map shortcut `{key}`"))?;
+                crate::map_actions::run(app, ctx, action.id);
+                return Ok(json!({"command": action.id}));
+            }
             // Text editing keys go to the editor (after the shortcuts live while editing).
             if app.session.ds().map(|d| d.text_edit.is_some()).unwrap_or(false) {
                 if let Some(bd) = lookup(platform, Context::Text, key, m).filter(|_| m.cmd || m.alt || m.ctrl) {
