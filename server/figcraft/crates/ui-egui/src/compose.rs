@@ -2,8 +2,10 @@
 //!
 //! The selection tells it what a comment is about. Enter turns the input into a draft on that
 //! card (the drafts wait above the input, across selections); Cmd+Enter sends the input as the
-//! prompt with every draft attached to an agent in the workspace. The service is reached over
-//! plain TCP on a thread of its own, so the window never waits on the network.
+//! prompt with every draft attached to an agent in the workspace. Clicking a chip opens its draft
+//! back in the input to edit; a second click (or Esc) goes back to a new comment, and only the
+//! chip's × removes the draft. The service is reached over plain TCP on a thread of its own, so
+//! the window never waits on the network.
 //!
 //! Map mode's right-click menu lives here too: the human gets Copy and Comment, never the
 //! editor's tools.
@@ -11,7 +13,8 @@
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver};
 
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Key, Margin, Modifiers, Pos2, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::text::{CCursor, CCursorRange};
+use egui::{Align2, Color32, CornerRadius, FontId, Id, Key, Margin, Modifiers, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{Document, NodeId};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -20,7 +23,9 @@ use crate::FigApp;
 use crate::a11y;
 use crate::theme::{regular, semibold};
 use crate::widgets;
-use crate::workspaces::{self, Target};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::workspaces;
+use crate::workspaces::Target;
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
@@ -49,6 +54,11 @@ const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
 const ACCENT_HOVER: Color32 = Color32::from_rgb(0xC2, 0x55, 0x3E);
 const MAP_INK: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
 const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
+/// The draft open in the field, and that field: a blue that leaves the warm accents alone.
+const EDIT: Color32 = Color32::from_rgb(0x2F, 0x6F, 0xDB);
+const EDIT_FILL: Color32 = Color32::from_rgb(0xEA, 0xF0, 0xFB);
+/// The ×'s hit area at the right end of a draft chip.
+const DRAFT_X_W: f32 = 22.0;
 
 #[cfg(not(target_arch = "wasm32"))]
 const TARGETS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -103,6 +113,9 @@ pub struct State {
     pub input: String,
     /// Comments waiting to be sent; they survive selection changes.
     pub drafts: Vec<Draft>,
+    /// The draft the field is editing (an index into [`drafts`](Self::drafts)); `None` for a new
+    /// comment. Its chip stays in the strip and wears the editing outline.
+    pub editing: Option<usize>,
     /// The drafts the in-flight send carries; they leave the bar when it succeeds.
     pub sending: Vec<Draft>,
     /// The agent the send addresses.
@@ -133,6 +146,58 @@ pub struct State {
     pub(crate) targets_error: Option<String>,
 }
 
+impl State {
+    /// Open `drafts[index]` in the field with the caret at its end; a second click on the chip it
+    /// belongs to goes back to a new comment instead.
+    fn toggle_editing(&mut self, index: usize, ctx: &egui::Context) {
+        if self.editing == Some(index) {
+            self.stop_editing();
+            return;
+        }
+        let Some(text) = self.drafts.get(index).map(|draft| draft.text.clone()) else { return };
+        self.input = text;
+        self.editing = Some(index);
+        self.focus_input = true;
+        let end = self.input.chars().count();
+        let mut edit = egui::TextEdit::load_state(ctx, input_id()).unwrap_or_default();
+        edit.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(end))));
+        egui::TextEdit::store_state(ctx, input_id(), edit);
+    }
+
+    /// Back to a new comment; the draft keeps whatever it had.
+    fn stop_editing(&mut self) {
+        if self.editing.take().is_some() {
+            self.input.clear();
+            self.focus_input = true;
+        }
+    }
+
+    /// Save the field's text into the draft being edited, then go back to a new comment.
+    fn save_edited(&mut self) {
+        let Some(index) = self.editing.take() else { return };
+        if let Some(draft) = self.drafts.get_mut(index) {
+            let text = self.input.trim();
+            if !text.is_empty() {
+                draft.text = text.to_string();
+            }
+        }
+        self.input.clear();
+    }
+
+    /// Remove one draft, keeping [`editing`](Self::editing) on the draft it was on.
+    fn remove_draft(&mut self, index: usize) {
+        if index >= self.drafts.len() {
+            return;
+        }
+        self.drafts.remove(index);
+        match self.editing {
+            Some(active) if active == index => self.stop_editing(),
+            Some(active) if active > index => self.editing = Some(active - 1),
+            _ => {}
+        }
+    }
+}
+
 /// Draw the composer at the bottom of an open map.
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     poll_send(app);
@@ -147,6 +212,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let page = app.session.page().ok();
     if selection != app.compose.last_selection || page != app.compose.last_page {
         app.compose.input.clear();
+        app.compose.editing = None;
         app.compose.last_selection = selection.clone();
         app.compose.last_page = page;
     }
@@ -225,8 +291,25 @@ fn body(
     included: &[usize],
     comments: usize,
 ) -> bool {
+    // A draft may leave the list while its chip was active (sent, or removed elsewhere): never
+    // keep editing one that is gone.
+    if state.editing.is_some_and(|index| index >= state.drafts.len()) {
+        state.stop_editing();
+    }
+    let editing = state.editing.and_then(|index| state.drafts.get(index).map(|draft| (index, draft)));
+    let context_line = match editing {
+        Some((index, draft)) => editing_context(draft, included, index),
+        None => context.to_string(),
+    };
+    let context_color = if editing.is_some() {
+        EDIT
+    } else if has_selection {
+        ACCENT
+    } else {
+        FAINT
+    };
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(context).font(mono(9.0)).color(if has_selection { ACCENT } else { FAINT }));
+        ui.label(egui::RichText::new(&context_line).font(mono(9.0)).color(context_color));
         if let Some(node_id) = names.node_id {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -248,20 +331,37 @@ fn body(
     ui.add_space(6.0);
 
     // The field is multiline: Enter belongs to it. Shift+Enter turns the current text into a
-    // draft comment; Cmd+Enter sends the prompt and every draft. Both are consumed before the
-    // field sees them.
+    // draft comment (or saves the one being edited); Cmd+Enter sends the prompt and every draft.
+    // Both are consumed before the field sees them.
     let input_focused = ui.memory(|m| m.has_focus(input_id()));
     let command_enter = ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
     let shift_enter = !command_enter && input_focused && ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Enter));
-    if shift_enter && !state.input.trim().is_empty() {
-        state.drafts.push(Draft {
-            text: state.input.trim().to_string(),
-            node: names.node.map(str::to_string),
-            page: names.page.map(str::to_string),
-            node_id: names.node_id,
-            page_id: names.page_id,
-        });
-        state.input.clear();
+    if shift_enter {
+        if state.editing.is_some() {
+            state.save_edited();
+        } else if !state.input.trim().is_empty() {
+            state.drafts.push(Draft {
+                text: state.input.trim().to_string(),
+                node: names.node.map(str::to_string),
+                page: names.page.map(str::to_string),
+                node_id: names.node_id,
+                page_id: names.page_id,
+            });
+            state.input.clear();
+        }
+    }
+    // Esc stops editing and leaves the draft as it was; Backspace on an empty field does the
+    // same, matching the design's "Esc or an empty field cancels" note. Esc is only read (not
+    // consumed): it belongs to any popup or modal open over the map as well.
+    let escape = state.editing.is_some() && !state.menu_open && ui.input(|i| i.key_pressed(Key::Escape));
+    let backspace = !escape
+        && state.editing.is_some()
+        && state.input.is_empty()
+        && input_focused
+        && !state.menu_open
+        && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace));
+    if escape || backspace {
+        state.stop_editing();
     }
 
     let mut send = false;
@@ -278,7 +378,7 @@ fn body(
         let rows = state.input.split('\n').map(|line| ((line.chars().count() as f32 / per_line).ceil() as usize).max(1)).sum::<usize>().clamp(1, 8);
         let input_response = egui::Frame::NONE
             .fill(SOFT)
-            .stroke(Stroke::new(1.0, BORDER))
+            .stroke(Stroke::new(1.0, if state.editing.is_some() { EDIT } else { BORDER }))
             .corner_radius(CornerRadius::same(6))
             .inner_margin(Margin::symmetric(10, 5))
             .show(ui, |ui| {
@@ -318,15 +418,34 @@ fn body(
     if command_enter {
         send = true;
     }
+    // Sending a draft that is open in the field sends that draft: put the edit back into it and
+    // empty the field, so the comment travels once (and not again as the prompt).
+    if send {
+        state.save_edited();
+    }
 
     ui.add_space(3.0);
-    let hint = if !active {
+    let hint = if state.editing.is_some() {
+        "⇧⏎ save changes   ·   Esc stop editing   ·   × on the chip removes it".to_string()
+    } else if !active {
         "add the service to send".to_string()
     } else {
         format!("⏎ new line   ·   ⇧⏎ comment   ·   ⌘⏎ send all   ·   {comments} in the tree")
     };
     ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
     send
+}
+
+/// The context line while a draft is open in the field: `EDITING DRAFT · on Card · 1 of 2`.
+fn editing_context(draft: &Draft, included: &[usize], index: usize) -> String {
+    let on = match (draft.node.as_deref(), draft.page.as_deref()) {
+        (Some(node), _) => format!("on {node}"),
+        (None, Some(page)) => format!("on {page}"),
+        _ => "on the page".to_string(),
+    };
+    let position = included.iter().position(|queued| *queued == index).map_or(1, |at| at + 1);
+    let total = included.len().max(position);
+    format!("EDITING DRAFT  ·  {on}  ·  {position} of {total}")
 }
 
 /// Open comment threads in the selected card's subtree, or on the page.
@@ -342,9 +461,9 @@ fn comment_count(app: &FigApp, node: Option<NodeId>, page: Option<NodeId>) -> us
     }
 }
 
-/// The draft chips above the input: the first few, each removable, then `+N`.
+/// The draft chips above the input: the first few, each editable and removable, then `+N`.
 fn draft_strip(ui: &mut Ui, state: &mut State, included: &[usize]) {
-    let mut remove = None;
+    let mut action = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
         let visible = included.len().min(VISIBLE_DRAFTS);
@@ -355,8 +474,8 @@ fn draft_strip(ui: &mut Ui, state: &mut State, included: &[usize]) {
                 Some(node) => format!("{node} · {text}"),
                 None => format!("Whole page · {text}"),
             };
-            if draft_chip(ui, &label) {
-                remove = Some(index);
+            if let Some(clicked) = draft_chip(ui, index, &label, state.editing == Some(index)) {
+                action = Some(clicked);
             }
         }
         let hidden = included.len().saturating_sub(visible);
@@ -364,24 +483,56 @@ fn draft_strip(ui: &mut Ui, state: &mut State, included: &[usize]) {
             ui.label(egui::RichText::new(format!("+{hidden}")).font(mono(9.0)).color(MUTED));
         }
     });
-    if let Some(index) = remove
-        && index < state.drafts.len()
-    {
-        state.drafts.remove(index);
+    match action {
+        Some(DraftAction::Edit(index)) => state.toggle_editing(index, ui.ctx()),
+        Some(DraftAction::Remove(index)) => state.remove_draft(index),
+        None => {}
     }
 }
 
-fn draft_chip(ui: &mut Ui, text: &str) -> bool {
+/// What a click on a draft chip asks for.
+#[derive(Clone, Copy)]
+enum DraftAction {
+    /// Open the draft in the field (a second click on the active chip goes back to a new comment).
+    Edit(usize),
+    /// The × was pressed: delete the draft, and only this one.
+    Remove(usize),
+}
+
+/// One draft chip: clicking its label opens the draft for editing; the × at its right removes it.
+fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool) -> Option<DraftAction> {
     let shown = widgets::elide_font(ui, text, 180.0, regular(10.5));
     let width = text_width(ui, &shown, regular(10.5)) + 32.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click());
-    a11y::button(&resp, &format!("Remove draft: {text}"));
-    let hot = resp.hovered();
-    ui.painter().rect_filled(rect, CornerRadius::same(5), if hot { Color32::from_rgb(0xF1, 0xEC, 0xE7) } else { SOFT });
-    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, BORDER), StrokeKind::Inside);
-    ui.painter().text(pos2(rect.min.x + 9.0, rect.center().y), Align2::LEFT_CENTER, &shown, regular(10.5), INK);
-    ui.painter().text(pos2(rect.max.x - 10.0, rect.center().y), Align2::RIGHT_CENTER, "×", regular(11.0), if hot { ACCENT } else { MUTED });
-    resp.clicked()
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
+    let x_rect = Rect::from_min_max(pos2(rect.max.x - DRAFT_X_W, rect.min.y), rect.max);
+    let body_rect = Rect::from_min_max(rect.min, pos2(rect.max.x - DRAFT_X_W, rect.max.y));
+    // The × is added last, so it sits above the label's click area and gets the click.
+    let body = ui.interact(body_rect, draft_body_id(index), Sense::click());
+    let close = ui.interact(x_rect, draft_remove_id(index), Sense::click());
+    a11y::button(&body, &format!("Edit draft: {text}"));
+    a11y::button(&close, &format!("Remove draft: {text}"));
+    let close = close.on_hover_text("Remove");
+    let hot = body.hovered() || close.hovered();
+    let fill = if active {
+        EDIT_FILL
+    } else if hot {
+        Color32::from_rgb(0xF1, 0xEC, 0xE7)
+    } else {
+        SOFT
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
+    let border = if active { EDIT } else { BORDER };
+    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(if active { 1.5 } else { 1.0 }, border), StrokeKind::Inside);
+    ui.painter().text(pos2(rect.min.x + 9.0, rect.center().y), Align2::LEFT_CENTER, &shown, regular(10.5), if active { EDIT } else { INK });
+    let x_color = if close.hovered() { ACCENT } else { MUTED };
+    ui.painter().text(pos2(rect.max.x - 10.0, rect.center().y), Align2::RIGHT_CENTER, "×", regular(11.0), x_color);
+    if close.clicked() {
+        Some(DraftAction::Remove(index))
+    } else if body.clicked() {
+        Some(DraftAction::Edit(index))
+    } else {
+        None
+    }
 }
 
 /// What the target chip shows: the chosen agent's kind, or `auto` before one is chosen.
@@ -802,6 +953,8 @@ fn fetch_targets(address: &str, workspace: &str, session: &str) -> Result<Vec<Ta
     Ok(build_targets(row.agents_detail, &reply.clis))
 }
 
+/// The target list from the service's answer: its agents, then the CLIs to start.
+#[cfg(not(target_arch = "wasm32"))]
 fn build_targets(agents: Vec<workspaces::AgentDetail>, clis: &[String]) -> Vec<TargetInfo> {
     let mut targets = Vec::new();
     for agent in agents {
@@ -1045,10 +1198,196 @@ fn input_id() -> Id {
     Id::new("map_composer_input")
 }
 
+/// The clickable label half of a draft chip (it opens the draft in the field).
+fn draft_body_id(index: usize) -> Id {
+    Id::new(("map_composer_draft", index, false))
+}
+
+/// The × half of a draft chip (it removes the draft).
+fn draft_remove_id(index: usize) -> Id {
+    Id::new(("map_composer_draft", index, true))
+}
+
 fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
     ui.painter().layout_no_wrap(text.to_string(), font, Color32::WHITE).size().x
 }
 
 fn mono(size: f32) -> FontId {
     FontId::monospace(size)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::live_tests::{flat, has_text};
+    use egui::{Event, PointerButton, RawInput, Shape};
+
+    /// The composer's bar alone, drawn headless: its strip of drafts, its field, target and Send.
+    struct Bar {
+        ctx: egui::Context,
+        state: State,
+        /// The drafts a send from this selection would carry (all of them in these tests).
+        included: Vec<usize>,
+        time: f64,
+    }
+
+    impl Bar {
+        /// A bar with `(card, text)` drafts.
+        fn new(drafts: &[(&str, &str)]) -> Self {
+            let mut state = State::default();
+            for (node, text) in drafts {
+                state.drafts.push(Draft {
+                    text: (*text).to_string(),
+                    node: Some((*node).to_string()),
+                    page: Some("Page".to_string()),
+                    node_id: None,
+                    page_id: None,
+                });
+            }
+            let included = (0..state.drafts.len()).collect();
+            let mut bar = Self { ctx: egui::Context::default(), state, included, time: 0.0 };
+            bar.frame(vec![]);
+            bar
+        }
+
+        /// One frame of the bar: whether it asked to send, and what it painted.
+        fn frame(&mut self, events: Vec<Event>) -> (bool, Vec<Shape>) {
+            self.time += 1.0 / 60.0;
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 900.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let state = &mut self.state;
+            let included = &self.included;
+            let mut send = false;
+            let mut out = self.ctx.run_ui(input, |ui| {
+                ui.set_width(760.0);
+                let names = Names { node: Some("Card"), page: Some("Page"), node_id: None, page_id: None };
+                send = body(ui, state, "COMMENTING ON · Card · 0 comments", &names, true, true, included, 0);
+            });
+            out.textures_delta.clear();
+            (send, flat(&out.shapes))
+        }
+
+        fn rect(&self, id: Id) -> Rect {
+            self.ctx.read_response(id).map_or_else(|| panic!("no widget {id:?}"), |response| response.rect)
+        }
+
+        /// A full press and release on `at`, then a quiet frame.
+        fn click(&mut self, at: Pos2) {
+            for pressed in [true, false] {
+                self.frame(vec![
+                    Event::PointerMoved(at),
+                    Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE },
+                ]);
+            }
+            self.frame(vec![Event::PointerMoved(at)]);
+        }
+
+        fn click_chip(&mut self, index: usize) {
+            let at = self.rect(draft_body_id(index)).center();
+            self.click(at);
+        }
+
+        fn click_remove(&mut self, index: usize) {
+            let at = self.rect(draft_remove_id(index)).center();
+            self.click(at);
+        }
+
+        /// Where the field's caret is now, in characters.
+        fn caret(&self) -> Option<usize> {
+            egui::TextEdit::load_state(&self.ctx, input_id()).and_then(|state| state.cursor.char_range()).map(|range| range.primary.index.0)
+        }
+
+        fn key(&mut self, key: Key, modifiers: Modifiers) -> bool {
+            let (send, _) = self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }]);
+            send
+        }
+    }
+
+    #[test]
+    fn clicking_a_chip_loads_that_draft_into_the_field() {
+        let mut bar = Bar::new(&[("Alpha", "Fix the lane"), ("Beta", "Merge agents")]);
+        bar.click_chip(0);
+        assert_eq!(bar.state.input, "Fix the lane");
+        assert_eq!(bar.state.editing, Some(0));
+        assert!(!bar.state.drafts.is_empty(), "opening a draft does not send or remove it");
+
+        bar.frame(vec![]);
+        assert!(bar.ctx.memory(|m| m.has_focus(input_id())), "the field takes the keyboard");
+        assert_eq!(bar.caret(), Some("Fix the lane".chars().count()), "the caret waits at the end");
+        let (send, shapes) = bar.frame(vec![]);
+        assert!(!send);
+        assert!(has_text(&shapes, "Alpha · Fix the lane"), "the chip stays in the strip");
+    }
+
+    #[test]
+    fn the_remove_control_deletes_only_that_draft() {
+        let mut bar = Bar::new(&[("Alpha", "Fix the lane"), ("Beta", "Merge agents")]);
+        bar.click_chip(0);
+        assert_eq!(bar.state.editing, Some(0));
+
+        bar.click_remove(0);
+        assert_eq!(bar.state.drafts.len(), 1);
+        assert_eq!(bar.state.drafts[0].text, "Merge agents");
+        assert_eq!(bar.state.editing, None, "removing the edited draft ends the edit");
+        assert!(bar.state.input.is_empty());
+
+        let (_, shapes) = bar.frame(vec![]);
+        assert!(has_text(&shapes, "Beta · Merge agents"));
+        assert!(!has_text(&shapes, "Alpha · Fix the lane"));
+    }
+
+    #[test]
+    fn a_second_click_on_the_active_chip_returns_to_a_new_comment() {
+        let mut bar = Bar::new(&[("Alpha", "Fix the lane"), ("Beta", "Merge agents")]);
+        bar.click_chip(0);
+        assert_eq!(bar.state.editing, Some(0));
+        bar.click_chip(0);
+        assert_eq!(bar.state.editing, None);
+        assert!(bar.state.input.is_empty());
+        assert_eq!(bar.state.drafts.len(), 2, "a second click must not delete the draft");
+    }
+
+    #[test]
+    fn sending_while_editing_sends_the_edited_text_and_clears_editing() {
+        let mut bar = Bar::new(&[("Alpha", "Fix the lane")]);
+        bar.click_chip(0);
+        bar.state.input = "Fix the lane: Lane Shared is gone".to_string();
+
+        assert!(bar.key(Key::Enter, Modifiers::COMMAND), "Cmd+Enter asks for a send");
+        assert_eq!(bar.state.editing, None);
+        assert!(bar.state.input.is_empty(), "the edit is not sent a second time as the prompt");
+        assert_eq!(bar.state.drafts[0].text, "Fix the lane: Lane Shared is gone");
+    }
+
+    #[test]
+    fn shift_enter_saves_the_edit_into_the_draft() {
+        let mut bar = Bar::new(&[("Alpha", "Fix the lane")]);
+        bar.click_chip(0);
+        bar.state.input = "Fix the lane: renamed".to_string();
+
+        assert!(!bar.key(Key::Enter, Modifiers::SHIFT), "saving is not sending");
+        assert_eq!(bar.state.editing, None);
+        assert!(bar.state.input.is_empty());
+        assert_eq!(bar.state.drafts[0].text, "Fix the lane: renamed");
+    }
+
+    #[test]
+    fn escape_and_backspace_stop_editing_and_leave_the_draft() {
+        let mut bar = Bar::new(&[("Alpha", "Fix the lane")]);
+        bar.click_chip(0);
+        bar.key(Key::Escape, Modifiers::NONE);
+        assert_eq!(bar.state.editing, None);
+        assert!(bar.state.input.is_empty());
+        assert_eq!(bar.state.drafts[0].text, "Fix the lane");
+
+        bar.click_chip(0);
+        bar.state.input.clear();
+        bar.key(Key::Backspace, Modifiers::NONE);
+        assert_eq!(bar.state.editing, None);
+        assert_eq!(bar.state.drafts[0].text, "Fix the lane", "Backspace keeps the draft");
+    }
 }

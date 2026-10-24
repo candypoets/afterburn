@@ -696,7 +696,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     // letting the window's clear color show behind the workspace palette's text.
     ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
     #[cfg(not(target_arch = "wasm32"))]
-    host_picker(app, ui);
+    host_picker(app, ui, &skin);
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(skin.bg)).show(ui, |ui| {
         let rect = ui.max_rect();
         let head = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER_H.min(rect.height())));
@@ -710,6 +710,9 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         detail(app, ui, &skin, detail_rect);
         ui.painter().line_segment([pos2(list.max.x, body.min.y), pos2(list.max.x, body.max.y)], Stroke::new(1.0, skin.border));
     });
+    // The New workspace modal first, so the Add machine modal it opens draws above it.
+    crate::new_workspace::show(app, ui);
+    crate::machine_modal::show(app, ui);
 }
 
 /// The togglable workspace pane beside an open map. It lists the same Herdr workspaces as the
@@ -730,7 +733,7 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let skin = Skin::of(&Tokens::get(&ctx));
     ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
     #[cfg(not(target_arch = "wasm32"))]
-    host_picker(app, ui);
+    host_picker(app, ui, &skin);
     let active = app.active_workspace.clone();
     let rows = app.ws.rows.clone();
     let groups = grouped(&rows);
@@ -755,6 +758,9 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
         .line_segment([ui.max_rect().left_top() + vec2(0.0, 34.0), ui.max_rect().right_top() + vec2(0.0, 34.0)], Stroke::new(1.0, skin.border));
 
     egui::ScrollArea::vertical().id_salt("workspace_pane_scroll").show(ui, |ui| {
+        if new_workspace_row(ui, &skin) {
+            crate::new_workspace::open(app);
+        }
         let mut chosen = None;
         for (base, branches) in &groups {
             let is_active = current.is_some_and(|id| branches.iter().any(|b| b.id == id));
@@ -801,6 +807,9 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     {
         app.ui.home = true;
     }
+    // The same modals as the full screen, so the pane can create and add machines too.
+    crate::new_workspace::show(app, ui);
+    crate::machine_modal::show(app, ui);
 }
 
 /// Start the node join and wait for its document welcome before showing the map.
@@ -816,6 +825,8 @@ fn join_ready(app: &mut FigApp) -> bool {
                 app.ws.error = None;
                 app.ui.home = false;
                 update_active(app);
+                app.machine_modal.close();
+                app.new_workspace.close();
                 return true;
             }
             Some(figcraft_engine::live::Status::Failed { reason }) => {
@@ -840,6 +851,8 @@ fn join_ready(app: &mut FigApp) -> bool {
             app.session.active = index;
             app.ui.home = false;
             update_active(app);
+            app.machine_modal.close();
+            app.new_workspace.close();
             return true;
         }
     }
@@ -922,24 +935,46 @@ pub fn poll_node_events(app: &mut FigApp, ctx: &egui::Context) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn host_picker(app: &mut FigApp, ui: &mut Ui) {
+fn host_picker(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
     if app.ws.pending_live.is_some() {
         ui.label("Joining the workspace…");
         return;
     }
-    if let Some(host) = crate::node_hosts::show(ui, &mut app.ws.hosts) {
-        set_service(&host.address);
-        // Discard old-host responses before requesting the new host's workspaces.
-        app.ws.rx = None;
-        app.ws.busy = None;
-        app.ws.selected = None;
-        app.ws.rows.clear();
-        app.ws.clis.clear();
-        app.ws.target = None;
-        app.ws.join = None;
-        app.ws.join_workspace = None;
-        app.ws.refresh(ui.ctx());
+    let ready = crate::node_hosts::show(ui, &mut app.ws.hosts);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        let manage = ui.add(egui::Button::new(egui::RichText::new("Manage machines…").font(regular(10.0)).color(s.muted)).frame(false));
+        a11y::link(&manage, "Manage machines");
+        if manage.clicked() {
+            crate::machine_modal::open(app);
+        }
+        ui.add_space(8.0);
+        let add = ui.add(egui::Button::new(egui::RichText::new("+ Add machine").font(semibold(10.0)).color(s.accent)).frame(false));
+        a11y::link(&add, "Add machine");
+        if add.clicked() {
+            crate::machine_modal::open(app);
+        }
+    });
+    if let Some(host) = ready {
+        use_host(app, ui.ctx(), &host);
     }
+}
+
+/// Use `host` on the Workspaces screen: drop the old host's answers and list its workspaces.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn use_host(app: &mut FigApp, ctx: &egui::Context, host: &crate::node_hosts::Host) {
+    set_service(&host.address);
+    // Discard old-host responses before requesting the new host's workspaces.
+    app.ws.rx = None;
+    app.ws.busy = None;
+    app.ws.selected = None;
+    app.ws.rows.clear();
+    app.ws.clis.clear();
+    app.ws.target = None;
+    app.ws.join = None;
+    app.ws.join_workspace = None;
+    app.ws.hosts.selected = Some(host.clone());
+    app.ws.refresh(ctx);
 }
 
 fn header(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
@@ -1010,6 +1045,23 @@ fn branch_label(w: &Workspace) -> String {
         .unwrap_or_else(|| w.name().to_string())
 }
 
+/// The "+ New workspace" row at the top of the list and the pane.
+fn new_workspace_row(ui: &mut Ui, s: &Skin) -> bool {
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 38.0), Sense::click());
+    a11y::button(&resp, "New workspace");
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
+    }
+    let c = pos2(rect.min.x + 16.0, rect.center().y - 3.0);
+    let stroke = Stroke::new(1.5, s.accent);
+    ui.painter().line_segment([pos2(c.x - 4.0, c.y), pos2(c.x + 4.0, c.y)], stroke);
+    ui.painter().line_segment([pos2(c.x, c.y - 4.0), pos2(c.x, c.y + 4.0)], stroke);
+    ui.painter().text(pos2(rect.min.x + 28.0, rect.center().y - 3.0), Align2::LEFT_CENTER, "New workspace", semibold(11.5), s.muted);
+    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, s.border));
+    resp.clicked()
+}
+
 fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
     ui.painter().rect_filled(rect, CornerRadius::ZERO, s.panel);
     let head = Rect::from_min_size(rect.min, vec2(rect.width(), 42.0));
@@ -1025,6 +1077,9 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
         ui.set_clip_rect(list);
         egui::ScrollArea::vertical().id_salt("workspaces_list").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
+            if new_workspace_row(ui, s) {
+                crate::new_workspace::open(app);
+            }
             let (error, busy, started) = (app.ws.error.clone(), app.ws.busy.is_some(), app.ws.started);
             if app.ws.rows.is_empty() {
                 empty_list(app, ui, s, &ctx, error.as_deref(), busy, started);

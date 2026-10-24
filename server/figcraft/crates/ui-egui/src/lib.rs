@@ -121,13 +121,16 @@ fn page_tab(ui: &mut egui::Ui, name: &str, active: bool) -> (egui::Response, boo
     (resp, close.clicked())
 }
 
+pub mod machine_modal;
 pub mod menus;
 pub mod missing_fonts;
 pub mod new_page;
+pub mod new_workspace;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod node;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod node_hosts;
+pub mod onboarding;
 pub mod online;
 pub mod page_delete;
 pub mod page_tree;
@@ -145,6 +148,7 @@ pub mod selection_colors;
 mod selection_spacing;
 pub mod shortcuts;
 pub mod shortcuts_panel;
+pub mod status_bar;
 pub mod style_picker;
 pub mod sync;
 pub mod tabs;
@@ -802,6 +806,14 @@ pub struct FigApp {
     pub compose: compose::State,
     /// The Sync button and widget in map mode.
     pub sync: sync::State,
+    /// The bottom status bar (the worktree and Page tree).
+    pub status: status_bar::State,
+    /// The first-run onboarding flow.
+    pub onboarding: onboarding::State,
+    /// The Add machine modal.
+    pub machine_modal: machine_modal::State,
+    /// The New workspace modal.
+    pub new_workspace: new_workspace::State,
     pub canvas: canvas::CanvasState,
     pub services: Box<dyn Services>,
     worker: Option<render_worker::Worker>,
@@ -856,6 +868,10 @@ impl FigApp {
             new_page: new_page::State::default(),
             compose: compose::State::default(),
             sync: sync::State::default(),
+            status: status_bar::State::default(),
+            onboarding: onboarding::State::default(),
+            machine_modal: machine_modal::State::default(),
+            new_workspace: new_workspace::State::default(),
             session,
             canvas: canvas::CanvasState::default(),
             services,
@@ -1517,6 +1533,11 @@ impl FigApp {
             }
             self.background_done(&ctx);
         }
+        // The first-run onboarding: asked once, before the map mode home draws.
+        if !self.onboarding.decided {
+            let start = onboarding::should_start(self);
+            self.onboarding.decide(start);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if map_mode() {
             workspaces::update_active(self);
@@ -1590,6 +1611,15 @@ impl FigApp {
             // Map mode browses the projects themselves: Herdr workspaces, with or without a map.
             // The design app keeps its FigCraft home.
             if map_mode {
+                // The first-run flow owns the window until it is finished or skipped.
+                if self.onboarding.active && onboarding::show(self, ui) {
+                    self.ui.shortcuts_panel = false;
+                    dialogs::keys(self, &ctx);
+                    dialogs::show(self, &ctx);
+                    self.toast_ui(&ctx);
+                    windows::requests(self, &ctx);
+                    return;
+                }
                 workspaces::show(self, ui);
             } else {
                 home::show(self, ui);
@@ -1765,18 +1795,14 @@ impl FigApp {
                                 self.run("page.select", serde_json::json!({"id": id}));
                             }
                         }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add_space(12.0);
-                            let response = ui.add(egui::Button::new(egui::RichText::new("Page tree  ⌄").size(9.5).color(muted)).frame(false));
-                            a11y::button(&response, "Page tree");
-                            if response.on_hover_text("All pages and subpages (⌘⇧P)").clicked() {
-                                self.page_tree.open = true;
-                                self.page_tree.just_opened = true;
-                            }
-                        });
                     });
                 });
             }
+        }
+        if map_mode {
+            egui::Panel::bottom("map_status").exact_size(status_bar::HEIGHT).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                status_bar::show(self, ui);
+            });
         }
         if map_mode && self.ws.pane_open {
             egui::Panel::left("workspace_pane")

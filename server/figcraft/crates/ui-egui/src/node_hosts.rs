@@ -4,7 +4,8 @@ use std::io::Read;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, OnceLock, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -41,11 +42,117 @@ fn register(host: &Host) -> Result<(), String> {
     Ok(())
 }
 
-enum Outcome {
+/// The machines the strip knows: this computer and the saved SSH hosts.
+pub(crate) fn known(state: &State) -> Vec<Host> {
+    let mut hosts = vec![resolve(LOCAL)];
+    hosts.extend(state.hosts.iter().filter(|host| host.ssh.is_some()).cloned());
+    hosts.truncate(256);
+    hosts
+}
+
+/// Remember a machine a setup reached and save it for the next launch.
+pub(crate) fn remember(state: &mut State, host: &Host) -> Result<(), String> {
+    if !state.hosts.iter().any(|known| known.address == host.address) {
+        state.hosts.push(host.clone());
+        state.hosts.truncate(256);
+    }
+    state.selected = Some(host.clone());
+    save_hosts(&state.hosts)
+}
+
+/// The outcome of one host setup. The host strip and the Add machine modal both start the same
+/// [`prepare_with`] work; each renders the same outcome its own way.
+#[derive(Clone, Debug)]
+pub(crate) enum Outcome {
     Ready(Host),
     Approval(Host),
     Update(Host, String),
     Failed(String),
+}
+
+/// One step of a setup, reported as the worker reaches it. The modal shows the steps the design
+/// names (SSH, copy, start, Herdr) and leaves the ones a setup skipped marked as not needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Phase {
+    /// Reaching the node: the SSH tunnel and the protocol handshake.
+    Ssh,
+    /// Copying mindmap-node to the host and running its installer.
+    Copy,
+    /// The node is installed and starts on 127.0.0.1:47822.
+    Start,
+    /// Checking Herdr and preparing the shared session (asking before installing it).
+    Herdr,
+}
+
+/// A host setup running on a thread of its own: its progress and, once, its outcome.
+pub(crate) struct Job {
+    outcome: mpsc::Receiver<Outcome>,
+    phases: mpsc::Receiver<Phase>,
+    cancelled: Arc<AtomicBool>,
+    finished: bool,
+}
+
+impl Job {
+    /// The phases reported since the last frame (a few at most).
+    pub(crate) fn phases(&mut self) -> Vec<Phase> {
+        let mut phases = Vec::new();
+        while phases.len() < 8 {
+            match self.phases.try_recv() {
+                Ok(phase) => phases.push(phase),
+                Err(_) => break,
+            }
+        }
+        phases
+    }
+
+    /// The outcome once the setup has finished.
+    pub(crate) fn outcome(&mut self) -> Option<Outcome> {
+        if self.finished {
+            return None;
+        }
+        let outcome = match self.outcome.try_recv() {
+            Ok(outcome) => outcome,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => Outcome::Failed("Host setup stopped unexpectedly".into()),
+        };
+        self.finished = true;
+        Some(outcome)
+    }
+
+    /// Ask the setup to stop before its next step. A step already talking to the host finishes.
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Stop a setup between its phases when its modal was closed.
+fn stop_if_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
+    if cancelled.load(Ordering::Relaxed) { Err("Host setup cancelled.".into()) } else { Ok(()) }
+}
+
+/// Start the same host preparation the host strip runs, reporting each phase as it happens.
+pub(crate) fn begin(host: Host, install: bool) -> Result<Job, String> {
+    let (outcome_tx, outcome_rx) = mpsc::channel();
+    let (phase_tx, phase_rx) = mpsc::channel();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let stop = Arc::clone(&cancelled);
+    std::thread::Builder::new()
+        .name("figcraft-host-setup".into())
+        .spawn(move || {
+            let result = prepare_with(
+                &host,
+                install,
+                false,
+                &mut |phase| {
+                    let _ = phase_tx.send(phase);
+                },
+                &stop,
+            )
+            .unwrap_or_else(Outcome::Failed);
+            let _ = outcome_tx.send(result);
+        })
+        .map_err(|error| format!("Could not start host setup: {error}"))?;
+    Ok(Job { outcome: outcome_rx, phases: phase_rx, cancelled, finished: false })
 }
 
 #[derive(Default)]
@@ -82,13 +189,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut State) -> Option<Host> {
         state.pending = None;
         match result {
             Outcome::Ready(host) => {
-                if !state.hosts.iter().any(|h| h.address == host.address) {
-                    state.hosts.push(host.clone());
-                }
-                if let Err(error) = save_hosts(&state.hosts) {
+                if let Err(error) = remember(state, &host) {
                     state.error = Some(error);
                 }
-                state.selected = Some(host.clone());
                 state.approval = None;
                 state.update = None;
                 return Some(host);
@@ -186,13 +289,25 @@ fn start(state: &mut State, host: Host, install: bool, update: bool) {
     });
 }
 
+/// Host setup without a progress observer: the host strip's path.
 fn prepare(host: &Host, install: bool, update: bool) -> Result<Outcome, String> {
+    static NOT_CANCELLED: AtomicBool = AtomicBool::new(false);
+    prepare_with(host, install, update, &mut |_| {}, &NOT_CANCELLED)
+}
+
+/// The one host setup: install the node if needed, prepare Herdr (asking before installing it)
+/// and save the machine. `progress` reports each phase; `cancelled` is checked between phases.
+fn prepare_with(host: &Host, install: bool, update: bool, progress: &mut dyn FnMut(Phase), cancelled: &AtomicBool) -> Result<Outcome, String> {
     register(host)?;
+    progress(Phase::Ssh);
     if update {
         // Keep the legacy connection in the one pool for this read-only safety request.
         let sessions = crate::node::rpc(&host.address, json!({"method":"session.list"}), Duration::from_secs(30))?;
         crate::node::check_update_sessions(&sessions)?;
+        stop_if_cancelled(cancelled)?;
+        progress(Phase::Copy);
         install_helper(host, true)?;
+        progress(Phase::Start);
         crate::node::disconnect(&host.address);
     }
     let compatibility = match crate::node::update_required(&host.address) {
@@ -202,7 +317,11 @@ fn prepare(host: &Host, install: bool, update: bool) -> Result<Outcome, String> 
             if error.contains("Incompatible Mindmap node protocol") || (host.ssh.is_none() && host.address != LOCAL) {
                 return Err(error);
             }
+            stop_if_cancelled(cancelled)?;
+            progress(Phase::Copy);
             install_helper(host, false)?;
+            stop_if_cancelled(cancelled)?;
+            progress(Phase::Start);
             crate::node::update_required(&host.address)?
         }
         Err(error) => return Err(error),
@@ -210,6 +329,10 @@ fn prepare(host: &Host, install: bool, update: bool) -> Result<Outcome, String> 
     if let Some(reason) = compatibility {
         return Ok(Outcome::Update(host.clone(), reason));
     }
+    // The handshake above proves the node is running on this machine's loopback address.
+    progress(Phase::Start);
+    stop_if_cancelled(cancelled)?;
+    progress(Phase::Herdr);
     let status = crate::node::rpc(&host.address, json!({"method":"host.status"}), Duration::from_secs(30))?;
     if status.get("ok").and_then(|v| v.as_bool()) != Some(true) {
         return Err("The node could not check Herdr setup. Check the node installation and retry.".into());
@@ -217,6 +340,7 @@ fn prepare(host: &Host, install: bool, update: bool) -> Result<Outcome, String> 
     if !install && status.get("installed").and_then(|v| v.as_bool()) == Some(false) {
         return Ok(Outcome::Approval(host.clone()));
     }
+    stop_if_cancelled(cancelled)?;
     let ready = crate::node::rpc(&host.address, json!({"method":"host.ensure","install_herdr":install}), Duration::from_secs(180))?;
     if ready.get("approval_required").and_then(|v| v.as_bool()) == Some(true) {
         return Ok(Outcome::Approval(host.clone()));
@@ -229,6 +353,7 @@ fn prepare(host: &Host, install: bool, update: bool) -> Result<Outcome, String> 
     }
     if let Some(target) = &host.ssh {
         let session = ready.get("session").and_then(|v| v.as_str()).unwrap_or("default");
+        stop_if_cancelled(cancelled)?;
         save_machine(target, &host.name, session)?;
     }
     Ok(Outcome::Ready(host.clone()))
@@ -275,7 +400,7 @@ fn save_hosts(hosts: &[Host]) -> Result<(), String> {
     std::fs::rename(temp, path).map_err(|_| "Could not save hosts".to_owned())
 }
 
-fn validate_target(target: &str) -> Result<(), String> {
+pub(crate) fn validate_target(target: &str) -> Result<(), String> {
     if target.is_empty()
         || target.starts_with('-')
         || target.len() > 253
