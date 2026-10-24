@@ -169,7 +169,8 @@ pub struct State {
 }
 
 /// Returns a host only after its node and shared Herdr session are ready.
-pub fn show(ui: &mut egui::Ui, state: &mut State) -> Option<Host> {
+/// Load the saved machines and take in a finished setup. Returns the host when it is ready.
+pub fn poll(state: &mut State) -> Option<Host> {
     if !state.loaded {
         state.loaded = true;
         state.hosts.push(resolve(LOCAL));
@@ -204,9 +205,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut State) -> Option<Host> {
             Outcome::Failed(error) => state.error = Some(error),
         }
     }
+    None
+}
+
+/// The machines to switch between: one chip each, the selected one highlighted.
+///
+/// Adding a machine lives in [`crate::machine_modal`]; this row only selects one that is saved.
+pub fn chips(ui: &mut egui::Ui, state: &mut State) {
+    let enabled = state.pending.is_none() && state.approval.is_none() && state.update.is_none();
     ui.horizontal_wrapped(|ui| {
-        ui.label("Host");
-        ui.add_enabled_ui(state.pending.is_none() && state.approval.is_none() && state.update.is_none(), |ui| {
+        ui.add_enabled_ui(enabled, |ui| {
             for host in state.hosts.clone() {
                 let selected = state.selected.as_ref().is_some_and(|h| h.address == host.address);
                 if ui.selectable_label(selected, &host.name).clicked() {
@@ -215,22 +223,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut State) -> Option<Host> {
             }
         });
     });
-    ui.add_enabled_ui(state.pending.is_none() && state.approval.is_none() && state.update.is_none(), |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut state.target).hint_text("SSH host or user@host").desired_width(180.0));
-            ui.add(egui::TextEdit::singleline(&mut state.name).hint_text("Display name").desired_width(120.0));
-            if ui.button("Add host").clicked() {
-                let target = state.target.trim().to_owned();
-                match validate_target(&target) {
-                    Ok(()) => {
-                        let name = if state.name.trim().is_empty() { target.clone() } else { state.name.trim().to_owned() };
-                        start(state, Host { name, address: format!("ssh:{target}"), ssh: Some(target) }, false, false);
-                    }
-                    Err(error) => state.error = Some(error),
-                }
-            }
-        });
-    });
+}
+
+/// What a running or failed setup says: an approval, an update, progress, the error.
+pub fn status(ui: &mut egui::Ui, state: &mut State) {
     if let Some(host) = state.approval.clone() {
         ui.label(format!("Herdr is missing on {}. Install it to run agents?", host.name));
         ui.horizontal(|ui| {
@@ -260,14 +256,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut State) -> Option<Host> {
     if state.pending.is_some() {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("Preparing host…");
+            ui.label("Preparing host\u{2026}");
         });
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
     if let Some(error) = &state.error {
         ui.label(error);
     }
-    None
 }
 
 /// Start host setup without granting permission to install Herdr.

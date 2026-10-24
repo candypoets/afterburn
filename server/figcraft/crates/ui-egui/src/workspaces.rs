@@ -695,8 +695,6 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     // The host controls precede the central panel, so paint their surface too rather than
     // letting the window's clear color show behind the workspace palette's text.
     ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
-    #[cfg(not(target_arch = "wasm32"))]
-    host_picker(app, ui, &skin);
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(skin.bg)).show(ui, |ui| {
         let rect = ui.max_rect();
         let head = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER_H.min(rect.height())));
@@ -733,7 +731,10 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let skin = Skin::of(&Tokens::get(&ctx));
     ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
     #[cfg(not(target_arch = "wasm32"))]
-    host_picker(app, ui, &skin);
+    {
+        ui.add_space(8.0);
+        machines(app, ui, &skin);
+    }
     let active = app.active_workspace.clone();
     let rows = app.ws.rows.clone();
     let groups = grouped(&rows);
@@ -935,15 +936,27 @@ pub fn poll_node_events(app: &mut FigApp, ctx: &egui::Context) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn host_picker(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
+/// The machines block at the top of the Workspaces sidebar: the saved machines, what setup is
+/// doing, and the way to add or manage one. Adding a machine lives in the machine modal; the
+/// SSH target is never typed into a page header.
+#[cfg(not(target_arch = "wasm32"))]
+fn machines(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
     if app.ws.pending_live.is_some() {
-        ui.label("Joining the workspace…");
+        ui.label("Joining the workspace\u{2026}");
         return;
     }
-    let ready = crate::node_hosts::show(ui, &mut app.ws.hosts);
     ui.horizontal(|ui| {
-        ui.add_space(10.0);
-        let manage = ui.add(egui::Button::new(egui::RichText::new("Manage machines…").font(regular(10.0)).color(s.muted)).frame(false));
+        ui.add_space(12.0);
+        eyebrow(ui, s, "MACHINES");
+    });
+    let ready = crate::node_hosts::poll(&mut app.ws.hosts);
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        ui.vertical(|ui| crate::node_hosts::chips(ui, &mut app.ws.hosts));
+    });
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        let manage = ui.add(egui::Button::new(egui::RichText::new("Manage machines\u{2026}").font(regular(10.0)).color(s.muted)).frame(false));
         a11y::link(&manage, "Manage machines");
         if manage.clicked() {
             crate::machine_modal::open(app);
@@ -954,6 +967,10 @@ fn host_picker(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
         if add.clicked() {
             crate::machine_modal::open(app);
         }
+    });
+    ui.horizontal(|ui| {
+        ui.add_space(12.0);
+        ui.vertical(|ui| crate::node_hosts::status(ui, &mut app.ws.hosts));
     });
     if let Some(host) = ready {
         use_host(app, ui.ctx(), &host);
@@ -1064,7 +1081,17 @@ fn new_workspace_row(ui: &mut Ui, s: &Skin) -> bool {
 
 fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
     ui.painter().rect_filled(rect, CornerRadius::ZERO, s.panel);
-    let head = Rect::from_min_size(rect.min, vec2(rect.width(), 42.0));
+    let mut top = rect.min.y;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let area = Rect::from_min_size(rect.min, vec2(rect.width(), 150.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
+            ui.add_space(8.0);
+            machines(app, ui, s);
+            top = ui.min_rect().max.y + 8.0;
+        });
+    }
+    let head = Rect::from_min_size(pos2(rect.min.x, top), vec2(rect.width(), 42.0));
     ui.painter().text(pos2(head.min.x + 16.0, head.center().y), Align2::LEFT_CENTER, "WORKSPACES", mono(9.5), s.faint);
     let groups = grouped(&app.ws.rows);
     let count = groups.len().to_string();
