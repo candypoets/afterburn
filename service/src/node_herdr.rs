@@ -27,6 +27,7 @@ use crate::workspace::{AgentDetail, LastSync, WorkspaceView};
 
 #[path = "node_herdr_events.rs"]
 mod events;
+pub(crate) use events::rpc;
 pub use events::{HerdrEvent, HerdrMonitor};
 
 const OFFICIAL_INSTALLER: &str = "https://herdr.dev/install.sh";
@@ -324,9 +325,12 @@ impl NodeHerdr {
                 "Herdr session configuration changed; recreate the node Herdr client",
             ));
         }
-        self.binary().map(Herdr::new).ok_or_else(|| {
-            Error::new("Herdr is not installed; host.ensure requires installation approval")
-        })
+        if self.binary().is_none() {
+            return Err(Error::new(
+                "Herdr is not installed; host.ensure requires installation approval",
+            ));
+        }
+        Ok(Herdr::new(self.socket.clone()))
     }
 
     fn binary(&self) -> Option<PathBuf> {

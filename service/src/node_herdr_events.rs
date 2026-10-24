@@ -292,7 +292,7 @@ fn write_request(stream: &mut UnixStream, id: &str, method: &str, params: Value)
         .map_err(|_| Error::new("could not write to Herdr socket"))
 }
 
-pub(super) fn rpc(path: &Path, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+pub(crate) fn rpc(path: &Path, method: &str, params: Value, timeout: Duration) -> Result<Value> {
     let mut stream = connect(path, READ_TICK.min(timeout))?;
     write_request(&mut stream, "node", method, params)?;
     response(
