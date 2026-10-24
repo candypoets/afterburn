@@ -73,6 +73,9 @@ pub struct Agent {
     /// Focused in the user's UI.
     #[serde(default)]
     pub focused: bool,
+    /// The pane's terminal title without spinners or styling: what the agent is doing.
+    #[serde(default)]
+    pub terminal_title_stripped: Option<String>,
 }
 
 /// One pane from `herdr pane list`.

@@ -23,7 +23,7 @@ use crate::agent::{self, AgentOutcome, Target};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::herdr::{Agent, Herdr, Pane, Workspace};
-use crate::workspace::{AgentDetail, WorkspaceView};
+use crate::workspace::{AgentDetail, LastSync, WorkspaceView};
 
 #[path = "node_herdr_events.rs"]
 mod events;
@@ -481,6 +481,11 @@ fn workspace_view(
     } else {
         "none"
     };
+    let last_sync = if map == "map" {
+        path.as_deref().and_then(last_sync)
+    } else {
+        None
+    };
     WorkspaceView {
         id: workspace.workspace_id.clone(),
         label: workspace.label,
@@ -507,6 +512,11 @@ fn workspace_view(
                     name: a.name.clone(),
                     status: a.agent_status.clone().unwrap_or_else(|| "unknown".into()),
                     focused: a.focused,
+                    title: a
+                        .terminal_title_stripped
+                        .clone()
+                        .map(|title| title.trim().to_owned())
+                        .filter(|title| !title.is_empty()),
                 })
             })
             .collect(),
@@ -515,6 +525,7 @@ fn workspace_view(
         map: map.into(),
         tabs: workspace.tab_count,
         panes: workspace.pane_count,
+        last_sync,
     }
 }
 
@@ -526,6 +537,37 @@ fn pane_path(panes: &[Pane]) -> Option<String> {
         .filter_map(|p| p.cwd.as_ref())
         .find(|p| !p.trim().is_empty())
         .cloned()
+}
+
+/// The newest commit on HEAD carrying a `Mindmap-Sync:` trailer.
+fn last_sync(path: &str) -> Option<LastSync> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            path,
+            "log",
+            "-1",
+            "--regexp-ignore-case",
+            "--grep=^Mindmap-Sync:",
+            "--format=%h%x1f%s%x1f%cI",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let mut parts = text.trim().splitn(3, '\u{1f}');
+    let commit = parts.next()?.trim().to_owned();
+    let subject = parts.next()?.trim().to_owned();
+    let at = parts.next()?.trim().to_owned();
+    (!commit.is_empty()).then_some(LastSync {
+        commit,
+        subject,
+        at,
+    })
 }
 
 fn git_branch(path: &str) -> Option<String> {

@@ -263,6 +263,16 @@ pub fn status(ui: &mut egui::Ui, state: &mut State) {
     }
 }
 
+/// A setup is running (connecting, installing or updating).
+pub fn preparing(state: &State) -> bool {
+    state.pending.is_some()
+}
+
+/// [`status`] has something to say: an approval, an update, progress or an error.
+pub fn has_notice(state: &State) -> bool {
+    state.approval.is_some() || state.update.is_some() || state.pending.is_some() || state.error.is_some()
+}
+
 /// The saved machines, in order: the local one first, then the saved SSH hosts.
 pub fn hosts(state: &State) -> &[Host] {
     &state.hosts

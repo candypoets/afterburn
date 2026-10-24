@@ -24,12 +24,16 @@ use std::time::Duration;
 const DEFAULT_SERVICE: &str = "127.0.0.1:47822";
 
 /// The list's width (the detail gets the rest of the window).
-const SIDEBAR: f32 = 340.0;
-/// One workspace row.
-const ROW_H: f32 = 76.0;
-/// The Init split button's height and the chevron segment's width.
-const SPLIT_H: f32 = 34.0;
-const CHEVRON_W: f32 = 32.0;
+const SIDEBAR: f32 = 300.0;
+/// One workspace row in the sidebar, and in the map's pane.
+const ROW_H: f32 = 54.0;
+const PANE_ROW_H: f32 = 64.0;
+/// A machine row, and the quiet "+ New workspace" / "+ Add machine" rows.
+#[cfg(not(target_arch = "wasm32"))]
+const MACHINE_H: f32 = 30.0;
+const PLUS_H: f32 = 26.0;
+/// How far machine rows and the plus rows sit in from the sidebar's edges.
+const INSET: f32 = 8.0;
 /// The agent menu's width (it shrinks to fit a narrow window).
 const PICKER_W: f32 = 360.0;
 
@@ -100,6 +104,8 @@ pub struct Workspace {
     pub tabs: Option<u32>,
     #[serde(default)]
     pub panes: Option<u32>,
+    #[serde(default)]
+    pub last_sync: Option<LastSync>,
 }
 
 /// One agent in a workspace, as Init may address it.
@@ -117,6 +123,21 @@ pub struct AgentDetail {
     /// Focused in the user's Herdr UI.
     #[serde(default)]
     pub focused: bool,
+    /// The pane's title: what the agent says it is doing.
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// The newest commit that synced the map with the code.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct LastSync {
+    #[serde(default)]
+    pub commit: String,
+    #[serde(default)]
+    pub subject: String,
+    /// Committer date, ISO 8601.
+    #[serde(default)]
+    pub at: String,
 }
 
 /// What Init should do: ask an agent already in the workspace, or start a new CLI.
@@ -347,6 +368,9 @@ struct ServiceReply {
     path: String,
     #[serde(default)]
     branch: String,
+    /// The node's version, with the workspace list.
+    #[serde(default)]
+    node: Option<String>,
 }
 
 /// The Workspaces screen's state.
@@ -373,6 +397,8 @@ pub struct State {
     pub busy: Option<Busy>,
     /// The agent CLIs installed on the project host, from the last list.
     pub clis: Vec<String>,
+    /// The listing node's version (`0.1.0`).
+    pub node_version: Option<String>,
     /// What Init should use for the selected workspace; `None` lets the service choose.
     pub target: Option<Target>,
     /// The Init agent menu is open (it belongs to the screen, not to a row).
@@ -557,9 +583,14 @@ impl State {
                 Ok(reply) if reply.ok => {
                     self.rows = reply.workspaces.unwrap_or_default();
                     self.clis = reply.clis;
+                    self.node_version = reply.node.filter(|v| !v.trim().is_empty());
                     if self.selected.is_none() {
                         self.target = None;
                         self.picker_open = false;
+                        // The detail always shows a workspace: Herdr's focused one, else the first.
+                        if let Some(id) = self.rows.iter().find(|w| w.focused).or_else(|| self.rows.first()).map(|w| w.id.clone()) {
+                            self.select(&id);
+                        }
                     } else {
                         self.reconcile_target();
                     }
@@ -618,12 +649,15 @@ struct Skin {
     muted: Color32,
     faint: Color32,
     accent: Color32,
-    accent_hover: Color32,
     selected: Color32,
     soft: Color32,
     map_ink: Color32,
     danger: Color32,
     danger_bg: Color32,
+    /// The dark Open map button and its label.
+    primary: Color32,
+    primary_hover: Color32,
+    on_primary: Color32,
 }
 
 impl Skin {
@@ -638,29 +672,34 @@ impl Skin {
                 muted: t.text_secondary,
                 faint: t.text_tertiary,
                 accent: Color32::from_rgb(0xD9, 0x7A, 0x5F),
-                accent_hover: Color32::from_rgb(0xE8, 0x8E, 0x75),
                 selected: Color32::from_rgb(0x3A, 0x30, 0x2C),
                 soft: t.hover,
                 map_ink: Color32::from_rgb(0x7F, 0xBD, 0xB5),
                 danger,
                 danger_bg: with_alpha(danger, 28),
+                primary: Color32::from_rgb(0xEC, 0xEA, 0xE6),
+                primary_hover: Color32::WHITE,
+                on_primary: Color32::from_rgb(0x1A, 0x1A, 0x1A),
             }
         } else {
+            // The map design's paper, inks and rules.
             let danger = Color32::from_rgb(0x9E, 0x3B, 0x2C);
             Skin {
                 bg: Color32::from_rgb(0xF4, 0xF4, 0xF2),
                 panel: t.panel,
-                border: t.border,
-                text: t.text,
-                muted: t.text_secondary,
-                faint: t.text_tertiary,
+                border: Color32::from_rgb(0xE3, 0xE2, 0xDF),
+                text: Color32::from_rgb(0x1A, 0x1A, 0x1A),
+                muted: Color32::from_rgb(0x6E, 0x6C, 0x68),
+                faint: Color32::from_rgb(0x9A, 0x96, 0x8F),
                 accent: Color32::from_rgb(0xB5, 0x45, 0x2F),
-                accent_hover: Color32::from_rgb(0xC2, 0x55, 0x3E),
-                selected: Color32::from_rgb(0xF1, 0xEC, 0xE7),
-                soft: Color32::from_rgb(0xF8, 0xF6, 0xF3),
+                selected: Color32::from_rgb(0xF1, 0xF0, 0xED),
+                soft: Color32::from_rgb(0xF7, 0xF6, 0xF3),
                 map_ink: Color32::from_rgb(0x2F, 0x6F, 0x6A),
                 danger,
                 danger_bg: with_alpha(danger, 16),
+                primary: Color32::from_rgb(0x1A, 0x1A, 0x1A),
+                primary_hover: Color32::from_rgb(0x33, 0x33, 0x33),
+                on_primary: Color32::WHITE,
             }
         }
     }
@@ -692,9 +731,6 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         app.ws.refresh(&ctx);
     }
     let skin = Skin::of(&Tokens::get(&ctx));
-    // The host controls precede the central panel, so paint their surface too rather than
-    // letting the window's clear color show behind the workspace palette's text.
-    ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(skin.bg)).show(ui, |ui| {
         let rect = ui.max_rect();
         let body = rect;
@@ -711,8 +747,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     crate::machine_modal::show(app, ui);
 }
 
-/// The togglable workspace pane beside an open map. It lists the same Herdr workspaces as the
-/// browser; clicking one switches the map in place instead of leaving the canvas.
+/// The togglable workspace pane beside an open map. It lists the selected machine's workspaces;
+/// clicking one with a map switches the map in place, the others open the browser for Init.
 pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     app.ws.poll();
@@ -726,54 +762,107 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
         #[cfg(target_arch = "wasm32")]
         app.ws.refresh(&ctx);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(host) = crate::node_hosts::poll(&mut app.ws.hosts) {
+        use_host(app, &ctx, &host);
+    }
     let skin = Skin::of(&Tokens::get(&ctx));
-    ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
+    let s = &skin;
+    let area = ui.max_rect();
+    ui.painter().rect_filled(area, CornerRadius::ZERO, s.panel);
     let rows = app.ws.rows.clone();
     let groups = grouped(&rows);
-    let error = app.ws.error.clone();
 
-    ui.add_space(12.0);
-    ui.horizontal(|ui| {
-        ui.add_space(14.0);
-        eyebrow(ui, &skin, "WORKSPACES");
-        ui.label(egui::RichText::new(groups.len().to_string()).font(mono(9.5)).color(skin.faint));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(12.0);
-            if ui.add(egui::Button::new(egui::RichText::new("Refresh").font(regular(10.0)).color(skin.muted)).frame(false)).clicked() {
-                app.ws.refresh(&ctx);
+    // WORKSPACES 6 and Refresh share one 32 pt head.
+    let head = format!("WORKSPACES {}", groups.len());
+    ui.painter().text(pos2(area.min.x + 14.0, area.min.y + 14.0), Align2::LEFT_TOP, head, mono(9.0), s.muted);
+    let refresh = Rect::from_min_size(pos2(area.min.x + 232.0, area.min.y + 8.0), vec2(56.0, 24.0));
+    let refresh_resp = ui.interact(refresh, Id::new("workspace_pane_refresh"), Sense::click());
+    a11y::button(&refresh_resp, "Refresh");
+    let ink = if refresh_resp.hovered() { s.text } else { s.muted };
+    ui.painter().text(pos2(refresh.min.x + 6.0, area.min.y + 14.0), Align2::LEFT_TOP, "Refresh", regular(10.0), ink);
+    if refresh_resp.clicked() {
+        app.ws.refresh(&ctx);
+    }
+
+    let foot_h = 52.0;
+    let list = Rect::from_min_max(pos2(area.min.x, area.min.y + 32.0), pos2(area.max.x, area.max.y - foot_h));
+    let active = app.active_workspace.clone();
+    let mut chosen: Option<Workspace> = None;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
+        ui.set_clip_rect(list.intersect(ui.clip_rect()));
+        egui::ScrollArea::vertical().id_salt("workspace_pane_scroll").auto_shrink([false, false]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (base, branches) in &groups {
+                let selected = active.as_deref().is_some_and(|id| branches.iter().any(|b| b.id == id));
+                if pane_row(ui, s, base, selected) {
+                    chosen = Some(base.clone());
+                }
+            }
+            if rows.is_empty() {
+                let (error, busy, started) = (app.ws.error.clone(), app.ws.busy.is_some(), app.ws.started);
+                empty_list(app, ui, s, &ctx, error.as_deref(), busy, started);
             }
         });
     });
-    ui.add_space(8.0);
-    ui.painter()
-        .line_segment([ui.max_rect().left_top() + vec2(0.0, 34.0), ui.max_rect().right_top() + vec2(0.0, 34.0)], Stroke::new(1.0, skin.border));
-
-    egui::ScrollArea::vertical().id_salt("workspace_pane_scroll").show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        #[cfg(not(target_arch = "wasm32"))]
-        machine_list(app, ui, &skin, &ctx);
-        #[cfg(target_arch = "wasm32")]
-        flat_list(app, ui, &skin, &ctx);
-    });
-
-    let foot = egui::Rect::from_min_size(pos2(ui.max_rect().left(), ui.max_rect().bottom() - 56.0), vec2(ui.max_rect().width(), 56.0));
-    ui.painter().rect_filled(foot, CornerRadius::ZERO, skin.panel);
-    ui.painter().line_segment([foot.left_top(), foot.right_top()], Stroke::new(1.0, skin.border));
-    if error.is_some() {
-        ui.painter().text(pos2(foot.left() + 14.0, foot.top() + 14.0), Align2::LEFT_CENTER, "Could not reach the node.", mono(9.0), skin.accent);
+    if let Some(w) = chosen {
+        if w.map_state() == MapState::Map {
+            if active.as_deref() != Some(w.id.as_str()) {
+                app.ws.act(&ctx, &w.id, false);
+            }
+        } else {
+            // Init happens in the browser, where the agent can be chosen.
+            app.ws.select(&w.id);
+            app.ui.home = true;
+        }
     }
-    if ui
-        .put(
-            egui::Rect::from_min_size(pos2(foot.left() + 12.0, foot.top() + 24.0), vec2(foot.width() - 24.0, 24.0)),
-            egui::Button::new(egui::RichText::new("All workspaces").font(regular(10.5)).color(skin.muted)).frame(false),
-        )
-        .clicked()
-    {
+
+    let foot = Rect::from_min_max(pos2(area.min.x, area.max.y - foot_h), area.max);
+    if app.ws.error.is_some() && !rows.is_empty() {
+        ui.painter().text(pos2(foot.min.x + 14.0, foot.min.y + 2.0), Align2::LEFT_TOP, "Could not reach the node.", mono(8.5), s.danger);
+    }
+    let all = Rect::from_min_size(pos2(foot.min.x + 8.0, foot.min.y + 14.0), vec2(120.0, 24.0));
+    let all_resp = ui.interact(all, Id::new("workspace_pane_all"), Sense::click());
+    a11y::button(&all_resp, "All workspaces");
+    let ink = if all_resp.hovered() { s.text } else { s.muted };
+    ui.painter().text(pos2(all.min.x + 6.0, all.center().y), Align2::LEFT_CENTER, "All workspaces", regular(10.5), ink);
+    if all_resp.clicked() {
         app.ui.home = true;
     }
-    // The same modals as the full screen, so the pane can create and add machines too.
     crate::new_workspace::show(app, ui);
     crate::machine_modal::show(app, ui);
+}
+
+/// One workspace in the map's pane: name, path, agents, and the map state on the right.
+fn pane_row(ui: &mut Ui, s: &Skin, w: &Workspace, selected: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), PANE_ROW_H), Sense::click());
+    let kind = w.map_state();
+    a11y::button(&resp, &format!("{} · {} · {}", w.name(), kind.badge(), agents_line(w)));
+    if selected {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.selected);
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
+    }
+    focus_ring(ui, s, rect.shrink(1.0), &resp, 0);
+    let badge_x = rect.min.x + 236.0;
+    ui.painter().text(pos2(badge_x, rect.min.y + 10.0), Align2::LEFT_TOP, kind.badge(), mono(9.0), badge_tint(s, kind));
+    let room = (badge_x - 12.0 - (rect.min.x + 16.0)).max(40.0);
+    let name = widgets::elide_font(ui, w.name(), room, semibold(13.0));
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 10.0), Align2::LEFT_TOP, name, semibold(13.0), s.text);
+    let path = w.path.as_deref().or(w.repo.as_deref()).unwrap_or("no folder");
+    let path = widgets::elide_start_font(ui, path, rect.width() - 32.0, mono(9.0));
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 28.0), Align2::LEFT_TOP, path, mono(9.0), s.muted);
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 44.0), Align2::LEFT_TOP, pane_agents(w), mono(9.0), s.muted);
+    resp.clicked()
+}
+
+/// The pane's agent line: just the count, as the design draws it.
+fn pane_agents(w: &Workspace) -> String {
+    match w.agents {
+        0 => "no agent".to_string(),
+        1 => "1 agent".to_string(),
+        n => format!("{n} agents"),
+    }
 }
 
 /// Start the node join and wait for its document welcome before showing the map.
@@ -946,83 +1035,97 @@ fn branch_label(w: &Workspace) -> String {
         .unwrap_or_else(|| w.name().to_string())
 }
 
-/// The "+ New workspace" row at the top of the list and the pane.
-fn new_workspace_row(ui: &mut Ui, s: &Skin) -> bool {
-    let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 38.0), Sense::click());
-    a11y::button(&resp, "New workspace");
+/// A quiet "+   label" row inset under the list: New workspace and Add machine.
+fn plus_row(ui: &mut Ui, s: &Skin, id: Id, label: &str) -> bool {
+    let (outer, _) = ui.allocate_exact_size(vec2(ui.available_width(), PLUS_H), Sense::hover());
+    plus_row_at(ui, s, id, outer, label)
+}
+
+fn plus_row_at(ui: &mut Ui, s: &Skin, id: Id, outer: Rect, label: &str) -> bool {
+    let rect = Rect::from_min_max(pos2(outer.min.x + INSET, outer.min.y), pos2(outer.max.x - INSET, outer.max.y));
+    let resp = ui.interact(rect, id, Sense::click());
+    a11y::button(&resp, label);
     if resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
+        ui.painter().rect_filled(rect, CornerRadius::same(6), s.soft);
     }
-    let c = pos2(rect.min.x + 16.0, rect.center().y - 3.0);
-    let stroke = Stroke::new(1.5, s.accent);
-    ui.painter().line_segment([pos2(c.x - 4.0, c.y), pos2(c.x + 4.0, c.y)], stroke);
-    ui.painter().line_segment([pos2(c.x, c.y - 4.0), pos2(c.x, c.y + 4.0)], stroke);
-    ui.painter().text(pos2(rect.min.x + 28.0, rect.center().y - 3.0), Align2::LEFT_CENTER, "New workspace", semibold(11.5), s.muted);
-    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, s.border));
+    focus_ring(ui, s, rect, &resp, 6);
+    let ink = if resp.hovered() { s.text } else { s.muted };
+    ui.painter().text(pos2(rect.min.x + 8.0, rect.min.y + 5.0), Align2::LEFT_TOP, format!("+   {label}"), regular(10.5), ink);
     resp.clicked()
 }
 
+/// The machines and their workspaces, with Add machine pinned under them.
 fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
     ui.painter().rect_filled(rect, CornerRadius::ZERO, s.panel);
-    let head = Rect::from_min_size(rect.min, vec2(rect.width(), 42.0));
-    ui.painter().text(pos2(head.min.x + 16.0, head.center().y), Align2::LEFT_CENTER, "WORKSPACES", mono(9.5), s.faint);
-    let count = grouped(&app.ws.rows).len().to_string();
-    ui.painter().text(pos2(head.max.x - 16.0, head.center().y), Align2::RIGHT_CENTER, count, mono(10.0), s.faint);
-    ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, s.border));
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 16.0), Align2::LEFT_TOP, "WORKSPACES", mono(9.0), s.muted);
 
-    let list = Rect::from_min_max(pos2(rect.min.x, head.max.y), rect.max);
+    // Add machine sits at the foot, under a divider, whatever the list's length.
+    let add = Rect::from_min_size(pos2(rect.min.x, rect.max.y - 16.0 - PLUS_H), vec2(rect.width(), PLUS_H));
+    let rule = add.min.y - 8.0;
+    let list = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 36.0), pos2(rect.max.x, rule - 8.0));
     let ctx = ui.ctx().clone();
     ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
-        ui.set_clip_rect(list);
+        ui.set_clip_rect(list.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical().id_salt("workspaces_list").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             #[cfg(not(target_arch = "wasm32"))]
             machine_list(app, ui, s, &ctx);
             #[cfg(target_arch = "wasm32")]
             flat_list(app, ui, s, &ctx);
-            // The way to add a machine sits under the machines, never in a page header.
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
-            a11y::button(&resp, "Add machine");
-            if resp.hovered() {
-                ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
-            }
-            ui.painter().text(pos2(rect.min.x + 16.0, rect.center().y), Align2::LEFT_CENTER, "+  Add machine", semibold(11.0), s.accent);
-            if resp.clicked() {
-                crate::machine_modal::open(app);
-            }
         });
     });
+    ui.painter().line_segment([pos2(rect.min.x + INSET, rule), pos2(rect.max.x - INSET, rule)], Stroke::new(1.0, s.border));
+    if plus_row_at(ui, s, Id::new("workspaces_add_machine"), add, "Add machine") {
+        crate::machine_modal::open(app);
+    }
 }
 
-/// The machines, each a toggle over its own workspaces: the selected one is open, the rest fold.
+/// The machines, each a toggle over its own workspaces: the one in use opens under its row; the
+/// others stay folded until clicked, which connects to them.
 #[cfg(not(target_arch = "wasm32"))]
 fn machine_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
     let ready = crate::node_hosts::poll(&mut app.ws.hosts);
-    let hosts = crate::node_hosts::hosts(&app.ws.hosts).to_vec();
-    let selected_addr = app.ws.hosts.selected.as_ref().map(|host| host.address.clone());
-    let workspaces = app.ws.rows.len();
+    // This computer once, first; then the SSH machines.
+    let hosts: Vec<_> = crate::node_hosts::hosts(&app.ws.hosts)
+        .iter()
+        .enumerate()
+        .filter(|(i, host)| *i == 0 || host.ssh.is_some())
+        .map(|(_, host)| host.clone())
+        .collect();
+    // A local node on another port (`--node`) is still this computer.
+    let selected_addr = app
+        .ws
+        .hosts
+        .selected
+        .as_ref()
+        .map(|host| host.address.clone())
+        .filter(|_| app.ws.hosts.selected.as_ref().is_some_and(|host| host.ssh.is_some()));
+    let preparing = crate::node_hosts::preparing(&app.ws.hosts);
     let mut activate: Option<crate::node_hosts::Host> = None;
     let mut fold = false;
-    for host in &hosts {
+    for (index, host) in hosts.iter().enumerate() {
+        if index > 0 {
+            ui.add_space(16.0);
+        }
         // Nothing selected yet means the local node is the one the list belongs to.
         let is_selected = selected_addr.as_deref() == Some(host.address.as_str()) || (selected_addr.is_none() && host.ssh.is_none());
         let expanded = is_selected && !app.ws.collapsed;
-        if machine_row(ui, s, host, is_selected, expanded, workspaces) {
+        let state = machine_state(host, is_selected, preparing, app.ws.rows.len(), app.ws.node_version.as_deref());
+        if machine_row(ui, s, host, &state, expanded) {
             if is_selected {
                 fold = true;
             } else {
                 activate = Some(host.clone());
             }
         }
+        ui.add_space(8.0);
         if expanded {
             let rows = app.ws.rows.clone();
             let groups = grouped(&rows);
-            let busy = app.ws.busy.is_some();
             let mut chosen = None;
             for (base, branches) in &groups {
                 let selected = app.ws.selected.as_deref().is_some_and(|id| branches.iter().any(|b| b.id == id));
-                if let Some(c) = row(ui, s, base, selected, busy) {
+                if let Some(c) = row(ui, s, base, selected) {
                     chosen = Some(c);
                 }
             }
@@ -1035,16 +1138,21 @@ fn machine_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
             if app.ws.rows.is_empty() {
                 empty_list(app, ui, s, ctx, error.as_deref(), busy, started);
             }
-            if new_workspace_row(ui, s) {
+            ui.add_space(4.0);
+            if plus_row(ui, s, Id::new(("workspaces_new", &host.address)), "New workspace") {
                 crate::new_workspace::open(app);
             }
+        } else if !is_selected {
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 11.0), Sense::hover());
+            ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y), Align2::LEFT_TOP, "Connect to list its workspaces", mono(8.5), s.faint);
         }
     }
-    crate::node_hosts::status(ui, &mut app.ws.hosts);
+    host_notice(ui, s, &mut app.ws.hosts);
     if fold {
         app.ws.collapsed = !app.ws.collapsed;
     }
     if let Some(host) = ready {
+        app.ws.collapsed = false;
         use_host(app, ui.ctx(), &host);
     }
     if let Some(host) = activate {
@@ -1052,12 +1160,49 @@ fn machine_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
     }
 }
 
+/// What a host setup asks for (Install Herdr, Update node) or reports, set in the sidebar's
+/// type as an inset card so long reasons wrap inside the list instead of running across it.
+#[cfg(not(target_arch = "wasm32"))]
+fn host_notice(ui: &mut Ui, s: &Skin, hosts: &mut crate::node_hosts::State) {
+    if !crate::node_hosts::has_notice(hosts) {
+        return;
+    }
+    ui.add_space(12.0);
+    egui::Frame::NONE
+        .outer_margin(egui::Margin::symmetric(INSET as i8, 0))
+        .inner_margin(egui::Margin::symmetric(10, 9))
+        .fill(s.selected)
+        .corner_radius(CornerRadius::same(6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+            let style = ui.style_mut();
+            style.override_font_id = Some(regular(10.5));
+            style.visuals.override_text_color = Some(s.muted);
+            style.wrap_mode = Some(egui::TextWrapMode::Wrap);
+            crate::node_hosts::status(ui, hosts);
+        });
+}
+
+/// The machine's second line: where it is, and what the app knows of it.
+#[cfg(not(target_arch = "wasm32"))]
+fn machine_state(host: &crate::node_hosts::Host, selected: bool, preparing: bool, workspaces: usize, node: Option<&str>) -> String {
+    let count = format!("{workspaces} workspace{}", if workspaces == 1 { "" } else { "s" });
+    match (&host.ssh, selected) {
+        (None, true) => format!("local · {count}"),
+        (None, false) => "local".to_string(),
+        (Some(_), true) if preparing => "ssh · connecting…".to_string(),
+        (Some(_), true) => match node {
+            Some(version) => format!("ssh · connected · node {version}"),
+            None => "ssh · connected".to_string(),
+        },
+        (Some(target), false) => format!("ssh · {target}"),
+    }
+}
+
 /// The browser build has no machines: one flat workspace list.
 #[cfg(target_arch = "wasm32")]
 fn flat_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
-    if new_workspace_row(ui, s) {
-        crate::new_workspace::open(app);
-    }
     let (error, busy, started) = (app.ws.error.clone(), app.ws.busy.is_some(), app.ws.started);
     if app.ws.rows.is_empty() {
         empty_list(app, ui, s, ctx, error.as_deref(), busy, started);
@@ -1067,7 +1212,7 @@ fn flat_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
         let mut chosen = None;
         for (base, branches) in &groups {
             let selected = app.ws.selected.as_deref().is_some_and(|id| branches.iter().any(|b| b.id == id));
-            if let Some(c) = row(ui, s, base, selected, busy) {
+            if let Some(c) = row(ui, s, base, selected) {
                 chosen = Some(c);
             }
         }
@@ -1077,28 +1222,37 @@ fn flat_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
             None => {}
         }
     }
+    ui.add_space(4.0);
+    if plus_row(ui, s, Id::new("workspaces_new"), "New workspace") {
+        crate::new_workspace::open(app);
+    }
 }
 
-/// One machine: its name and state, with the arrow that folds its workspaces away.
+/// One machine: its name and state, and the arrow that folds its workspaces away.
 #[cfg(not(target_arch = "wasm32"))]
-fn machine_row(ui: &mut Ui, s: &Skin, host: &crate::node_hosts::Host, selected: bool, expanded: bool, workspaces: usize) -> bool {
-    let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 40.0), Sense::click());
-    a11y::button(&resp, &format!("{} machine · {}", host.name, if expanded { "open" } else { "folded" }));
-    if resp.hovered() || selected {
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
+fn machine_row(ui: &mut Ui, s: &Skin, host: &crate::node_hosts::Host, state: &str, expanded: bool) -> bool {
+    let (outer, _) = ui.allocate_exact_size(vec2(ui.available_width(), MACHINE_H), Sense::hover());
+    let rect = Rect::from_min_max(pos2(outer.min.x + INSET, outer.min.y), pos2(outer.max.x - INSET, outer.max.y));
+    let resp = ui.interact(rect, Id::new(("workspaces_machine", &host.address)), Sense::click());
+    a11y::button(&resp, &format!("{} · {}", host.name, if expanded { "open" } else { "folded" }));
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(6), s.soft);
     }
-    let arrow = if expanded { "\u{25b4}" } else { "\u{25be}" };
-    ui.painter().text(pos2(rect.max.x - 16.0, rect.center().y), Align2::RIGHT_CENTER, arrow, regular(10.0), s.muted);
-    ui.painter().text(pos2(rect.min.x + 16.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &host.name, semibold(12.0), s.text);
-    let state = if selected {
-        format!("local · {workspaces} workspaces")
-    } else if let Some(ssh) = &host.ssh {
-        format!("ssh · {ssh}")
+    focus_ring(ui, s, rect, &resp, 6);
+    let room = rect.width() - 50.0;
+    let name = widgets::elide_font(ui, &host.name, room, semibold(12.0));
+    ui.painter().text(pos2(rect.min.x + 10.0, rect.min.y + 2.0), Align2::LEFT_TOP, name, semibold(12.0), s.text);
+    let state = widgets::elide_font(ui, state, room, mono(8.5));
+    ui.painter().text(pos2(rect.min.x + 10.0, rect.min.y + 18.0), Align2::LEFT_TOP, state, mono(8.5), s.faint);
+    // A plain arrow, drawn: up when open, down when folded.
+    let c = pos2(rect.max.x - 11.0, rect.min.y + 13.0);
+    let ink = if resp.hovered() { s.muted } else { s.faint };
+    let points = if expanded {
+        vec![pos2(c.x - 3.5, c.y + 2.0), pos2(c.x + 3.5, c.y + 2.0), pos2(c.x, c.y - 2.5)]
     } else {
-        "local".to_string()
+        vec![pos2(c.x - 3.5, c.y - 2.0), pos2(c.x + 3.5, c.y - 2.0), pos2(c.x, c.y + 2.5)]
     };
-    ui.painter().text(pos2(rect.min.x + 16.0, rect.center().y + 8.0), Align2::LEFT_CENTER, state, mono(9.0), s.faint);
+    ui.painter().add(egui::Shape::convex_polygon(points, ink, Stroke::NONE));
     resp.clicked()
 }
 
@@ -1108,93 +1262,49 @@ enum Chosen {
     Act { workspace: String, init: bool },
 }
 
-fn row(ui: &mut Ui, s: &Skin, w: &Workspace, selected: bool, busy: bool) -> Option<Chosen> {
-    let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::click());
+/// MAP and EMPTY in the map ink, INIT in the accent.
+fn badge_tint(s: &Skin, kind: MapState) -> Color32 {
+    match kind {
+        MapState::Map | MapState::Empty => s.map_ink,
+        MapState::None => s.accent,
+    }
+}
+
+/// One workspace: name, path and agents on the left, its map state on the right. A click selects
+/// it; a double click opens or initialises it.
+fn row(ui: &mut Ui, s: &Skin, w: &Workspace, selected: bool) -> Option<Chosen> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
     let kind = w.map_state();
     a11y::button(&resp, &format!("{} · {} · {}", w.name(), kind.badge(), agents_line(w)));
     if selected {
         ui.painter().rect_filled(rect, CornerRadius::ZERO, s.selected);
-        ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height())), CornerRadius::ZERO, s.accent);
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
     }
-    focus_ring(ui, s, rect, &resp, 0);
+    focus_ring(ui, s, rect.shrink(1.0), &resp, 0);
 
-    // The badge, top right.
     let badge = kind.badge();
-    let badge_font = semibold(9.0);
-    let badge_w = text_width(ui, badge, badge_font.clone()) + 12.0;
-    let badge_rect = Rect::from_min_size(pos2(rect.max.x - 14.0 - badge_w, rect.min.y + 11.0), vec2(badge_w, 16.0));
-    let tint = match kind {
-        MapState::Map => s.map_ink,
-        MapState::Empty => s.muted,
-        MapState::None => s.accent,
-    };
-    ui.painter().rect_filled(badge_rect, CornerRadius::same(4), with_alpha(tint, if s.panel == Color32::WHITE { 18 } else { 36 }));
-    ui.painter().rect_stroke(badge_rect, CornerRadius::same(4), Stroke::new(1.0, with_alpha(tint, 90)), StrokeKind::Inside);
-    ui.painter().text(badge_rect.center(), Align2::CENTER_CENTER, badge, badge_font, tint);
+    let badge_w = text_width(ui, badge, mono(8.5));
+    ui.painter().text(pos2(rect.max.x - 16.0, rect.min.y + 7.0), Align2::RIGHT_TOP, badge, mono(8.5), badge_tint(s, kind));
 
-    // The focused workspace in Herdr: a small dot beside its label.
-    let label_x = if w.focused { rect.min.x + 24.0 } else { rect.min.x + 16.0 };
-    if w.focused {
-        ui.painter().circle_filled(pos2(rect.min.x + 12.0, rect.min.y + 15.0), 3.0, s.map_ink);
-    }
     let name = w.name();
-    let name_room = (badge_rect.min.x - 10.0 - label_x).max(40.0);
-    let name_shown = widgets::elide_font(ui, name, name_room, semibold(13.0));
-    ui.painter().text(pos2(label_x, rect.min.y + 15.0), Align2::LEFT_CENTER, &name_shown, semibold(13.0), s.text);
-
+    let room = (rect.width() - 32.0 - badge_w - 12.0).max(40.0);
+    let name_shown = widgets::elide_font(ui, name, room, semibold(12.5));
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 6.0), Align2::LEFT_TOP, &name_shown, semibold(12.5), s.text);
     let path = w.path.as_deref().or(w.repo.as_deref()).unwrap_or("no folder");
-    let path_room = (rect.max.x - 14.0 - (rect.min.x + 16.0)).max(40.0);
-    let path_shown = widgets::elide_start_font(ui, path, path_room, mono(10.5));
-    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 35.0), Align2::LEFT_CENTER, &path_shown, mono(10.5), s.muted);
+    let path_shown = widgets::elide_start_font(ui, path, (rect.width() - 32.0).max(40.0), mono(8.5));
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 25.0), Align2::LEFT_TOP, &path_shown, mono(8.5), s.muted);
+    let agents = agents_line(w);
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 39.0), Align2::LEFT_TOP, &agents, mono(8.5), s.faint);
 
-    // The row's own Open / Init button, bottom right.
-    let action = if kind == MapState::Map { "Open" } else { "Init" };
-    let action_w = text_width(ui, action, semibold(10.5)) + 20.0;
-    let action_rect = Rect::from_min_size(pos2(rect.max.x - 14.0 - action_w, rect.min.y + 44.0), vec2(action_w, 22.0));
-    let action_resp = ui.interact(action_rect, ui.id().with(("workspace_row_action", &w.id)), if busy { Sense::hover() } else { Sense::click() });
-    a11y::button(&action_resp, action);
-    let hot = !busy && action_resp.hovered();
-    let (action_ink, action_border) = if busy {
-        (s.faint, s.border)
-    } else if hot || selected {
-        (s.accent, s.accent)
+    let resp = if name_shown != name || path_shown != path { resp.on_hover_text(format!("{name}\n{path}")) } else { resp };
+    if resp.double_clicked() {
+        Some(Chosen::Act { workspace: w.id.clone(), init: kind != MapState::Map })
+    } else if resp.clicked() {
+        Some(Chosen::Select(w.id.clone()))
     } else {
-        (s.muted, s.border)
-    };
-    if hot {
-        ui.painter().rect_filled(action_rect, CornerRadius::same(4), s.soft);
+        None
     }
-    ui.painter().rect_stroke(action_rect, CornerRadius::same(4), Stroke::new(1.0, action_border), StrokeKind::Inside);
-    ui.painter().text(action_rect.center(), Align2::CENTER_CENTER, action, semibold(10.5), action_ink);
-    focus_ring(ui, s, action_rect, &action_resp, 4);
-
-    let agents_room = (action_rect.min.x - 8.0 - (rect.min.x + 16.0)).max(40.0);
-    let agents = widgets::elide_font(ui, &agents_line(w), agents_room, regular(10.5));
-    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 56.0), Align2::LEFT_CENTER, &agents, regular(10.5), s.muted);
-
-    let cut = name_shown != name || path_shown != path || agents != agents_line(w);
-    let resp = if cut {
-        resp.on_hover_text(format!("{name}\n{path}\n{}", agents_line(w)))
-    } else if w.focused {
-        resp.on_hover_text("Focused in Herdr")
-    } else {
-        resp
-    };
-    let on_button = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| action_rect.contains(p));
-    let mut chosen = None;
-    if resp.clicked() && !on_button {
-        chosen = Some(Chosen::Select(w.id.clone()));
-    }
-    if resp.double_clicked() && !on_button {
-        chosen = Some(Chosen::Act { workspace: w.id.clone(), init: kind != MapState::Map });
-    }
-    if action_resp.clicked() && !busy {
-        chosen = Some(Chosen::Act { workspace: w.id.clone(), init: kind != MapState::Map });
-    }
-    chosen
 }
 
 fn empty_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context, error: Option<&str>, busy: bool, started: bool) {
@@ -1224,27 +1334,26 @@ fn empty_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context, erro
 fn detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
     ui.painter().rect_filled(rect, CornerRadius::ZERO, s.bg);
     let selected = app.ws.selected.as_deref().and_then(|id| app.ws.rows.iter().find(|w| w.id == id)).cloned();
-    let inner = Rect::from_min_max(rect.min + vec2(32.0, 26.0), rect.max - vec2(32.0, 24.0));
+    let inner = Rect::from_min_max(rect.min + vec2(32.0, 32.0), rect.max - vec2(32.0, 0.0));
     ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
-        ui.set_clip_rect(rect);
+        ui.set_clip_rect(rect.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical().id_salt("workspaces_detail").auto_shrink([false, false]).show(ui, |ui| {
-            ui.set_max_width(inner.width().min(720.0));
+            ui.set_max_width(inner.width().min(760.0));
+            ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
             match &selected {
                 Some(w) => workspace_detail(app, ui, s, w),
                 None => intro(app, ui, s),
             }
+            ui.add_space(16.0);
         });
     });
 }
 
 fn intro(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
-    ui.add_space(36.0);
     eyebrow(ui, s, "WORKSPACES");
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Herdr workspaces are the projects.").font(semibold(26.0)).color(s.text));
     ui.add_space(10.0);
-    ui.label(egui::RichText::new("Herdr workspaces are the projects.").font(semibold(27.0)).color(s.text));
-    ui.add_space(8.0);
-    paragraph(ui, "A map is optional.", 14.0, s.muted);
-    ui.add_space(16.0);
     paragraph(
         ui,
         "A workspace can have a live map, an empty document, or no document at all. Select one on the left to open its map or Init the first agent.",
@@ -1257,16 +1366,14 @@ fn intro(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
             app.ws.retry(ui.ctx());
         }
     }
-    ui.add_space(26.0);
-    let maps = app.ws.rows.iter().filter(|w| w.map_state() == MapState::Map).count();
     let summary = match (app.ws.busy.is_some(), app.ws.rows.len()) {
-        (true, 0) => "Reading the workspaces from the node…".to_string(),
-        (_, 0) if app.ws.started => "No workspaces listed yet.".to_string(),
-        (_, 0) => String::new(),
-        (_, n) => format!("{n} workspace{} · {maps} with a map", if n == 1 { "" } else { "s" }),
+        (true, 0) => "Reading the workspaces from the node…",
+        (_, 0) if app.ws.started => "No workspaces listed yet.",
+        _ => "",
     };
     if !summary.is_empty() {
-        ui.label(egui::RichText::new(summary).font(mono(10.5)).color(s.faint));
+        ui.add_space(20.0);
+        ui.label(egui::RichText::new(summary).font(mono(9.0)).color(s.faint));
     }
 }
 
@@ -1275,17 +1382,17 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     let ctx = ui.ctx().clone();
     eyebrow(ui, s, "SELECTED WORKSPACE");
     ui.add_space(6.0);
-    ui.label(egui::RichText::new(w.name()).font(semibold(28.0)).color(s.text));
-    ui.add_space(8.0);
-    let path = w.path.as_deref().unwrap_or("no folder");
-    ui.add(egui::Label::new(egui::RichText::new(path).font(mono(11.0)).color(s.muted)).wrap());
-    ui.add_space(3.0);
-    ui.label(egui::RichText::new(meta_line(w)).font(regular(11.0)).color(s.faint));
-    ui.add_space(18.0);
-    paragraph(ui, explanation(kind), 13.0, s.muted);
+    ui.label(egui::RichText::new(w.name()).font(semibold(26.0)).color(s.text));
+    ui.add_space(10.0);
+    ui.add(egui::Label::new(egui::RichText::new(meta_line(w)).font(mono(11.0)).color(s.muted)).truncate());
+    ui.add_space(9.0);
+    ui.scope(|ui| {
+        ui.set_max_width(600.0);
+        paragraph(ui, explanation(kind), 12.5, s.muted);
+    });
 
-    // What Init will do: ask the chosen agent, start a chosen CLI, or let the service choose.
-    ui.add_space(20.0);
+    // Open map (or Init) and the agents beside it. For Init the agents button picks who draws.
+    ui.add_space(32.0);
     let busy = app.ws.busy.clone();
     let busy_here = busy.as_ref().is_some_and(|b| b.for_workspace(&w.id));
     let init = kind != MapState::Map;
@@ -1294,28 +1401,24 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     let enabled = busy.is_none() && can_init;
     let menu_available = !w.agents_detail.is_empty() || app.ws.clis.iter().any(|kind| !kind.trim().is_empty());
     let label = action_label(kind, w, target.as_ref(), busy.as_ref());
-    let split_id = Id::new(("workspace_action", &w.id));
     let mut run = false;
     let mut toggle = false;
     let mut anchor = None;
     ui.horizontal(|ui| {
-        if init {
-            let width = text_width(ui, &label, semibold(12.5)) + 34.0;
-            let (rect, _) = ui.allocate_exact_size(vec2(width + CHEVRON_W, SPLIT_H), Sense::hover());
-            let split = split_button(ui, s, split_id, rect, &label, enabled, menu_available);
-            run = split.primary;
-            toggle = split.chevron;
-            anchor = Some(split.response);
-        } else {
-            let width = text_width(ui, &label, semibold(12.5)) + 40.0;
-            let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
-            if primary_button(ui, s, split_id, rect, &label, enabled) {
-                run = true;
-            }
+        ui.spacing_mut().item_spacing.x = 10.0;
+        if primary_button(ui, s, Id::new(("workspace_action", &w.id)), &label, enabled) {
+            run = true;
         }
-        if w.agents > 0 {
-            ui.add_space(10.0);
-            agents_pill(ui, s, w);
+        if init {
+            let choice = match target.as_ref() {
+                Some(target) => target.summary(),
+                None => "Choose agent".to_string(),
+            };
+            let resp = ghost_button(ui, s, Id::new(("workspace_action", &w.id)).with("menu"), &choice, menu_available && busy.is_none(), true);
+            toggle = resp.clicked() && menu_available && busy.is_none();
+            anchor = Some(resp);
+        } else {
+            ghost_button(ui, s, Id::new(("workspace_agents", &w.id)), &agents_line(w), true, false);
         }
     });
     if toggle {
@@ -1330,29 +1433,16 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     {
         agent_picker(app, ui, s, w, &anchor);
     }
-    if init {
-        if !can_init {
-            ui.add_space(9.0);
-            paragraph(
-                ui,
-                "No agent is in this workspace and no agent CLI is installed to start one. Install codex, claude or kimi, then Refresh.",
-                11.0,
-                s.muted,
-            );
-        } else if let Some(target) = target.as_ref() {
-            ui.add_space(9.0);
-            let line = match target {
-                Target::Existing { .. } => format!("{} · already in the workspace", target.summary()),
-                Target::New { .. } => format!("{} · a new agent in the workspace", target.summary()),
-            };
-            ui.label(egui::RichText::new(line).font(mono(10.5)).color(s.faint));
-        } else if let Some(agent) = agent_name(w) {
-            ui.add_space(9.0);
-            ui.label(egui::RichText::new(format!("asks {agent} · already in the workspace")).font(mono(10.5)).color(s.faint));
-        }
+    if init && !can_init {
+        ui.add_space(10.0);
+        paragraph(
+            ui,
+            "No agent is in this workspace and no agent CLI is installed to start one. Install codex, claude or kimi, then Refresh.",
+            11.0,
+            s.muted,
+        );
     }
     if busy_here {
-        ui.add_space(9.0);
         let line = match &busy {
             Some(Busy::Open { init: true, target: Some(Target::New { kind }), .. }) => {
                 format!("The node is starting {}; the overview appears as the agent draws it.", display_kind(kind))
@@ -1365,12 +1455,12 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
             _ => String::new(),
         };
         if !line.is_empty() {
-            paragraph(ui, &line, 11.5, s.faint);
+            ui.add_space(10.0);
+            paragraph(ui, &line, 11.0, s.faint);
         }
     }
-
     if let Some(error) = app.ws.error.clone() {
-        ui.add_space(18.0);
+        ui.add_space(16.0);
         if error_card(ui, s, &error, app.ws.busy.is_some()) {
             app.ws.retry(&ctx);
         }
@@ -1378,25 +1468,43 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
 
     let branches = grouped(&app.ws.rows).into_iter().find(|(_, all)| all.iter().any(|b| b.id == w.id)).map(|(_, all)| all).unwrap_or_default();
     if branches.len() > 1 {
-        ui.add_space(20.0);
+        ui.add_space(24.0);
+        divider(ui, s);
+        ui.add_space(16.0);
         eyebrow(ui, s, "BRANCHES");
-        ui.add_space(6.0);
-        for branch in &branches {
-            let active = app.active_workspace.as_deref() == Some(branch.id.as_str());
-            let kind = branch.map_state();
-            let label = format!("{}  ·  {}", branch_label(branch), kind.badge());
-            let enabled = app.ws.busy.is_none();
-            if secondary_button_alloc(ui, s, Id::new(("workspace_branch", &branch.id)), &label, enabled) && !active {
-                if kind == MapState::Map {
-                    app.ws.act(&ctx, &branch.id, false);
-                } else {
-                    app.ws.select(&branch.id);
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+            for branch in &branches {
+                let active = app.active_workspace.as_deref() == Some(branch.id.as_str());
+                let kind = branch.map_state();
+                let label = format!("{}  ·  {}", branch_label(branch), kind.badge());
+                let enabled = app.ws.busy.is_none();
+                if ghost_button(ui, s, Id::new(("workspace_branch", &branch.id)), &label, enabled, false).clicked() && enabled && !active {
+                    if kind == MapState::Map {
+                        app.ws.act(&ctx, &branch.id, false);
+                    } else {
+                        app.ws.select(&branch.id);
+                    }
                 }
             }
-        }
+        });
     }
+
+    ui.add_space(24.0);
+    divider(ui, s);
+    ui.add_space(17.0);
+    machine_block(app, ui, s);
+    ui.add_space(14.0);
+    divider(ui, s);
+    ui.add_space(15.0);
     agents_block(ui, s, w);
-    details_block(ui, s, w);
+    ui.add_space(16.0);
+    divider(ui, s);
+    ui.add_space(15.0);
+    sync_block(ui, s, w);
+    ui.add_space(26.0);
+    hint(ui, s, "No map yet? The row says INIT — open it and press Init map.");
 }
 
 /// The action's label, including what the service is doing while it works.
@@ -1425,7 +1533,7 @@ fn action_label(kind: MapState, w: &Workspace, target: Option<&Target>, busy: Op
 
 fn explanation(kind: MapState) -> &'static str {
     match kind {
-        MapState::Map => "The map is attached to this workspace, not to a link. Open it to read, select and comment.",
+        MapState::Map => "The map is attached to the workspace, not to a link. Open it, or ask the agents working there.",
         MapState::Empty => {
             "A document exists but its map is still empty. Init starts an agent with the mindmap skill; it reads the repository and draws the first overview."
         }
@@ -1435,138 +1543,210 @@ fn explanation(kind: MapState) -> &'static str {
     }
 }
 
+/// `/root/code/mindmap   ·   main   ·   2 agents working`
 fn meta_line(w: &Workspace) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    if let Some(repo) = w.repo.as_deref().filter(|r| !r.trim().is_empty()) {
-        parts.push(repo);
-    }
-    if w.worktree {
-        parts.push("worktree");
-    }
-    let agents = agents_line(w);
-    parts.push(&agents);
-    parts.join("  ·  ")
+    [w.path.clone().unwrap_or_else(|| "no folder".to_string()), branch_label(w), agents_line(w).replace(" · ", " ")].join("   ·   ")
 }
 
 fn agents_line(w: &Workspace) -> String {
     if w.agents == 0 {
-        return "no agents".to_string();
+        return "no agent".to_string();
     }
     let count = format!("{} agent{}", w.agents, if w.agents == 1 { "" } else { "s" });
     let status = w.agent_status.trim();
     if status.is_empty() || status.eq_ignore_ascii_case("unknown") { count } else { format!("{count} · {status}") }
 }
 
-fn agent_name(w: &Workspace) -> Option<&str> {
-    w.agent_names.iter().map(String::as_str).find(|name| !name.trim().is_empty())
+/// MACHINE: the machine the list belongs to, Refresh, and the way to manage machines.
+fn machine_block(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
+    let ctx = ui.ctx().clone();
+    let eyebrow_rect = eyebrow(ui, s, "MACHINE");
+    let refresh = Rect::from_min_size(pos2(ui.max_rect().max.x - 72.0, eyebrow_rect.min.y - 6.0), vec2(72.0, 24.0));
+    let busy = app.ws.busy.is_some();
+    if outline_button_at(ui, s, Id::new("workspaces_refresh"), refresh, "Refresh", !busy) {
+        app.ws.refresh(&ctx);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let (name, meta) = {
+        let host = app.ws.hosts.selected.clone().unwrap_or_else(|| crate::node_hosts::resolve(&service_addr()));
+        let node = app.ws.node_version.as_deref().map(|v| format!("node {v}"));
+        let mut parts = vec![match &host.ssh {
+            Some(target) => format!("ssh · {target}"),
+            None => "local".to_string(),
+        }];
+        parts.extend(node);
+        parts.push("shared Herdr".to_string());
+        (host.name, parts.join("   ·   "))
+    };
+    #[cfg(target_arch = "wasm32")]
+    let (name, meta) = ("This computer".to_string(), "local".to_string());
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(name).font(semibold(13.0)).color(s.text));
+    ui.add_space(5.0);
+    ui.label(egui::RichText::new(meta).font(mono(8.5)).color(s.faint));
+    ui.add_space(9.0);
+    if link(ui, s, Id::new("workspaces_manage_machines"), "Manage machines…", s.muted) {
+        crate::machine_modal::open(app);
+    }
 }
 
-fn agents_pill(ui: &mut Ui, s: &Skin, w: &Workspace) {
-    let label = agents_line(w);
-    let width = text_width(ui, &label, regular(10.5)) + 22.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, s.border), StrokeKind::Inside);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, &label, regular(10.5), s.muted);
-}
-
+/// AGENTS · N WORKING, then one line per agent: kind, what it is doing, and its state.
 fn agents_block(ui: &mut Ui, s: &Skin, w: &Workspace) {
-    ui.add_space(26.0);
-    eyebrow(ui, s, "AGENTS");
+    let working = w.agents_detail.iter().filter(|a| is_working(&a.status)).count();
+    let head = if working > 0 {
+        format!("AGENTS   ·   {working} WORKING")
+    } else if w.agents > 0 {
+        format!("AGENTS   ·   {}", w.agents)
+    } else {
+        "AGENTS".to_string()
+    };
+    eyebrow(ui, s, &head);
     ui.add_space(8.0);
-    egui::Frame::NONE.fill(s.soft).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = 2.0;
-        if !w.agents_detail.is_empty() {
-            for agent in &w.agents_detail {
-                agent_row(ui, s, display_kind(&agent.kind), &agent.status, agent.focused);
-            }
-            let unnamed = (w.agents as usize).saturating_sub(w.agents_detail.len());
-            if unnamed > 0 {
-                paragraph(ui, &format!("+{unnamed} other{}", if unnamed == 1 { "" } else { "s" }), 10.5, s.faint);
-            }
-        } else if w.agent_names.is_empty() {
-            paragraph(
-                ui,
-                if w.agents == 0 { "No agents in this workspace." } else { "The workspace has agents; the node did not name them." },
-                11.5,
-                s.muted,
-            );
-            if w.map_state() != MapState::Map {
-                ui.add_space(2.0);
-                paragraph(ui, "Init starts the selected CLI; choose another with the chevron.", 11.0, s.faint);
-            }
-        } else {
-            for name in &w.agent_names {
-                agent_row(ui, s, display_kind(name), &w.agent_status, false);
-            }
-            let unnamed = (w.agents as usize).saturating_sub(w.agent_names.len());
-            if unnamed > 0 {
-                paragraph(ui, &format!("+{unnamed} more"), 10.5, s.faint);
-            }
-        }
-    });
+    if w.agents_detail.is_empty() {
+        let text = if w.agents == 0 { "No agents in this workspace." } else { "The workspace has agents; the node did not name them." };
+        paragraph(ui, text, 11.0, s.muted);
+        return;
+    }
+    for agent in &w.agents_detail {
+        agent_row(ui, s, agent);
+    }
 }
 
-fn agent_row(ui: &mut Ui, s: &Skin, name: &str, status: &str, focused: bool) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
-    let dot = pos2(rect.min.x + 3.0, rect.center().y);
-    ui.painter().circle_filled(dot, 3.0, status_color(status, s));
-    if focused {
-        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, s.map_ink));
+fn agent_row(ui: &mut Ui, s: &Skin, agent: &AgentDetail) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+    let status = agent.status.trim();
+    let tint = status_color(status, s);
+    ui.painter().circle_filled(pos2(rect.min.x + 3.0, rect.min.y + 9.0), 3.0, tint);
+    let shown_status = if status.is_empty() || status.eq_ignore_ascii_case("unknown") { "" } else { status };
+    let status_w = text_width(ui, shown_status, mono(8.5));
+    ui.painter().text(pos2(rect.max.x, rect.min.y + 6.0), Align2::RIGHT_TOP, shown_status, mono(8.5), tint);
+    let room = (rect.width() - 12.0 - status_w - 16.0).max(40.0);
+    let name = widgets::elide_font(ui, display_kind(&agent.kind), room, semibold(11.0));
+    ui.painter().text(pos2(rect.min.x + 12.0, rect.min.y), Align2::LEFT_TOP, name, semibold(11.0), s.text);
+    if let Some(task) = agent.title.as_deref().map(agent_task).filter(|task| !task.is_empty()) {
+        let task = widgets::elide_font(ui, &task, room, mono(8.5));
+        ui.painter().text(pos2(rect.min.x + 12.0, rect.min.y + 16.0), Align2::LEFT_TOP, task, mono(8.5), s.faint);
     }
-    ui.painter().text(pos2(rect.min.x + 13.0, rect.center().y), Align2::LEFT_CENTER, name, semibold(11.5), s.text);
-    if !status.trim().is_empty() && !status.eq_ignore_ascii_case("unknown") {
-        ui.painter().text(pos2(rect.max.x, rect.center().y), Align2::RIGHT_CENTER, status, mono(10.0), s.faint);
-    }
+}
+
+/// What an agent says it is doing, from its pane title: spinners and icons dropped, and for a
+/// `repo | Ready | task | branch` title just the task.
+fn agent_task(title: &str) -> String {
+    let title = title.trim_start_matches(|c: char| !c.is_alphanumeric()).trim();
+    let parts: Vec<&str> = title.split(" | ").map(str::trim).collect();
+    let task = if parts.len() >= 3 { parts.get(2).copied().unwrap_or(title) } else { title };
+    task.to_lowercase()
+}
+
+fn is_working(status: &str) -> bool {
+    matches!(status.trim().to_ascii_lowercase().as_str(), "working" | "busy" | "running" | "thinking")
 }
 
 fn status_color(status: &str, s: &Skin) -> Color32 {
-    match status.to_ascii_lowercase().as_str() {
-        "working" | "busy" | "running" | "thinking" => s.accent,
+    if is_working(status) {
+        return s.map_ink;
+    }
+    match status.trim().to_ascii_lowercase().as_str() {
         "blocked" | "error" | "failed" => s.danger,
-        "idle" | "done" | "ready" | "waiting" => s.map_ink,
         _ => s.faint,
     }
 }
 
-fn details_block(ui: &mut Ui, s: &Skin, w: &Workspace) {
-    let mut rows: Vec<(&str, String)> = Vec::new();
-    if let Some(repo) = w.repo.as_deref().filter(|r| !r.trim().is_empty()) {
-        rows.push(("Repository", repo.to_string()));
-    }
-    if w.worktree {
-        rows.push(("Checkout", "linked worktree".to_string()));
-    }
-    if let Some(tabs) = w.tabs {
-        rows.push(("Tabs", tabs.to_string()));
-    }
-    if let Some(panes) = w.panes {
-        rows.push(("Panes", panes.to_string()));
-    }
-    if rows.is_empty() {
-        return;
-    }
-    ui.add_space(26.0);
-    eyebrow(ui, s, "WORKSPACE");
-    ui.add_space(8.0);
-    for (label, value) in &rows {
-        meta_row(ui, s, label, value);
-    }
+/// LAST SYNC: the newest Mindmap-Sync commit on the workspace's branch.
+fn sync_block(ui: &mut Ui, s: &Skin, w: &Workspace) {
+    eyebrow(ui, s, "LAST SYNC");
+    ui.add_space(4.0);
+    let line = match (&w.last_sync, w.map_state()) {
+        (Some(sync), _) => {
+            let mut parts = vec![sync.commit.clone()];
+            if !sync.subject.trim().is_empty() {
+                parts.push(short_subject(&sync.subject));
+            }
+            if let Some(ago) = ago(&sync.at) {
+                parts.push(ago);
+            }
+            parts.join("   ·   ")
+        }
+        (None, MapState::Map) => "not synced yet".to_string(),
+        (None, _) => "no map yet".to_string(),
+    };
+    ui.add(egui::Label::new(egui::RichText::new(line).font(mono(9.0)).color(s.muted)).truncate());
 }
 
-fn meta_row(ui: &mut Ui, s: &Skin, label: &str, value: &str) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
-    ui.painter().text(pos2(rect.min.x, rect.center().y), Align2::LEFT_CENTER, label, mono(10.0), s.faint);
-    let room = (rect.width() - 110.0).max(40.0);
-    let shown = widgets::elide_start_font(ui, value, room, mono(10.5));
-    ui.painter().text(pos2(rect.max.x, rect.center().y), Align2::RIGHT_CENTER, &shown, mono(10.5), s.muted);
-    if shown != value {
-        let _ = resp.on_hover_text(value);
+/// A commit subject without its `Area:` prefix, cut to a few words.
+fn short_subject(subject: &str) -> String {
+    let subject = subject.split_once(": ").map_or(subject, |(_, rest)| rest).trim();
+    let mut words: Vec<&str> = subject.split_whitespace().take(6).collect();
+    if let Some(last) = words.last_mut() {
+        *last = last.trim_end_matches([',', ';', ':']);
     }
+    words.join(" ").to_lowercase()
 }
 
-fn eyebrow(ui: &mut Ui, s: &Skin, text: &str) {
-    ui.label(egui::RichText::new(text).font(mono(9.5)).color(s.faint));
+/// `2 h ago` from an ISO 8601 date, against the system clock.
+fn ago(at: &str) -> Option<String> {
+    let then = parse_iso(at)?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64;
+    let secs = (now - then).max(0);
+    Some(match secs {
+        0..60 => "just now".to_string(),
+        60..3600 => format!("{} min ago", secs / 60),
+        3600..86_400 => format!("{} h ago", secs / 3600),
+        _ => format!("{} d ago", secs / 86_400),
+    })
+}
+
+/// Seconds since the epoch for `YYYY-MM-DDTHH:MM:SS±HH:MM` (or `Z`).
+fn parse_iso(at: &str) -> Option<i64> {
+    let at = at.trim();
+    let num = |range: std::ops::Range<usize>| at.get(range).and_then(|v| v.parse::<i64>().ok());
+    let (y, mo, d, h, mi, se) = (num(0..4)?, num(5..7)?, num(8..10)?, num(11..13)?, num(14..16)?, num(17..19)?);
+    let zone = at.get(19..).unwrap_or("");
+    let offset = if zone.is_empty() || zone.starts_with('Z') {
+        0
+    } else {
+        let sign = if zone.starts_with('-') { -1 } else { 1 };
+        let oh = zone.get(1..3).and_then(|v| v.parse::<i64>().ok())?;
+        let om = zone.get(4..6).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        sign * (oh * 3600 + om * 60)
+    };
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let y = if mo <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + h * 3600 + mi * 60 + se - offset)
+}
+
+/// A soft rounded note at the foot of the detail.
+fn hint(ui: &mut Ui, s: &Skin, text: &str) {
+    egui::Frame::NONE
+        .fill(s.selected)
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin { left: 16, right: 16, top: 12, bottom: 29 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            paragraph(ui, text, 11.0, s.muted);
+        });
+}
+
+/// A text link; true when clicked.
+fn link(ui: &mut Ui, s: &Skin, id: Id, label: &str, ink: Color32) -> bool {
+    let size = vec2(text_width(ui, label, regular(10.5)), 20.0);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let resp = ui.interact(rect, id, Sense::click());
+    a11y::button(&resp, label);
+    let ink = if resp.hovered() { s.text } else { ink };
+    ui.painter().text(pos2(rect.min.x, rect.min.y + 3.0), Align2::LEFT_TOP, label, regular(10.5), ink);
+    focus_ring(ui, s, rect.expand(2.0), &resp, 4);
+    resp.clicked()
+}
+
+fn eyebrow(ui: &mut Ui, s: &Skin, text: &str) -> Rect {
+    ui.label(egui::RichText::new(text).font(mono(9.0)).color(s.muted)).rect
 }
 
 fn paragraph(ui: &mut Ui, text: &str, size: f32, color: Color32) {
@@ -1589,76 +1769,64 @@ fn error_card(ui: &mut Ui, s: &Skin, text: &str, busy: bool) -> bool {
     retry
 }
 
-fn primary_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
+/// The dark primary button: 32 pt tall, 20 pt of padding either side.
+fn primary_button(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: bool) -> bool {
+    let width = text_width(ui, label, semibold(11.0)) + 40.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(width.max(110.0), 32.0), Sense::hover());
     let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
     a11y::button(&resp, label);
     let hot = enabled && resp.hovered();
     let fill = if !enabled {
         s.soft
     } else if hot {
-        s.accent_hover
+        s.primary_hover
     } else {
-        s.accent
+        s.primary
     };
-    let ink = if enabled { Color32::WHITE } else { s.faint };
+    let ink = if enabled { s.on_primary } else { s.faint };
     ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(12.5), ink);
+    if !enabled {
+        ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, s.border), StrokeKind::Inside);
+    }
+    ui.painter().text(pos2(rect.min.x + 20.0, rect.center().y), Align2::LEFT_CENTER, label, semibold(11.0), ink);
     focus_ring(ui, s, rect, &resp, 6);
     resp.clicked() && enabled
 }
 
-/// What the Init split button did this frame.
-struct SplitClick {
-    primary: bool,
-    chevron: bool,
-    /// The whole split, for anchoring the agent menu below it.
-    response: Response,
+/// The white outlined button beside the primary one; `menu` adds the arrow of a picker.
+fn ghost_button(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: bool, menu: bool) -> Response {
+    let arrow = if menu { 18.0 } else { 0.0 };
+    let width = text_width(ui, label, semibold(11.0)) + 32.0 + arrow;
+    let (rect, _) = ui.allocate_exact_size(vec2(width.max(110.0), 32.0), Sense::hover());
+    let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+    a11y::button(&resp, label);
+    let hot = enabled && menu && resp.hovered();
+    ui.painter().rect_filled(rect, CornerRadius::same(6), if hot { s.soft } else { s.panel });
+    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, s.border), StrokeKind::Inside);
+    let ink = if enabled { s.text } else { s.faint };
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.center().y), Align2::LEFT_CENTER, label, semibold(11.0), ink);
+    if menu {
+        let c = pos2(rect.max.x - 18.0, rect.center().y + 0.5);
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![pos2(c.x - 3.5, c.y - 2.0), pos2(c.x + 3.5, c.y - 2.0), pos2(c.x, c.y + 2.5)],
+            if enabled { s.muted } else { s.faint },
+            Stroke::NONE,
+        ));
+    }
+    focus_ring(ui, s, rect, &resp, 6);
+    resp
 }
 
-/// The primary Init button with its narrower, darker chevron segment. Both are 34 px tall.
-fn split_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool, menu: bool) -> SplitClick {
-    let seam = rect.max.x - CHEVRON_W;
-    let main = Rect::from_min_max(rect.min, pos2(seam, rect.max.y));
-    let chevron = Rect::from_min_max(pos2(seam, rect.min.y), rect.max);
-    let whole = ui.interact(rect, id.with("whole"), Sense::hover());
-    let main_resp = ui.interact(main, id.with("init"), if enabled { Sense::click() } else { Sense::hover() });
-    let menu_enabled = enabled && menu;
-    let menu_resp = ui.interact(chevron, id.with("menu"), if menu_enabled { Sense::click() } else { Sense::hover() });
-    a11y::button(&main_resp, label);
-    a11y::button(&menu_resp, "Choose the agent for Init");
-
-    let hot = enabled && main_resp.hovered();
-    let menu_hot = menu_enabled && menu_resp.hovered();
-    let main_fill = if !enabled {
-        s.soft
-    } else if hot {
-        s.accent_hover
-    } else {
-        s.accent
-    };
-    let menu_fill = if !menu_enabled {
-        s.soft
-    } else if menu_hot {
-        darken(s.accent_hover, 0.90)
-    } else {
-        darken(s.accent, 0.82)
-    };
-    let main_ink = if enabled { Color32::WHITE } else { s.faint };
-    let menu_ink = if menu_enabled { Color32::WHITE } else { s.faint };
-    ui.painter().rect_filled(main, CornerRadius { nw: 6, ne: 0, sw: 6, se: 0 }, main_fill);
-    ui.painter().rect_filled(chevron, CornerRadius { nw: 0, ne: 6, sw: 0, se: 6 }, menu_fill);
-    ui.painter().text(main.center(), Align2::CENTER_CENTER, label, semibold(12.5), main_ink);
-
-    // The downward chevron is drawn, not a glyph, so it never depends on the font.
-    let c = chevron.center() + vec2(0.0, 0.5);
-    ui.painter().add(egui::Shape::convex_polygon(
-        vec![pos2(c.x - 4.0, c.y - 2.0), pos2(c.x + 4.0, c.y - 2.0), pos2(c.x, c.y + 2.5)],
-        menu_ink,
-        Stroke::NONE,
-    ));
-    focus_ring(ui, s, main, &main_resp, 6);
-    focus_ring(ui, s, chevron, &menu_resp, 6);
-    SplitClick { primary: enabled && main_resp.clicked(), chevron: menu_enabled && menu_resp.clicked(), response: whole }
+/// A small outlined button at a fixed place (Refresh).
+fn outline_button_at(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
+    let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+    a11y::button(&resp, label);
+    let hot = enabled && resp.hovered();
+    ui.painter().rect_filled(rect, CornerRadius::same(6), if hot { s.soft } else { s.panel });
+    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, s.border), StrokeKind::Inside);
+    ui.painter().text(pos2(rect.min.x + 12.0, rect.center().y), Align2::LEFT_CENTER, label, semibold(10.0), if enabled { s.text } else { s.faint });
+    focus_ring(ui, s, rect, &resp, 6);
+    resp.clicked() && enabled
 }
 
 /// The Init agent picker: an egui popup anchored below the split button. Clicking a row closes it,
@@ -1800,11 +1968,6 @@ fn divider(ui: &mut Ui, s: &Skin) {
     ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, s.border));
 }
 
-fn darken(color: Color32, factor: f32) -> Color32 {
-    let factor = factor.clamp(0.0, 1.0);
-    Color32::from_rgb((color.r() as f32 * factor) as u8, (color.g() as f32 * factor) as u8, (color.b() as f32 * factor) as u8)
-}
-
 fn secondary_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
     let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
     a11y::button(&resp, label);
@@ -1873,5 +2036,77 @@ mod branch_transition_tests {
         state.queue_branch_reopen(&node.address, &node.address, &inactive, Some(&node));
         assert!(state.take_branch_reopen("ssh:other", Some(&node)).is_none());
         assert!(state.pending_reopen.is_none());
+    }
+}
+
+#[cfg(test)]
+mod detail_tests {
+    use super::*;
+
+    #[test]
+    fn agent_task_drops_spinners_and_keeps_the_task_of_a_status_title() {
+        assert_eq!(agent_task("✦ 🐋 Finalize Pane 2 Claude work and install"), "finalize pane 2 claude work and install");
+        assert_eq!(agent_task("mindmap | Ready | Sync backend mindmap | main"), "sync backend mindmap");
+        assert_eq!(agent_task("Alzette mindmap overview"), "alzette mindmap overview");
+        assert_eq!(agent_task("⠇ "), "");
+    }
+
+    #[test]
+    fn iso_dates_read_with_their_offset() {
+        assert_eq!(parse_iso("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_iso("1970-01-01T02:00:00+02:00"), Some(0));
+        assert_eq!(parse_iso("2026-10-24T16:20:36+02:00"), Some(1_792_851_636));
+        assert_eq!(parse_iso("not a date"), None);
+        assert_eq!(parse_iso("2026-10"), None);
+    }
+
+    #[test]
+    fn the_sync_line_shortens_the_subject() {
+        assert_eq!(
+            short_subject("Mindmap client: onboarding, machine and workspace setup, worktree status bar"),
+            "onboarding, machine and workspace setup, worktree"
+        );
+        assert_eq!(short_subject("node cleanup"), "node cleanup");
+    }
+
+    #[test]
+    fn rows_say_no_agent_or_count_and_state() {
+        let mut w = Workspace { agents: 0, ..Workspace::default() };
+        assert_eq!(agents_line(&w), "no agent");
+        w.agents = 2;
+        w.agent_status = "working".into();
+        assert_eq!(agents_line(&w), "2 agents · working");
+        assert_eq!(pane_agents(&w), "2 agents");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn machines_describe_where_they_are() {
+        let local = crate::node_hosts::Host { name: "This computer".into(), address: "127.0.0.1:47822".into(), ssh: None };
+        let remote = crate::node_hosts::Host { name: "befree".into(), address: "ssh:befree".into(), ssh: Some("befree".into()) };
+        assert_eq!(machine_state(&local, true, false, 3, None), "local · 3 workspaces");
+        assert_eq!(machine_state(&remote, true, false, 1, Some("0.1.0")), "ssh · connected · node 0.1.0");
+        assert_eq!(machine_state(&remote, true, true, 0, None), "ssh · connecting…");
+        assert_eq!(machine_state(&remote, false, false, 0, None), "ssh · befree");
+    }
+
+    #[test]
+    fn a_new_list_selects_the_focused_workspace() {
+        let mut state = State::default();
+        let (tx, rx) = mpsc::channel();
+        state.rx = Some(rx);
+        let reply = ServiceReply {
+            ok: true,
+            workspaces: Some(vec![
+                Workspace { id: "w1".into(), ..Workspace::default() },
+                Workspace { id: "w2".into(), focused: true, ..Workspace::default() },
+            ]),
+            node: Some("0.1.0".into()),
+            ..ServiceReply::default()
+        };
+        assert!(tx.send((Kind::List, Ok(reply))).is_ok());
+        state.poll();
+        assert_eq!(state.selected.as_deref(), Some("w2"));
+        assert_eq!(state.node_version.as_deref(), Some("0.1.0"));
     }
 }

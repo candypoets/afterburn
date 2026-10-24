@@ -18,6 +18,20 @@ pub struct AgentDetail {
     pub status: String,
     /// Focused in the user's Herdr UI.
     pub focused: bool,
+    /// The pane's terminal title: the task the agent names for itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// The last commit that synced the map with the code.
+#[derive(Clone, Debug, Serialize)]
+pub struct LastSync {
+    /// Abbreviated commit id.
+    pub commit: String,
+    /// The commit's subject line.
+    pub subject: String,
+    /// Committer date, ISO 8601.
+    pub at: String,
 }
 
 /// One workspace as the client sees it: Herdr state plus our map state.
@@ -53,4 +67,7 @@ pub struct WorkspaceView {
     pub tabs: Option<u64>,
     /// Number of panes.
     pub panes: Option<u64>,
+    /// The last Mindmap-Sync commit on the checked-out branch, when the workspace has a map.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_sync: Option<LastSync>,
 }

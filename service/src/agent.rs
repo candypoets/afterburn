@@ -543,6 +543,7 @@ mod tests {
             map: "empty".into(),
             tabs: Some(1),
             panes: Some(1),
+            last_sync: None,
         }
     }
 
@@ -555,6 +556,7 @@ mod tests {
             tab_id: Some(format!("{}:t1", pane.split(':').next().unwrap_or("wX"))),
             agent_status: Some(status.into()),
             focused,
+            terminal_title_stripped: None,
         }
     }
 
@@ -578,6 +580,7 @@ mod tests {
             tab_id: Some("wP:t1".into()),
             agent_status: Some("idle".into()),
             focused: false,
+            terminal_title_stripped: None,
         }];
         assert_eq!(
             unique_agent_name(&agents, "mindmap").unwrap_or_default(),

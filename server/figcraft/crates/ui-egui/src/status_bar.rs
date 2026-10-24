@@ -56,6 +56,17 @@ fn branch_of(workspace: &Workspace) -> String {
     workspace.branch.clone().filter(|branch| !branch.is_empty()).unwrap_or_else(|| workspace.label.clone())
 }
 
+/// The repository's name: git's, else the workspace's own label.
+#[cfg(not(target_arch = "wasm32"))]
+fn repo_name(workspace: &Workspace) -> String {
+    workspace
+        .repo
+        .clone()
+        .filter(|repo| !repo.trim().is_empty())
+        .or_else(|| Some(workspace.label.clone()).filter(|label| !label.trim().is_empty()))
+        .unwrap_or_else(|| "worktree".to_string())
+}
+
 /// The row matching the open session, by workspace id then by checkout path.
 #[cfg(not(target_arch = "wasm32"))]
 fn active_row<'a>(active: Option<&SessionRef>, rows: &'a [Workspace]) -> Option<&'a Workspace> {
@@ -70,8 +81,7 @@ fn active_row<'a>(active: Option<&SessionRef>, rows: &'a [Workspace]) -> Option<
 #[cfg(not(target_arch = "wasm32"))]
 pub fn selected_chip(rows: &[Workspace], selected: Option<&str>) -> Option<String> {
     let row = rows.iter().find(|row| Some(row.id.as_str()) == selected)?;
-    let repo = row.repo.clone().filter(|repo| !repo.is_empty()).unwrap_or_else(|| "worktree".to_string());
-    Some(format!("{repo} / {}", branch_of(row)))
+    Some(format!("{} / {}", repo_name(row), branch_of(row)))
 }
 
 /// The session a selected workspace stands in for, so the switcher can key it by repository.
@@ -84,10 +94,7 @@ fn selected_session(selected: Option<&str>) -> Option<SessionRef> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn label(active: Option<&SessionRef>, rows: &[Workspace]) -> String {
     match active_row(active, rows) {
-        Some(row) => {
-            let repo = row.repo.clone().filter(|repo| !repo.is_empty()).unwrap_or_else(|| "worktree".to_string());
-            format!("{repo} / {}", branch_of(row))
-        }
+        Some(row) => format!("{} / {}", repo_name(row), branch_of(row)),
         None => match active {
             Some(target) => {
                 let branch = target.branch.trim();
@@ -139,6 +146,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 
     let mut toggle = false;
     let mut open_tree = false;
+    let home = app.ui.home || !app.has_files();
 
     #[cfg(not(target_arch = "wasm32"))]
     let active = crate::workspaces::active_node(app).ok();
@@ -155,13 +163,17 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 
     ui.horizontal_centered(|ui| {
         ui.add_space(12.0);
-        let response = ui.add(egui::Button::new(egui::RichText::new(chip).size(10.0).color(t.text)).frame(false));
+        let response = ui.add(egui::Button::new(egui::RichText::new(chip).font(crate::theme::semibold(10.0)).color(t.text)).frame(false));
         #[cfg(not(target_arch = "wasm32"))]
         if response.on_hover_text("Switch worktree").clicked() {
             toggle = true;
         }
         if app.status.switcher_open {
             ui.label(egui::RichText::new("▴").size(8.5).color(t.text_tertiary));
+        }
+        // The Workspaces screen has no page tree: only an open map does.
+        if home {
+            return;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(12.0);

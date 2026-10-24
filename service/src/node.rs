@@ -358,7 +358,7 @@ impl Node {
                     .ensure(req["install_herdr"].as_bool().unwrap_or(false))?,
             )?),
             "workspaces" => Ok(
-                json!({"workspaces":self.herdr.workspaces()?,"clis":crate::agent::installed_kinds()}),
+                json!({"workspaces":self.herdr.workspaces()?,"clis":crate::agent::installed_kinds(),"node":env!("CARGO_PKG_VERSION")}),
             ),
             "open" | "session.open" => self.open(req),
             "session.list" => Ok(json!({"sessions":lock(&self.docs)?.sessions()})),
