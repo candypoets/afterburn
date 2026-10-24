@@ -512,7 +512,7 @@ fn tree_panel(app: &FigApp, ctx: &egui::Context, node_id: Option<NodeId>, page: 
         Some(id) => node_name(app, id).unwrap_or_else(|| "This card".to_string()),
         None => page.and_then(|id| node_name(app, id)).map(|name| format!("{name} · whole page")).unwrap_or_else(|| "Whole page".to_string()),
     };
-    let header_h = if app.ui.title_bar == crate::TitleBar::Inset { crate::MAC_BAND } else { 44.0 };
+    let header_h = if app.ui.mac_inset() { crate::MAC_BAND } else { 44.0 };
     let note = match rows.len() {
         0 => format!("A prompt on {} carries {}.", short(&root), if total == 1 { "it" } else { "them" }),
         2 => format!("A prompt on {} carries both.", short(&root)),

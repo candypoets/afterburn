@@ -800,7 +800,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     }
     let skin = Skin::of(&Tokens::get(&ctx));
     // On macOS the window buttons sit in a toolbar band at the top left; the screen starts below.
-    let band = if app.ui.title_bar == crate::TitleBar::Inset { crate::MAC_BAND } else { 0.0 };
+    let band = if app.ui.mac_inset() { crate::MAC_BAND } else { 0.0 };
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(skin.bg)).show(ui, |ui| {
         let rect = ui.max_rect();
         if band > 0.0 {

@@ -631,7 +631,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
 
     let scope = scope_label(app);
     // Under the header (the macOS toolbar band is taller), at the Sync button's right edge.
-    let header_h = if app.ui.title_bar == crate::TitleBar::Inset { crate::MAC_BAND } else { 44.0 };
+    let header_h = if app.ui.mac_inset() { crate::MAC_BAND } else { 44.0 };
     let menu_was_open = app.sync.menu_open;
     let mut out = WidgetOut::default();
     // The anchored area takes its first frame's size from `default_size`; without it the

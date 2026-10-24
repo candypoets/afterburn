@@ -645,7 +645,7 @@ fn end(app: &mut FigApp) {
 /// The white title bar with the wordmark; on macOS it is the toolbar band the window buttons
 /// sit in, and empty space moves the window.
 fn titlebar(app: &FigApp, ui: &mut Ui, p: &Pal, screen: Rect) -> Rect {
-    let inset = app.ui.title_bar == TitleBar::Inset;
+    let inset = app.ui.mac_inset();
     let height = if inset { crate::MAC_BAND } else { TITLEBAR };
     let bar = Rect::from_min_size(screen.min, vec2(screen.width(), height));
     ui.painter().rect_filled(bar, CornerRadius::ZERO, p.panel);

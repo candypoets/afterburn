@@ -29,7 +29,7 @@ pub fn tab_bar(app: &mut FigApp, ui: &mut Ui) {
             }
         }
         let buttons_w = if app.ui.title_bar == TitleBar::Custom { window_buttons(app, ui, rect) } else { 0.0 };
-        let mut x = rect.min.x + if app.ui.title_bar == TitleBar::Inset { 76.0 } else { 8.0 };
+        let mut x = rect.min.x + if app.ui.mac_inset() { 76.0 } else { 8.0 };
         // Home.
         let hr = Rect::from_min_size(pos2(x, rect.min.y), vec2(44.0, HEIGHT));
         let hresp = ui.interact(hr, ui.id().with("home"), Sense::click()).tip(tr("Home"));

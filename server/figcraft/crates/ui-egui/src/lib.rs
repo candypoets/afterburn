@@ -472,6 +472,14 @@ pub enum TitleBar {
 /// The map client's macOS toolbar band: an empty unified toolbar puts the window buttons where
 /// native apps have them (20 pt in, centred in this band), so the content leaves room for it.
 pub const MAC_BAND: f32 = 52.0;
+
+impl UiState {
+    /// The macOS traffic lights sit in the top band: keep it clear. Fullscreen hides them (and
+    /// the toolbar that places them), so the map's header starts at the top there.
+    pub fn mac_inset(&self) -> bool {
+        self.title_bar == TitleBar::Inset && !self.fullscreen
+    }
+}
 /// Where content may start right of the window buttons inside that band.
 pub const MAC_BUTTONS_W: f32 = 86.0;
 
@@ -615,6 +623,8 @@ pub struct UiState {
     pub layers_seen_sel: Vec<NodeId>,
     pub dark: bool,
     pub follow_system: bool,
+    /// The window is in fullscreen this frame (macOS hides the traffic lights there).
+    pub fullscreen: bool,
     pub tool_flyout: Option<&'static str>,
     pub last_error: Option<String>,
     /// Files dropped on the home screen or the canvas, opened once their card has been on screen
@@ -764,6 +774,7 @@ impl Default for UiState {
             pdf_print: figcraft_doc::PrintSettings::default(),
             color_profile: None,
             style_picker: None,
+            fullscreen: false,
             style_grid: false,
             style_folds: BTreeSet::new(),
             text_preview: None,
@@ -1532,6 +1543,7 @@ impl FigApp {
         let t0 = std::time::Instant::now();
         let ctx = ui.ctx().clone();
         self.ui_context = Some(ctx.clone());
+        self.ui.fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         self.frame_stats.record(&ctx);
         let first = !self.fonts_installed;
         self.logic(&ctx);
@@ -1721,7 +1733,7 @@ impl FigApp {
             };
             let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
             // On macOS the header is the toolbar band the window buttons sit centred in.
-            let inset = self.ui.title_bar == TitleBar::Inset;
+            let inset = self.ui.mac_inset();
             let header_h = if inset { MAC_BAND } else { 44.0 };
             egui::Panel::top("map_header").exact_size(header_h).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
                 let rect = ui.max_rect();
@@ -1870,7 +1882,7 @@ impl FigApp {
             sync::show(self, &ctx);
             // A map Init just opened: who is drawing it, and what Sync is for (once).
             first_map::observe(self, &ctx);
-            let header_h = if self.ui.title_bar == TitleBar::Inset { MAC_BAND } else { 44.0 };
+            let header_h = if self.ui.mac_inset() { MAC_BAND } else { 44.0 };
             first_map::show(self, &ctx, header_h);
             agents::show(self, &ctx);
             new_page::show(self, &ctx);
