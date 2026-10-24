@@ -1333,12 +1333,12 @@ fn machine_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
         }
     }
     host_notice(ui, s, &mut app.ws.hosts);
-    if let Some((host, is_in_use)) = toggled {
-        if !app.ws.open.remove(&host.address) {
-            app.ws.open.insert(host.address.clone());
-            if !is_in_use {
-                app.ws.list_host(ctx, &host.address);
-            }
+    if let Some((host, is_in_use)) = toggled
+        && !app.ws.open.remove(&host.address)
+    {
+        app.ws.open.insert(host.address.clone());
+        if !is_in_use {
+            app.ws.list_host(ctx, &host.address);
         }
     }
     if let Some((host, id, chosen)) = switch {
