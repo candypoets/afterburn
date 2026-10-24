@@ -231,6 +231,40 @@ impl NodeHerdr {
         Ok(agent::ensure_with_prompt(&herdr, workspace, target, text))
     }
 
+    /// A new Herdr workspace at an existing folder, in the background (the human's focus stays).
+    pub fn create_workspace(&self, cwd: &str, label: Option<&str>) -> Result<Value> {
+        let cwd = cwd.trim();
+        if cwd.is_empty() || !Path::new(cwd).is_absolute() {
+            return Err(Error::new("the workspace folder must be an absolute path"));
+        }
+        if !Path::new(cwd).is_dir() {
+            return Err(Error::new(format!("{cwd} is not a folder on this machine")));
+        }
+        let mut params = json!({"cwd": cwd, "focus": false});
+        if let Some(label) = label.map(str::trim).filter(|l| !l.is_empty()) {
+            params["label"] = json!(label);
+        }
+        events::rpc(
+            &self.socket,
+            "workspace.create",
+            params,
+            Duration::from_secs(30),
+        )
+    }
+
+    /// Bring `workspace_id` to the front in the human's Herdr.
+    pub fn focus_workspace(&self, workspace_id: &str) -> Result<Value> {
+        if workspace_id.trim().is_empty() {
+            return Err(Error::new("workspace id must not be empty"));
+        }
+        events::rpc(
+            &self.socket,
+            "workspace.focus",
+            json!({"workspace_id": workspace_id}),
+            Duration::from_secs(10),
+        )
+    }
+
     /// Herdr owns git/worktree creation and returns the created workspace/pane handles.
     pub fn create_worktree(&self, request: &CreateWorktree) -> Result<Value> {
         if [request.workspace_id.as_deref(), request.cwd.as_deref()]

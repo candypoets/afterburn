@@ -1084,6 +1084,15 @@ pub(crate) fn use_host(app: &mut FigApp, ctx: &egui::Context, host: &crate::node
     app.ws.refresh(ctx);
 }
 
+/// Bring `workspace` to the front in that machine's Herdr, on a thread of its own.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn open_in_herdr(address: &str, workspace: &str) {
+    let (address, request) = (address.to_string(), serde_json::json!({"method": "workspace.focus", "workspace": workspace}));
+    let _ = std::thread::Builder::new().name("figcraft-herdr-focus".into()).spawn(move || {
+        let _ = crate::node::rpc(&address, request, LIST_TIMEOUT);
+    });
+}
+
 /// The sidebar row the machine in use is drawn under: its SSH address, or this computer's.
 #[cfg(not(target_arch = "wasm32"))]
 fn in_use_key(app: &FigApp) -> Option<String> {
@@ -1634,6 +1643,13 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     divider(ui, s);
     ui.add_space(15.0);
     agents_block(ui, s, w);
+    #[cfg(not(target_arch = "wasm32"))]
+    if !w.agents_detail.is_empty() {
+        ui.add_space(6.0);
+        if link(ui, s, Id::new(("workspace_open_herdr", &w.id)), "Open in Herdr  →", s.map_ink) {
+            open_in_herdr(&service_addr(), &w.id);
+        }
+    }
     ui.add_space(16.0);
     divider(ui, s);
     ui.add_space(15.0);

@@ -505,6 +505,11 @@ impl Node {
                     serde_json::from_value(req.get("picks").cloned().unwrap_or_else(|| json!([])))?;
                 self.cancel_sync(required(req, "job")?, &picks)
             }
+            "workspace.create" => Ok(json!({"workspace": self.herdr.create_workspace(
+                required(req, "path")?,
+                req["label"].as_str(),
+            )?})),
+            "workspace.focus" => self.herdr.focus_workspace(required(req, "workspace")?),
             "worktree.create" => self
                 .herdr
                 .create_worktree(&serde_json::from_value(req.clone())?),

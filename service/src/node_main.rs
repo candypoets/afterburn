@@ -69,7 +69,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         "help" | "--help" | "-h" => {
-            println!("mindmap-node serve [--bind 127.0.0.1:47822]\nmindmap-node request '<JSON>' [--address HOST:PORT]\nmindmap-node mcp --path WORKTREE [--address HOST:PORT]\n\nOne node per machine; remote clients use one SSH tunnel to its loopback socket.\nRequest methods: hello, host.status, host.ensure, workspaces, open, init, send, diff, sync, sync_status, sync.prepare, sync.finish, session.inspect, session.command, session.save, merge.plan, merge.apply.\nHerdr installation requires host.ensure with install_herdr:true. Designs live in .mindmap/map.figcraft; no owner link or server key is needed.");
+            println!("mindmap-node serve [--bind 127.0.0.1:47822]\nmindmap-node request '<JSON>' [--address HOST:PORT]\nmindmap-node mcp --path WORKTREE [--address HOST:PORT]\n\nOne node per machine; remote clients use one SSH tunnel to its loopback socket.\nRequest methods: hello, host.status, host.ensure, workspaces, workspace.create, workspace.focus, open, init, send, diff, sync, sync_status, sync.prepare, sync.finish, session.inspect, session.command, session.save, merge.plan, merge.apply.\nHerdr installation requires host.ensure with install_herdr:true. Designs live in .mindmap/map.figcraft; no owner link or server key is needed.");
             Ok(())
         }
         command => Err(Error::new(format!("unknown command {command:?}"))),

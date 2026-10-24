@@ -22,8 +22,8 @@ use crate::workspaces::{MapState, Target, Workspace};
 /// The card's size, as in the design.
 const WIDTH: f32 = 520.0;
 const HEIGHT: f32 = 390.0;
-/// How long the Creating state waits for the node's list before saying creation is unavailable.
-const CREATING_NOTE_AFTER: f64 = 1.5;
+/// How long the Creating state waits for the new workspace to be listed before it says so.
+const CREATING_NOTE_AFTER: f64 = 6.0;
 /// The most folder suggestions shown under the field.
 #[cfg(not(target_arch = "wasm32"))]
 const SUGGESTIONS: usize = 6;
@@ -93,6 +93,14 @@ pub struct State {
     pub waiting: Option<Busy>,
     /// Where the folder completions were drawn last frame.
     suggest_rect: Option<Rect>,
+    /// The node is creating the Herdr workspace now.
+    pub creating: bool,
+    /// The node created it; Check again only re-lists, it never creates a second one.
+    pub created: bool,
+    /// Why the node could not create it.
+    pub create_error: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    create_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
 
 impl State {
@@ -113,6 +121,13 @@ impl State {
         self.connecting = false;
         self.target.clear();
         self.awaiting = None;
+        self.creating = false;
+        self.created = false;
+        self.create_error = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.create_rx = None;
+        }
     }
 
     /// Close the modal.
@@ -224,8 +239,8 @@ impl State {
         true
     }
 
-    /// Create: if a workspace at this folder is already listed, go to Init; otherwise the honest
-    /// Creating state (there is no create RPC to call).
+    /// Create: if a workspace at this folder is already listed, go to Init; otherwise the Creating
+    /// state, where the node creates the Herdr workspace.
     pub fn create(&mut self, now: f64, rows: &[Workspace]) -> Option<String> {
         if !self.validate() {
             return None;
@@ -239,6 +254,8 @@ impl State {
         self.unavailable = false;
         self.refreshed = false;
         self.workspace = None;
+        self.created = false;
+        self.create_error = None;
         None
     }
 
@@ -252,17 +269,34 @@ impl State {
             self.enter_init(id.clone());
             return Some(id);
         }
-        if !self.unavailable && now >= self.started && now - self.started >= CREATING_NOTE_AFTER {
+        if !self.unavailable && !self.creating && now >= self.started && now - self.started >= CREATING_NOTE_AFTER {
             self.unavailable = true;
         }
         None
     }
 
-    /// Check again after the honest note: restart the wait (the caller re-lists).
+    /// Check again after the note: restart the wait. A failed create is tried again; a created
+    /// workspace is only listed again.
     pub fn recheck(&mut self, now: f64) {
         self.started = now;
         self.unavailable = false;
-        self.refreshed = false;
+        self.refreshed = self.created;
+        self.create_error = None;
+    }
+
+    /// The node answered the create: wait for the new workspace to be listed, or say why not.
+    pub fn created(&mut self, now: f64, result: Result<(), String>) {
+        self.creating = false;
+        match result {
+            Ok(()) => {
+                self.created = true;
+                self.started = now;
+            }
+            Err(error) => {
+                self.create_error = Some(error);
+                self.unavailable = true;
+            }
+        }
     }
 
     /// Whether the list should be asked for again while Creating.
@@ -434,7 +468,13 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             app.new_workspace.choose_machine(machine);
         }
     }
-    let rows = app.ws.rows.clone();
+    #[allow(unused_mut)]
+    let mut rows = app.ws.rows.clone();
+    // A workspace created on another open machine is listed under that machine.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(list) = app.ws.lists.get(&app.new_workspace.machine.address) {
+        rows.extend(list.rows.iter().cloned());
+    }
     let machines = machines(app);
     let in_use = {
         #[cfg(not(target_arch = "wasm32"))]
@@ -469,8 +509,29 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         return;
     }
     if app.new_workspace.wants_refresh() && app.ws.busy.is_none() {
-        app.ws.refresh(&ctx);
         app.new_workspace.asked_refresh();
+        #[cfg(not(target_arch = "wasm32"))]
+        start_create(app, &ctx);
+        #[cfg(target_arch = "wasm32")]
+        app.ws.refresh(&ctx);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(result) = app.new_workspace.create_rx.as_ref().and_then(|rx| match rx.try_recv() {
+        Ok(result) => Some(result),
+        Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("The create request ended without an answer.".to_string())),
+    }) {
+        app.new_workspace.create_rx = None;
+        let ok = result.is_ok();
+        app.new_workspace.created(now, result);
+        if ok {
+            let address = app.new_workspace.machine.address.clone();
+            if address == crate::workspaces::service_addr() {
+                app.ws.refresh(&ctx);
+            } else {
+                app.ws.list_host(&ctx, &address);
+            }
+        }
     }
     match action {
         Some(Action::Close) => app.new_workspace.close(),
@@ -480,6 +541,32 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
             app.new_workspace.recheck(now);
         }
         None => {}
+    }
+}
+
+/// Ask the sheet's machine to create the Herdr workspace, on a thread of its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_create(app: &mut FigApp, ctx: &egui::Context) {
+    let state = &mut app.new_workspace;
+    if state.creating || state.created {
+        return;
+    }
+    let address = state.machine.address.clone();
+    let request = serde_json::json!({"method": "workspace.create", "path": state.folder.trim(), "label": state.name.trim()});
+    let (tx, rx) = std::sync::mpsc::channel();
+    state.create_rx = Some(rx);
+    state.creating = true;
+    let context = ctx.clone();
+    let spawned = std::thread::Builder::new().name("figcraft-workspace-create".into()).spawn(move || {
+        let result = crate::node::rpc(&address, request, std::time::Duration::from_secs(40)).map(|_| ());
+        let _ = tx.send(result);
+        context.request_repaint();
+    });
+    if let Err(e) = spawned {
+        state.create_rx = None;
+        state.creating = false;
+        state.create_error = Some(format!("Could not start the create request: {e}"));
+        state.unavailable = true;
     }
 }
 
@@ -735,11 +822,14 @@ fn creating_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, card: Rect) ->
     let steps = [("Create the Herdr workspace".to_string()), "Attach the map session".to_string(), format!("Add the row under {machine}")];
     for (index, step) in steps.iter().enumerate() {
         let y = 126.0 + 26.0 * index as f32;
-        let (mark, word, color) = match (index, state.unavailable) {
-            (0, false) => (shell::Mark::Dot, "running", s.teal),
-            (0, true) => (shell::Mark::Cross, "not available", s.accent),
-            (_, false) => (shell::Mark::Small, "waiting", s.faint),
-            (_, true) => (shell::Mark::Dash, "not started", s.faint),
+        let failed = state.unavailable && !state.created;
+        let (mark, word, color) = match (index, failed, state.created) {
+            (0, true, _) => (shell::Mark::Cross, "failed", s.accent),
+            (0, false, true) => (shell::Mark::Check, "done", s.teal),
+            (0, false, false) => (shell::Mark::Dot, "running", s.teal),
+            (1, false, true) if !state.unavailable => (shell::Mark::Dot, "running", s.teal),
+            (_, true, _) => (shell::Mark::Dash, "not started", s.faint),
+            _ => (shell::Mark::Small, "waiting", s.faint),
         };
         shell::mark(ui, card, y, mark, color);
         shell::row_text(ui, s, card, 44.0, y, step);
@@ -747,7 +837,11 @@ fn creating_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, card: Rect) ->
     }
     let note = shell::at(card, 24.0, 206.0, WIDTH - 48.0, 44.0);
     if state.unavailable {
-        shell::note_box(ui, s, note, "This node can't create Herdr workspaces yet; nothing was created. Create it in Herdr, then Check again.", true);
+        let text = match &state.create_error {
+            Some(error) => format!("Herdr did not create it: {error}"),
+            None => "Herdr created the workspace, but the node has not listed it yet. Check again in a moment.".to_string(),
+        };
+        shell::note_box(ui, s, note, &text, true);
         let (back, again) = footer(ui, s, card, 332.0, Some("Back"), Some(("Check again", 110.0, true)));
         if back {
             state.back();
@@ -1057,6 +1151,32 @@ mod tests {
         assert!(!state.unavailable);
         assert!(state.tick(10.5, &rows).is_none());
         assert!(!state.unavailable);
+    }
+
+    #[test]
+    fn a_created_workspace_is_only_listed_again_and_a_failed_one_is_retried() {
+        let mut state = form();
+        assert!(state.create(0.0, &[]).is_none());
+        assert!(state.wants_refresh());
+        state.asked_refresh();
+        state.creating = true;
+        // While the node works, the wait never times out.
+        assert!(state.tick(CREATING_NOTE_AFTER + 5.0, &[]).is_none());
+        assert!(!state.unavailable);
+        state.created(20.0, Err("not a folder".into()));
+        assert!(state.unavailable);
+        assert_eq!(state.create_error.as_deref(), Some("not a folder"));
+        state.recheck(21.0);
+        assert!(state.wants_refresh(), "a failed create is tried again");
+        state.asked_refresh();
+        state.created(22.0, Ok(()));
+        assert!(state.created && !state.unavailable);
+        assert!(state.tick(22.0 + CREATING_NOTE_AFTER + 0.1, &[]).is_none());
+        assert!(state.unavailable);
+        state.recheck(40.0);
+        assert!(!state.wants_refresh(), "a created workspace is never created twice");
+        let rows = [row("w1", "/Users/you/ledger", None)];
+        assert_eq!(state.tick(40.5, &rows).as_deref(), Some("w1"));
     }
 
     #[test]
