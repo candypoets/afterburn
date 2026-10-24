@@ -1613,7 +1613,8 @@ impl FigApp {
             windows::requests(self, &ctx);
             return;
         }
-        if map_mode {
+        // The first-run flow has no status bar: it owns the whole window.
+        if map_mode && !(self.onboarding.active && (!self.has_files() || self.ui.home)) {
             egui::Panel::bottom("map_status").exact_size(status_bar::HEIGHT).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
                 status_bar::show(self, ui);
             });
