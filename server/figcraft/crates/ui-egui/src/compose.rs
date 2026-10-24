@@ -1162,6 +1162,10 @@ fn collect_subtree(doc: &Document, id: NodeId, out: &mut HashSet<NodeId>) {
     }
 }
 
+/// Selected cards a prompt names at most; the context packet stays short.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_SELECTED: usize = 20;
+
 /// Send the input as the prompt, with every draft attached, on a thread of its own.
 #[cfg(not(target_arch = "wasm32"))]
 fn start_send(app: &mut FigApp, ctx: &egui::Context) {
@@ -1197,6 +1201,8 @@ fn start_send(app: &mut FigApp, ctx: &egui::Context) {
         })
         .collect();
     let page_id = app.session.page().ok().map(|id| id.0);
+    // The prompt is about the selected cards: name them, as each draft names its own.
+    let selected: Vec<u64> = selection.iter().take(MAX_SELECTED).map(|id| id.0).collect();
     let Ok(node) = workspaces::active_node(app) else {
         app.toast("Open a connected node workspace first.");
         return;
@@ -1210,6 +1216,7 @@ fn start_send(app: &mut FigApp, ctx: &egui::Context) {
         "prompt": prompt,
         "comments": comments,
         "page_id": page_id,
+        "selection": selected,
         "new_page": false,
     })
     .to_string();

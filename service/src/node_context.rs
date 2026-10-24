@@ -25,6 +25,8 @@ pub struct Request<'a> {
     pub page: Option<NodeId>,
     /// Cards the comments are attached to.
     pub commented: &'a [NodeId],
+    /// Cards selected in the client when the prompt was sent: what the task is about.
+    pub selected: &'a [NodeId],
     /// The page was created for this prompt.
     pub new_page: bool,
     /// The card a new page was made from.
@@ -47,7 +49,13 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
     let page = request
         .page
         .filter(|page| doc.pages.contains(page))
-        .or_else(|| request.commented.iter().find_map(|id| page_of(doc, *id)));
+        .or_else(|| {
+            request
+                .selected
+                .iter()
+                .chain(request.commented)
+                .find_map(|id| page_of(doc, *id))
+        });
     if let Some(page) = page {
         let subpages = subpages(doc, page);
         out.push_str(&format!(
@@ -92,6 +100,18 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
     if let Some(source) = request.source.filter(|id| doc.node(*id).is_some()) {
         out.push_str("\nMade from this card:\n");
         out.push_str(&card(doc, source));
+    }
+    let selected: Vec<NodeId> = request
+        .selected
+        .iter()
+        .copied()
+        .filter(|id| doc.node(*id).is_some())
+        .collect();
+    if !selected.is_empty() {
+        out.push_str("\nSelected cards (the task is about these):\n");
+        for id in selected {
+            out.push_str(&card(doc, id));
+        }
     }
     let commented: Vec<NodeId> = request
         .commented
@@ -315,6 +335,7 @@ mod tests {
             session: "s1",
             page,
             commented,
+            selected: &[],
             new_page: false,
             source: None,
         }
@@ -351,6 +372,31 @@ mod tests {
             "another page leaked in: {text}"
         );
         assert!(!text.contains("absoluteBounds"), "no raw JSON: {text}");
+    }
+
+    #[test]
+    fn a_prompt_names_the_selected_card_and_its_page() {
+        let (doc, backend, card, _) = doc();
+        let selected = [card];
+        let text = render(
+            &doc,
+            &Request {
+                selected: &selected,
+                ..request(None, &[])
+            },
+        );
+        assert!(
+            text.contains(&format!("Scope: page {} and its subpages only.", backend.0)),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "Selected cards (the task is about these):\n- Proposed system (id {}",
+                card.0
+            )),
+            "{text}"
+        );
+        assert!(!text.contains("Commented cards"), "{text}");
     }
 
     #[test]

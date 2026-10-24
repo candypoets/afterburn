@@ -572,6 +572,16 @@ impl Node {
             .copied()
             .map(figcraft_doc::NodeId)
             .collect();
+        // The client sends its selection with a prompt; a comment carries its own card.
+        let selected: Vec<figcraft_doc::NodeId> = req["selection"]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_u64)
+                    .map(figcraft_doc::NodeId)
+                    .collect()
+            })
+            .unwrap_or_default();
         let worktree = metadata.worktree.display().to_string();
         Ok(crate::node_context::render(
             &document,
@@ -582,6 +592,7 @@ impl Node {
                 session,
                 page: scope.map(figcraft_doc::NodeId),
                 commented: &commented,
+                selected: &selected,
                 new_page: req["new_page"].as_bool().unwrap_or(false),
                 source: req["source_node_id"].as_u64().map(figcraft_doc::NodeId),
             },
