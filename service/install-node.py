@@ -39,10 +39,21 @@ def rpc(method, absent_ok=False, **parameters):
             return None
         raise InstallError("Node disappeared while checking upgrade safety.", 21)
     with connection:
-        connection.sendall((json.dumps({"id": 1, "version": 1, "method": method, **parameters}) + "\n").encode())
-        with connection.makefile("rb") as reader:
-            for _ in range(100):
-                line = reader.readline(16 * 1024 * 1024 + 1)
+        try:
+            connection.sendall((json.dumps({"id": 1, "version": 1, "method": method, **parameters}) + "\n").encode())
+            reader = connection.makefile("rb")
+            line = reader.readline(16 * 1024 * 1024 + 1)
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, socket.timeout):
+            # A node launchd or systemd is stopping or starting drops the connection: no node yet.
+            if absent_ok:
+                return None
+            raise InstallError(f"Cannot inspect node {method}; leaving it untouched.", 21)
+        if not line and absent_ok:
+            return None
+        with reader:
+            for attempt in range(100):
+                if attempt:
+                    line = reader.readline(16 * 1024 * 1024 + 1)
                 if not line or len(line) > 16 * 1024 * 1024:
                     break
                 reply = json.loads(line)

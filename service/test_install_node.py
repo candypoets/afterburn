@@ -276,9 +276,12 @@ app.chmod(0o755)
             result = subprocess.run(['bash', str(root / 'client/build-mac.sh')], env=environment, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual(len(calls), 1)
-            self.assertIn('figcraft', calls[0])
-            self.assertIn('mindmap-node', calls[0])
+            # The build id's crate is cleaned first, so its hash is always recomputed.
+            self.assertEqual(len(calls), 2)
+            self.assertIn('clean', calls[0])
+            self.assertIn('mindmap-build', calls[0])
+            self.assertIn('figcraft', calls[1])
+            self.assertIn('mindmap-node', calls[1])
             resources = temporary / 'Mindmap.app/Contents/Resources'
             self.assertTrue((resources / 'install-node.sh').is_file())
             self.assertTrue((resources / 'install-node.py').is_file())
@@ -288,9 +291,9 @@ app.chmod(0o755)
             result = subprocess.run(['bash', str(root / 'service/build-node.sh'), str(temporary / 'headless')], env=environment, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual(len(calls), 2)
-            self.assertNotIn('figcraft', calls[1])
-            self.assertIn('mindmap-node', calls[1])
+            self.assertEqual(len(calls), 3)
+            self.assertNotIn('figcraft', calls[2])
+            self.assertIn('mindmap-node', calls[2])
             self.assertTrue((temporary / 'headless/darwin-arm64/build-info.json').is_file())
             # A package's companion root includes installers, which must be ignored as assets.
             assets.copy_assets(temporary / 'headless', INFO, temporary / 'copied', 'linux-x64')
