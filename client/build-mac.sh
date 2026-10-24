@@ -35,6 +35,9 @@ case "${INSTALL_NODE:-1}:${UPGRADE_NODE:-0}" in 0:0|0:1|1:0|1:1) ;; *) echo 'INS
 cd "$ROOT"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 # Do not split this invocation: app and native node must share one resolved dependency graph.
+# The build id hashes the sources in a build script; snapshots keep their mtimes and the target
+# dir is shared, so cargo can skip that script and reuse a stale id. Always recompute it.
+cargo "+${CARGO_TOOLCHAIN:-1.97.1}" clean --target-dir "$TARGET_DIR" -p mindmap-build --profile "$CARGO_PROFILE"
 cargo "+${CARGO_TOOLCHAIN:-1.97.1}" build --locked --target-dir "$TARGET_DIR" -p figcraft -p mindmap-node --profile "$CARGO_PROFILE"
 STAGING="$(mktemp -d "$(dirname "$APP")/.mindmap-build.XXXXXX")"
 cleanup() {
