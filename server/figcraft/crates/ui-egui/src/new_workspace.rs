@@ -1,43 +1,58 @@
-//! The New workspace modal: pick a machine and a folder, then the workspace opens on Init.
+//! The New workspace sheet: pick a machine and a folder, then the workspace opens on Init.
 //!
 //! Design: `Widget New workspace` on the Mindmap page (states Local, Remote, Connect, Creating,
-//! Init).
+//! Init, Init busy, Init busy no info). One 520 × 390 card: the machine field opens into the
+//! machine list in place, and "Connect a machine…" grows an SSH target instead of sending the
+//! person elsewhere.
 //!
-//! The node has no create-workspace RPC today (its methods are listing, Open and Init), so the
-//! Create action never claims success: it looks for a workspace at the chosen folder in the
-//! listed [`Workspace`](crate::workspaces::Workspace) rows and, when none appears, says so and
-//! points at Herdr. The step machine is pure state and unit-tested without a window.
+//! The node has no create-workspace RPC today (its methods are listing, Open and Init), so Create
+//! never claims success: it looks for a workspace at the chosen folder in the listed
+//! [`Workspace`](crate::workspaces::Workspace) rows and, when none appears, says so. The Init
+//! busy card is this module's too: Init never sends a second prompt to an agent Herdr reports as
+//! working ([`guard_init`]). The step machine is pure state and unit-tested without a window.
 
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use crate::FigApp;
-use crate::a11y;
 use crate::machine_modal::Machine;
 use crate::machine_modal::shell;
 use crate::theme::{Tokens, regular, semibold};
-use crate::workspaces::{MapState, Workspace};
+use crate::workspaces::{MapState, Target, Workspace};
 
-/// The modal's surface width; the form is narrower than the Add machine wizard.
-const WIDTH: f32 = 780.0;
-/// The space between the surface and the window edge before the modal shrinks.
-const EDGE: f32 = 48.0;
+/// The card's size, as in the design.
+const WIDTH: f32 = 520.0;
+const HEIGHT: f32 = 390.0;
 /// How long the Creating state waits for the node's list before saying creation is unavailable.
 const CREATING_NOTE_AFTER: f64 = 1.5;
+/// The most folder suggestions shown under the field.
+#[cfg(not(target_arch = "wasm32"))]
+const SUGGESTIONS: usize = 6;
 
 /// The states of the design.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Step {
-    /// The folder, branch and name on a machine.
+    /// The machine, folder, branch and name (the design's Local and Remote states).
     #[default]
     Local,
-    /// Pick a saved SSH machine.
-    Remote,
-    /// No machine yet: add one first (this opens the Add machine modal).
+    /// The machine list is open in place of the form (the design's Connect state when
+    /// "Connect a machine…" is chosen).
     Connect,
     /// The brief Creating state.
     Creating,
-    /// A matching workspace exists: open it or its Init page.
+    /// A matching workspace exists: the sheet hands it to its Init page.
     Init,
+}
+
+/// An Init that was not sent because its agent is busy.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Busy {
+    /// The workspace Init was for.
+    pub workspace: String,
+    /// The busy agent's pane and kind.
+    pub pane: String,
+    pub kind: String,
+    /// What Herdr says the agent is doing, when it says.
+    pub task: Option<String>,
 }
 
 /// The modal's state.
@@ -66,10 +81,22 @@ pub struct State {
     pub workspace: Option<String>,
     /// The list was asked for while Creating.
     refreshed: bool,
+    /// "Connect a machine…" is chosen in the machine list: the SSH target field shows.
+    pub connecting: bool,
+    /// The SSH target typed under "Connect a machine…".
+    pub target: String,
+    /// The machine being connected for this sheet (`ssh:<target>`), until setup finishes.
+    pub awaiting: Option<String>,
+    /// The Init busy card, when Init found its agent working.
+    pub busy: Option<Busy>,
+    /// "Wait for it": Init goes to this agent once Herdr reports it idle.
+    pub waiting: Option<Busy>,
+    /// Where the folder completions were drawn last frame.
+    suggest_rect: Option<Rect>,
 }
 
 impl State {
-    /// Open on the Local step for `machines`, preferring `current`.
+    /// Open on the form for `machines`, preferring `current`.
     pub fn begin(&mut self, machines: &[Machine], current: Option<Machine>) {
         self.open = true;
         self.step = Step::Local;
@@ -83,6 +110,9 @@ impl State {
         self.unavailable = false;
         self.workspace = None;
         self.refreshed = false;
+        self.connecting = false;
+        self.target.clear();
+        self.awaiting = None;
     }
 
     /// Close the modal.
@@ -90,23 +120,21 @@ impl State {
         self.open = false;
         self.step = Step::Local;
         self.workspace = None;
+        self.connecting = false;
+        self.awaiting = None;
     }
 
-    /// The Local step tab.
-    pub fn show_local(&mut self) {
-        self.step = Step::Local;
+    /// Open the machine list in place of the form.
+    pub fn pick_machine(&mut self) {
+        self.step = Step::Connect;
+        self.connecting = false;
         self.error = None;
     }
 
-    /// The Remote step tab.
-    pub fn show_remote(&mut self) {
-        self.step = Step::Remote;
-        self.error = None;
-    }
-
-    /// The Connect step: no SSH machine is saved yet, so add one first.
+    /// Choose "Connect a machine…": the SSH target field shows.
     pub fn show_connect(&mut self) {
         self.step = Step::Connect;
+        self.connecting = true;
         self.error = None;
     }
 
@@ -114,6 +142,7 @@ impl State {
     pub fn choose_machine(&mut self, machine: Machine) {
         self.machine = machine;
         self.step = Step::Local;
+        self.connecting = false;
         self.error = None;
     }
 
@@ -129,17 +158,37 @@ impl State {
         self.name_touched = true;
     }
 
-    /// Back one step: Creating/Remote/Connect to Local.
+    /// Back one step: Creating or the machine list to the form.
     pub fn back(&mut self) {
-        self.step = match self.step {
-            Step::Creating | Step::Remote | Step::Connect => Step::Local,
-            Step::Local | Step::Init => Step::Local,
-        };
+        self.step = Step::Local;
+        self.connecting = false;
         self.error = None;
         self.unavailable = false;
     }
 
-    /// Validate the Local form; true when Create may go on.
+    /// Validate "Connect a machine…": the SSH target the Add machine setup will run for.
+    pub fn connect_target(&mut self) -> Option<String> {
+        let target = self.target.trim().to_string();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(error) = crate::node_hosts::validate_target(&target) {
+            self.error = Some(error);
+            return None;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = target;
+            self.error = Some("Machines are only available in the desktop app.".to_string());
+            return None;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.error = None;
+            self.awaiting = Some(format!("ssh:{target}"));
+            Some(target)
+        }
+    }
+
+    /// Validate the form; true when Create may go on.
     fn validate(&mut self) -> bool {
         if self.machine.address.trim().is_empty() && self.machine.ssh.is_none() {
             self.error = Some("Choose the machine the folder lives on.".to_string());
@@ -147,7 +196,7 @@ impl State {
         }
         let folder = self.folder.trim().to_string();
         if folder.is_empty() {
-            self.error = Some("Enter the folder on the machine (e.g. /Users/you/repo).".to_string());
+            self.error = Some("Pick the folder on the machine.".to_string());
             return false;
         }
         if folder.len() > 1024 || folder.chars().any(char::is_control) {
@@ -155,7 +204,7 @@ impl State {
             return false;
         }
         if !(folder.starts_with('/') || folder.starts_with('~')) {
-            self.error = Some("Enter the folder's full path (starting with / or ~), not a relative one.".to_string());
+            self.error = Some("Pick the folder's full path (starting with / or ~).".to_string());
             return false;
         }
         if self.name.trim().is_empty() {
@@ -242,11 +291,6 @@ pub fn folder_name(folder: &str) -> String {
     if name.is_empty() { "workspace".to_string() } else { name }
 }
 
-/// A workspace's shown name: its label, or its id when the label is empty.
-fn workspace_name(workspace: &Workspace) -> &str {
-    if workspace.label.trim().is_empty() { &workspace.id } else { &workspace.label }
-}
-
 /// The workspace already listed at `folder` (its path or repository trunk) on `branch`, if any.
 pub fn matching(rows: &[Workspace], folder: &str, branch: &str) -> Option<String> {
     let folder = folder.trim().trim_end_matches('/');
@@ -262,6 +306,45 @@ pub fn matching(rows: &[Workspace], folder: &str, branch: &str) -> Option<String
         .filter(|id| !id.is_empty())
 }
 
+/// Whether Herdr's status says the agent is busy with something.
+fn is_working(status: &str) -> bool {
+    matches!(status.trim().to_ascii_lowercase().as_str(), "working" | "busy" | "running" | "thinking")
+}
+
+/// The busy card for Init on `workspace` with `target`, when that agent is working right now.
+pub fn busy_for(rows: &[Workspace], workspace: &str, target: Option<&Target>) -> Option<Busy> {
+    let Some(Target::Existing { pane, .. }) = target else { return None };
+    let w = rows.iter().find(|w| w.id == workspace)?;
+    let agent = w.agents_detail.iter().find(|agent| &agent.pane == pane)?;
+    is_working(&agent.status).then(|| Busy {
+        workspace: workspace.to_string(),
+        pane: agent.pane.clone(),
+        kind: if agent.kind.trim().is_empty() { "agent".to_string() } else { agent.kind.trim().to_string() },
+        task: agent.title.as_deref().map(task_of).filter(|task| !task.is_empty()),
+    })
+}
+
+/// What an agent says it is doing, from its pane title: spinners dropped, and for a
+/// `repo | Ready | task | branch` title just the task.
+fn task_of(title: &str) -> String {
+    let title = title.trim_start_matches(|c: char| !c.is_alphanumeric()).trim();
+    let parts: Vec<&str> = title.split(" | ").map(str::trim).collect();
+    let task = if parts.len() >= 3 { parts.get(2).copied().unwrap_or(title) } else { parts.first().copied().unwrap_or(title) };
+    task.to_lowercase()
+}
+
+/// Called before Init is sent from the Workspaces screen: when the chosen agent is working, the
+/// busy card opens and nothing is sent. True when it took over.
+pub fn guard_init(app: &mut FigApp, workspace: &str) -> bool {
+    match busy_for(&app.ws.rows, workspace, app.ws.target.as_ref()) {
+        Some(busy) => {
+            app.new_workspace.busy = Some(busy);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Open the New workspace modal from the Workspaces screen.
 pub fn open(app: &mut FigApp) {
     let machines = machines(app);
@@ -269,14 +352,16 @@ pub fn open(app: &mut FigApp) {
     app.new_workspace.begin(&machines, current);
 }
 
-/// The machines the machine chips offer: the one in use, then the saved SSH machines.
+/// The machines the list offers: the one in use, then the saved SSH machines.
 fn machines(app: &FigApp) -> Vec<Machine> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let current = crate::node_hosts::resolve(&crate::workspaces::service_addr());
         let mut machines = vec![machine_of(&current)];
+        // This computer once (a local node on another port is still this computer), then SSH.
+        let local = current.ssh.is_none();
         for host in crate::node_hosts::known(&app.ws.hosts) {
-            if !machines.iter().any(|machine| machine.address == host.address) {
+            if (host.ssh.is_some() || !local) && !machines.iter().any(|machine| machine.address == host.address) {
                 machines.push(machine_of(&host));
             }
         }
@@ -286,7 +371,7 @@ fn machines(app: &FigApp) -> Vec<Machine> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = app;
-        vec![Machine::default()]
+        vec![Machine { name: "This computer".into(), ..Machine::default() }]
     }
 }
 
@@ -305,45 +390,82 @@ fn current_machine(app: &FigApp, machines: &[Machine]) -> Option<Machine> {
     machines.first().cloned()
 }
 
+/// The machine row's right-hand note: `local`, `ssh · connected` or `ssh`.
+fn machine_note(machine: &Machine, in_use: &str) -> &'static str {
+    match &machine.ssh {
+        None => "local",
+        Some(_) if machine.address == in_use => "ssh · connected",
+        Some(_) => "ssh",
+    }
+}
+
 /// What a button in the modal asks for after the frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Action {
     Close,
-    /// Open the Add machine modal (from Remote or Connect); this modal stays under it.
-    AddMachine,
+    /// Run the Add machine setup for this SSH target, above this sheet.
+    Connect(String),
     /// Re-list the workspaces (Check again).
     Refresh,
-    /// Open a workspace's live document, or its Init page where the agent is chosen.
-    Open {
-        id: String,
-        init_page: bool,
-    },
 }
 
-/// Draw the modal when open.
+/// What the busy card asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BusyAction {
+    Close,
+    Wait,
+    StartNew,
+}
+
+/// Draw the modal (and the Init busy card) when open.
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    waiting(app, &ctx);
+    busy_card(app, ui);
     if !app.new_workspace.open {
         return;
     }
-    let ctx = ui.ctx().clone();
+    // A machine connected from this sheet becomes its machine once its setup closes.
+    if let Some(address) = app.new_workspace.awaiting.clone()
+        && !app.machine_modal.open
+    {
+        app.new_workspace.awaiting = None;
+        if let Some(machine) = machines(app).into_iter().find(|machine| machine.address == address) {
+            app.new_workspace.choose_machine(machine);
+        }
+    }
     let rows = app.ws.rows.clone();
     let machines = machines(app);
+    let in_use = {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::workspaces::service_addr()
+        }
+        #[cfg(target_arch = "wasm32")]
+        String::new()
+    };
     let now = ctx.input(|input| input.time);
-    app.new_workspace.tick(now, &rows);
+    if let Some(id) = app.new_workspace.tick(now, &rows) {
+        hand_off(app, &ctx, &id);
+        return;
+    }
     let tokens = Tokens::get(&ctx);
     let skin = shell::Skin::of(&tokens);
-    let width = (WIDTH - 56.0).min((ctx.content_rect().width() - EDGE - 56.0).max(320.0));
     let (should_close, action) = {
         let state = &mut app.new_workspace;
-        let response =
-            egui::Modal::new(Id::new("new_workspace_modal")).backdrop_color(shell::scrim(&tokens)).frame(shell::surface(&skin)).show(&ctx, |ui| {
-                ui.set_width(width);
-                body(state, ui, &skin, &machines, &rows, now)
-            });
+        let response = egui::Modal::new(Id::new("new_workspace_modal"))
+            .backdrop_color(shell::scrim(&tokens))
+            .frame(shell::surface(&skin))
+            .show(&ctx, |ui| body(state, ui, &skin, &machines, &in_use, &rows, now));
         (response.should_close(), response.inner)
     };
-    if should_close {
+    // The Add machine card draws above this one while it connects; its clicks are not ours.
+    if should_close && !app.machine_modal.open {
         app.new_workspace.close();
+        return;
+    }
+    if let Some(id) = app.new_workspace.workspace.clone().filter(|_| app.new_workspace.step == Step::Init) {
+        hand_off(app, &ctx, &id);
         return;
     }
     if app.new_workspace.wants_refresh() && app.ws.busy.is_none() {
@@ -352,353 +474,474 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     }
     match action {
         Some(Action::Close) => app.new_workspace.close(),
-        Some(Action::AddMachine) => crate::machine_modal::open(app),
+        Some(Action::Connect(target)) => crate::machine_modal::connect(app, &target),
         Some(Action::Refresh) => {
             app.ws.refresh(&ctx);
             app.new_workspace.recheck(now);
-        }
-        Some(Action::Open { id, init_page }) => {
-            if init_page {
-                app.ws.select(&id);
-                app.ui.home = true;
-            } else {
-                app.ws.act(&ctx, &id, false);
-            }
-            app.new_workspace.close();
         }
         None => {}
     }
 }
 
-fn body(state: &mut State, ui: &mut Ui, s: &shell::Skin, machines: &[Machine], rows: &[Workspace], now: f64) -> Option<Action> {
-    let mut action = None;
-    let note = match state.step {
-        Step::Local => "LOCAL",
-        Step::Remote => "REMOTE",
-        Step::Connect => "CONNECT",
-        Step::Creating => "CREATING",
-        Step::Init => "INIT",
-    };
-    if shell::header(ui, s, "NEW WORKSPACE", note) {
-        action = Some(Action::Close);
-    }
-    ui.add_space(6.0);
-    if matches!(state.step, Step::Local | Step::Remote) {
-        tabs(state, ui, s, machines);
-    }
-    ui.add_space(10.0);
-    action = action.or(match state.step {
-        Step::Local => local_step(state, ui, s, machines, rows, now),
-        Step::Remote => remote_step(state, ui, s, machines),
-        Step::Connect => connect_step(state, ui, s, machines),
-        Step::Creating => creating_step(state, ui, s),
-        Step::Init => init_step(state, ui, s, rows),
-    });
-    action
-}
-
-fn tabs(state: &mut State, ui: &mut Ui, s: &shell::Skin, machines: &[Machine]) {
-    ui.horizontal(|ui| {
-        if tab(ui, s, "Local", state.step == Step::Local) {
-            state.show_local();
-        }
-        ui.add_space(2.0);
-        if tab(ui, s, "Remote", state.step == Step::Remote) {
-            if machines.iter().any(|machine| machine.ssh.is_some()) {
-                state.show_remote();
-            } else {
-                state.show_connect();
-            }
-        }
-    });
-}
-
-fn tab(ui: &mut Ui, s: &shell::Skin, label: &str, active: bool) -> bool {
-    let font = semibold(11.5);
-    let width = shell::text_width(ui, label, font.clone()) + 26.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
-    a11y::button(&response, label);
-    let hot = response.hovered() || response.has_focus();
-    let fill = if active {
-        shell::with_alpha(s.accent, if s.panel == Color32::WHITE { 12 } else { 30 })
-    } else if hot {
-        s.hover
+/// The workspace exists: it opens its map, or the Init page where the agent is chosen.
+fn hand_off(app: &mut FigApp, ctx: &egui::Context, id: &str) {
+    let map = app.ws.rows.iter().find(|w| w.id == id).map(Workspace::map_state).unwrap_or(MapState::None);
+    app.new_workspace.close();
+    app.ws.select(id);
+    if map == MapState::Map {
+        app.ws.act(ctx, id, false);
     } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-    let border = if active { s.accent } else { s.border };
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, border), StrokeKind::Inside);
-    let ink = if active {
-        s.accent
-    } else if hot {
-        s.text
-    } else {
-        s.muted
-    };
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
-    response.clicked()
+        app.ui.home = true;
+    }
 }
 
-fn local_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, machines: &[Machine], rows: &[Workspace], now: f64) -> Option<Action> {
-    shell::title(ui, s, "New workspace");
-    shell::body(ui, s, "A folder on a machine, in a worktree of its own. The name comes from the folder.");
-    ui.add_space(20.0);
-    ui.label(RichText::new("MACHINE").font(FontId::monospace(9.5)).color(s.faint));
-    ui.add_space(6.0);
-    ui.horizontal_wrapped(|ui| {
-        for machine in machines.iter().take(32) {
-            let selected = machine.address == state.machine.address;
-            let label = if machine.name.trim().is_empty() { machine.address.as_str() } else { machine.name.as_str() };
-            if machine_chip(ui, s, label, selected) {
-                state.choose_machine(machine.clone());
-            }
+/// "Wait for it": once Herdr reports the agent idle, Init goes to it.
+fn waiting(app: &mut FigApp, ctx: &egui::Context) {
+    let Some(wait) = app.new_workspace.waiting.clone() else { return };
+    let agent = app.ws.rows.iter().find(|w| w.id == wait.workspace).and_then(|w| w.agents_detail.iter().find(|a| a.pane == wait.pane)).cloned();
+    match agent {
+        // The agent left the workspace: nothing to wait for.
+        None if app.ws.busy.is_none() && !app.ws.rows.is_empty() => app.new_workspace.waiting = None,
+        Some(agent) if !is_working(&agent.status) && app.ws.busy.is_none() => {
+            app.new_workspace.waiting = None;
+            app.ws.select(&wait.workspace);
+            app.ws.target = Some(Target::Existing { pane: agent.pane, kind: agent.kind, status: agent.status });
+            app.ws.act(ctx, &wait.workspace, true);
         }
+        _ => {}
+    }
+}
+
+fn body(state: &mut State, ui: &mut Ui, s: &shell::Skin, machines: &[Machine], in_use: &str, rows: &[Workspace], now: f64) -> Option<Action> {
+    let card = shell::card(ui, WIDTH, HEIGHT);
+    match state.step {
+        Step::Local | Step::Init => form_step(state, ui, s, card, machines, in_use, rows, now),
+        Step::Connect => machine_step(state, ui, s, card, machines, in_use),
+        Step::Creating => creating_step(state, ui, s, card),
+    }
+}
+
+/// The footer: a quiet button at the left, the dark one at the right, both 30 pt at `y`.
+fn footer(ui: &mut Ui, s: &shell::Skin, card: Rect, y: f32, left: Option<&str>, right: Option<(&str, f32, bool)>) -> (bool, bool) {
+    let left =
+        left.is_some_and(|label| shell::quiet_button(ui, s, Id::new(("new_workspace_left", label)), shell::at(card, 24.0, y, 90.0, 30.0), label));
+    let right = right.is_some_and(|(label, width, enabled)| {
+        let width = shell::primary_width(ui, label, width);
+        shell::primary_button(ui, s, Id::new(("new_workspace_right", label)), shell::at(card, WIDTH - 24.0 - width, y, width, 30.0), label, enabled)
     });
-    ui.add_space(18.0);
-    if shell::field(ui, s, "Folder", "/Users/you/repo", &mut state.folder) {
+    (left, right)
+}
+
+fn heading(ui: &Ui, s: &shell::Skin, card: Rect, title: &str, body: &str) {
+    shell::eyebrow(ui, card, 22.0, "NEW WORKSPACE", s.accent);
+    shell::title(ui, s, card, 40.0, title, 22.0);
+    shell::body(ui, s, card, 74.0, WIDTH - 48.0, body);
+}
+
+/// The design's Local and Remote states: the same form, over this computer or an SSH machine.
+#[allow(clippy::too_many_arguments)]
+fn form_step(
+    state: &mut State,
+    ui: &mut Ui,
+    s: &shell::Skin,
+    card: Rect,
+    machines: &[Machine],
+    in_use: &str,
+    rows: &[Workspace],
+    now: f64,
+) -> Option<Action> {
+    let _ = machines;
+    heading(ui, s, card, "Where should it live?", "A workspace is a folder on a machine. Pick the machine, then the folder.");
+
+    // MACHINE: a select that opens the machine list in place.
+    shell::label(ui, s, card, 112.0, "MACHINE");
+    let field = shell::at(card, 24.0, 126.0, WIDTH - 48.0, 36.0);
+    let response = ui.interact(field, Id::new("new_workspace_machine"), Sense::click());
+    crate::a11y::button(&response, "Machine");
+    ui.painter().rect_filled(field, CornerRadius::same(6), if response.hovered() { s.hover } else { s.panel });
+    ui.painter().rect_stroke(field, CornerRadius::same(6), Stroke::new(1.0, s.border), StrokeKind::Inside);
+    let name = if state.machine.name.trim().is_empty() { state.machine.address.clone() } else { state.machine.name.clone() };
+    shell::text(ui, field.min + vec2(12.0, 10.0), &name, regular(11.0), s.text);
+    let note = machine_note(&state.machine, in_use).split(" · ").next().unwrap_or("local");
+    shell::mono(ui, field.min + vec2(396.0, 12.0), note, 8.5, s.faint);
+    chevron(ui, pos2(field.max.x - 21.0, field.min.y + 16.0), s.faint);
+    if response.clicked() {
+        state.pick_machine();
+        return None;
+    }
+
+    // FOLDER: an existing directory, completed from this computer's filesystem.
+    shell::label(ui, s, card, 174.0, "FOLDER");
+    let local = state.machine.ssh.is_none();
+    let folder_rect = shell::at(card, 24.0, 188.0, WIDTH - 48.0, 36.0);
+    // Only an existing directory can be created; a prefix that still completes is not an error yet.
+    let absent = local && !state.folder.trim().is_empty() && !folder_exists(&state.folder);
+    let missing = absent && suggestions(&state.folder).is_empty();
+    let folder = shell::field_response(
+        ui,
+        s,
+        Id::new("new_workspace_folder"),
+        folder_rect,
+        &mut state.folder,
+        "/path/to/the/repository",
+        shell::FieldFont::Mono(9.5),
+        missing,
+    );
+    if folder.changed() {
         state.derive_name();
+        state.error = None;
     }
-    ui.add_space(14.0);
-    shell::field(ui, s, "Branch", "feature/mindmap · empty uses the repository's own checkout", &mut state.branch);
-    ui.add_space(14.0);
-    if shell::field(ui, s, "Name", "derived from the folder", &mut state.name) {
+
+    shell::label(ui, s, card, 236.0, "BRANCH");
+    shell::mono(ui, card.min + vec2(276.0, 236.0), "NAME", 8.5, s.muted);
+    let branch = shell::at(card, 24.0, 250.0, 220.0, 36.0);
+    if shell::field(ui, s, Id::new("new_workspace_branch"), branch, &mut state.branch, "main", shell::FieldFont::Mono(9.5)) {
+        state.error = None;
+    }
+    let name_rect = shell::at(card, 276.0, 250.0, 220.0, 36.0);
+    if shell::field(ui, s, Id::new("new_workspace_name"), name_rect, &mut state.name, "derived from the folder", shell::FieldFont::Inter(11.0)) {
         state.name_edited();
+        state.error = None;
     }
-    if let Some(error) = &state.error {
-        ui.add_space(12.0);
-        shell::error_note(ui, s, error);
-    }
-    ui.add_space(12.0);
-    shell::note(ui, s, "The workspace keeps its own worktree, so drafts and Sync jobs stay with it. The agent is chosen on the Init page.");
-    let clicked = shell::footer(ui, s, &[("Cancel", false, true), ("Create", true, true)]);
-    match clicked {
-        Some(0) => Some(Action::Close),
-        Some(1) => {
-            state.create(now, rows);
-            None
+
+    let note =
+        if missing { Some(("No such folder on this computer.".to_string(), s.accent)) } else { state.error.clone().map(|error| (error, s.accent)) };
+    match note {
+        Some((text, color)) => shell::mono(ui, card.min + vec2(24.0, 300.0), &text, 8.5, color),
+        None if local => shell::mono(ui, card.min + vec2(24.0, 300.0), "The name comes from the folder; you can change it.", 8.5, s.faint),
+        None => {
+            shell::mono(ui, card.min + vec2(24.0, 300.0), &format!("The folder is on {name}; the node lists its Herdr workspaces."), 8.5, s.faint)
         }
-        _ => None,
     }
+
+    let ready = !state.folder.trim().is_empty() && !absent;
+    let (cancel, create) = footer(ui, s, card, 332.0, Some("Cancel"), Some(("Create workspace", 140.0, ready)));
+
+    // The completions sit over the fields below the folder, so they draw (and take clicks) last.
+    // They stay up while the pointer is over them, so a press that takes the field's focus still
+    // lands on the row.
+    let over = state.suggest_rect.zip(ui.input(|i| i.pointer.hover_pos())).is_some_and(|(rect, pos)| rect.contains(pos));
+    state.suggest_rect = None;
+    if local && (folder.has_focus() || over) {
+        let options = suggestions(&state.folder);
+        let (pick, rect) = suggestion_list(ui, s, shell::at(card, 24.0, 226.0, WIDTH - 48.0, 0.0), &options);
+        state.suggest_rect = rect;
+        if let Some(pick) = pick {
+            state.folder = pick;
+            state.derive_name();
+            state.error = None;
+            folder.request_focus();
+        } else if folder.has_focus()
+            && ui.input(|i| i.key_pressed(egui::Key::Tab))
+            && let Some(first) = options.first()
+        {
+            state.folder = first.clone();
+            state.derive_name();
+            folder.request_focus();
+        }
+    }
+    if cancel {
+        return Some(Action::Close);
+    }
+    if create {
+        state.create(now, rows);
+    }
+    None
 }
 
-fn remote_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, machines: &[Machine]) -> Option<Action> {
-    shell::title(ui, s, "Which machine?");
-    shell::body(ui, s, "Pick a saved SSH machine. Its folders live on that machine, not this one.");
-    ui.add_space(20.0);
-    let ssh: Vec<&Machine> = machines.iter().filter(|machine| machine.ssh.is_some()).collect();
-    if ssh.is_empty() {
-        shell::note(ui, s, "No saved machine yet. Add one over SSH first.");
-    } else {
-        for machine in ssh {
-            if machine_option(ui, s, machine, machine.address == state.machine.address) {
-                state.choose_machine(machine.clone());
+/// The Connect state: the machine list in place of the form, with "Connect a machine…".
+fn machine_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, card: Rect, machines: &[Machine], in_use: &str) -> Option<Action> {
+    heading(ui, s, card, "Where should it live?", "Pick a saved machine, or connect a new one without leaving this sheet.");
+    shell::label(ui, s, card, 112.0, "MACHINE");
+    // At most four saved machines show (two while the SSH target is open, as designed); the rest
+    // scroll.
+    let shown = machines.len().min(if state.connecting { 2 } else { 4 });
+    let list = shell::at(card, 24.0, 126.0, WIDTH - 48.0, shown as f32 * 32.0);
+    let mut chosen = None;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
+        ui.set_clip_rect(list.intersect(ui.clip_rect()));
+        egui::ScrollArea::vertical().id_salt("new_workspace_machines").auto_shrink([false, false]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for machine in machines {
+                let name = if machine.name.trim().is_empty() { machine.address.as_str() } else { machine.name.as_str() };
+                let selected = !state.connecting && machine.address == state.machine.address;
+                if option_row(ui, s, name, machine_note(machine, in_use), selected, false) {
+                    chosen = Some(machine.clone());
+                }
             }
-            ui.add_space(4.0);
-        }
+        });
+    });
+    if let Some(machine) = chosen {
+        state.choose_machine(machine);
+        return None;
     }
-    let clicked = shell::footer(ui, s, &[("Back", false, true), ("Add machine…", false, true)]);
-    match clicked {
-        Some(0) => {
-            state.back();
-            None
-        }
-        Some(1) => Some(Action::AddMachine),
-        _ => None,
+    let connect_row = shell::at(card, 24.0, list.max.y - card.min.y, WIDTH - 48.0, 30.0);
+    let connect = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(connect_row), |ui| option_row(ui, s, "Connect a machine…", "new host", state.connecting, true))
+        .inner;
+    if connect {
+        state.show_connect();
     }
-}
-
-fn connect_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, machines: &[Machine]) -> Option<Action> {
-    shell::title(ui, s, "Connect a machine first");
-    shell::body(ui, s, "Workspaces are created on a machine. Add one over SSH, then pick its folder.");
-    ui.add_space(20.0);
-    let ssh: Vec<&Machine> = machines.iter().filter(|machine| machine.ssh.is_some()).collect();
-    if ssh.is_empty() {
-        shell::note(ui, s, "This computer runs the map client; remote folders need an SSH machine.");
-    } else {
-        shell::body(ui, s, "A machine is connected. Pick it to continue.");
-        ui.add_space(8.0);
-        for machine in ssh {
-            if machine_option(ui, s, machine, machine.address == state.machine.address) {
-                state.choose_machine(machine.clone());
-            }
-            ui.add_space(4.0);
-        }
-    }
-    let clicked = shell::footer(ui, s, &[("Back", false, true), ("Add machine…", true, true)]);
-    match clicked {
-        Some(0) => {
-            state.back();
-            None
-        }
-        Some(1) => Some(Action::AddMachine),
-        _ => None,
-    }
-}
-
-fn creating_step(state: &mut State, ui: &mut Ui, s: &shell::Skin) -> Option<Action> {
-    shell::title(ui, s, &format!("Creating {}", state.name.trim()));
-    let body = if state.unavailable {
-        "Mindmap could not create the workspace on the node."
-    } else {
-        "Mindmap is checking the node for a workspace in this folder."
-    };
-    shell::body(ui, s, body);
-    ui.add_space(20.0);
-    for line in ["Create the worktree", "Register it with Herdr", "Finish the setup"] {
-        creating_line(ui, s, line, state.unavailable);
-    }
-    if state.unavailable {
-        ui.add_space(16.0);
-        shell::error_note(
+    let bottom = connect_row.max.y - card.min.y;
+    if state.connecting {
+        let label_y = bottom + 12.0;
+        shell::label(ui, s, card, label_y, "SSH TARGET");
+        let field = shell::at(card, 24.0, label_y + 14.0, WIDTH - 48.0, 36.0);
+        let response = shell::field_response(
             ui,
             s,
-            "Creating a workspace on the node is not available in this build yet. Nothing was created. Create it in Herdr, then press Check again.",
+            Id::new("new_workspace_target"),
+            field,
+            &mut state.target,
+            "user@host or a Host from ~/.ssh/config",
+            shell::FieldFont::Mono(9.5),
+            state.error.is_some(),
         );
-        let clicked = shell::footer(ui, s, &[("Back", false, true), ("Check again", true, true)]);
-        match clicked {
-            Some(0) => {
-                state.back();
-                None
-            }
-            Some(1) => Some(Action::Refresh),
-            _ => None,
+        if response.changed() {
+            state.error = None;
         }
-    } else {
-        ui.add_space(16.0);
-        let clicked = shell::footer(ui, s, &[("Back", false, true)]);
-        match clicked {
-            Some(0) => {
-                state.back();
-                None
-            }
-            _ => None,
+        match &state.error {
+            Some(error) => shell::mono(ui, card.min + vec2(24.0, 300.0), error, 8.5, s.accent),
+            None => shell::mono(ui, card.min + vec2(24.0, 300.0), "OpenSSH asks for anything it needs; no password is stored.", 8.5, s.faint),
         }
+        let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let enabled = !state.target.trim().is_empty();
+        let (cancel, go) = footer(ui, s, card, 332.0, Some("Cancel"), Some(("Connect", 100.0, enabled)));
+        if cancel {
+            state.back();
+            return None;
+        }
+        if (go || (enter && enabled))
+            && let Some(target) = state.connect_target()
+        {
+            return Some(Action::Connect(target));
+        }
+        return None;
     }
+    let (cancel, _) = footer(ui, s, card, 332.0, Some("Cancel"), None);
+    if cancel {
+        state.back();
+    }
+    None
 }
 
-fn creating_line(ui: &mut Ui, s: &shell::Skin, text: &str, unavailable: bool) {
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(vec2(18.0, 26.0), Sense::hover());
-        let dot = pos2(rect.left() + 4.0, rect.center().y);
-        if unavailable {
-            ui.painter().line_segment([pos2(dot.x - 3.5, dot.y), pos2(dot.x + 3.5, dot.y)], Stroke::new(1.5, s.faint));
+fn creating_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, card: Rect) -> Option<Action> {
+    let machine = if state.machine.name.trim().is_empty() { state.machine.address.clone() } else { state.machine.name.clone() };
+    let mut line = vec![machine.clone(), state.folder.trim().to_string()];
+    if !state.branch.trim().is_empty() {
+        line.push(state.branch.trim().to_string());
+    }
+    heading(ui, s, card, &format!("Creating {}", state.name.trim()), &line.join("   ·   "));
+    let steps = [("Create the Herdr workspace".to_string()), "Attach the map session".to_string(), format!("Add the row under {machine}")];
+    for (index, step) in steps.iter().enumerate() {
+        let y = 126.0 + 26.0 * index as f32;
+        let (mark, word, color) = match (index, state.unavailable) {
+            (0, false) => (shell::Mark::Dot, "running", s.teal),
+            (0, true) => (shell::Mark::Cross, "not available", s.accent),
+            (_, false) => (shell::Mark::Small, "waiting", s.faint),
+            (_, true) => (shell::Mark::Dash, "not started", s.faint),
+        };
+        shell::mark(ui, card, y, mark, color);
+        shell::row_text(ui, s, card, 44.0, y, step);
+        shell::mono(ui, card.min + vec2(324.0, y + 1.0), word, 8.5, color);
+    }
+    let note = shell::at(card, 24.0, 206.0, WIDTH - 48.0, 44.0);
+    if state.unavailable {
+        shell::note_box(ui, s, note, "This node can't create Herdr workspaces yet; nothing was created. Create it in Herdr, then Check again.", true);
+        let (back, again) = footer(ui, s, card, 332.0, Some("Back"), Some(("Check again", 110.0, true)));
+        if back {
+            state.back();
+        }
+        return again.then_some(Action::Refresh);
+    }
+    shell::note_box(ui, s, note, "The folder stays a plain directory; the map is created on first open.", false);
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    let (cancel, _) = footer(ui, s, card, 332.0, Some("Cancel"), None);
+    if cancel {
+        state.back();
+    }
+    None
+}
+
+/// The Init busy card: the agent turned busy before the prompt, and nothing is sent.
+fn busy_card(app: &mut FigApp, ui: &mut Ui) {
+    let Some(busy) = app.new_workspace.busy.clone() else { return };
+    let ctx = ui.ctx().clone();
+    let tokens = Tokens::get(&ctx);
+    let s = shell::Skin::of(&tokens);
+    let response = egui::Modal::new(Id::new("init_busy_modal")).backdrop_color(shell::scrim(&tokens)).frame(shell::surface(&s)).show(&ctx, |ui| {
+        let card = shell::card(ui, WIDTH, HEIGHT);
+        let kind = busy.kind.as_str();
+        shell::eyebrow(ui, card, 22.0, "INIT · AGENT BUSY", s.accent);
+        shell::title(ui, &s, card, 40.0, &format!("{kind} is busy"), 22.0);
+        let (body, sub, note) = match &busy.task {
+            Some(task) => (
+                format!("{kind} is working on {task}. Mindmap won't send it a second prompt."),
+                format!("working · {task}"),
+                "Herdr reported this; nothing is queued until you choose.",
+            ),
+            None => (
+                format!("{kind} is working, but Herdr doesn't say on what. Mindmap doesn't guess."),
+                "working · task unknown".to_string(),
+                "The step says only that it is busy; ask Herdr or pick another agent.",
+            ),
+        };
+        shell::body(ui, &s, card, 74.0, WIDTH - 48.0, &body);
+        let info = shell::at(card, 24.0, 142.0, WIDTH - 48.0, 54.0);
+        ui.painter().rect_filled(info, CornerRadius::same(6), s.soft);
+        ui.painter().circle_filled(info.min + vec2(15.0, 17.0), 3.0, s.accent);
+        shell::text(ui, info.min + vec2(24.0, 10.0), kind, semibold(11.0), s.text);
+        let sub = crate::widgets::elide_font(ui, &sub, info.width() - 36.0, egui::FontId::monospace(8.5));
+        shell::mono(ui, info.min + vec2(24.0, 28.0), &sub, 8.5, s.faint);
+        shell::mono(ui, card.min + vec2(24.0, 212.0), note, 8.5, s.faint);
+        let pick = shell::quiet_button(ui, &s, Id::new("init_busy_pick"), shell::at(card, 24.0, 300.0, 120.0, 30.0), "Pick another");
+        let wait = shell::quiet_button(ui, &s, Id::new("init_busy_wait"), shell::at(card, 156.0, 300.0, 110.0, 30.0), "Wait for it");
+        let start = shell::primary_button(ui, &s, Id::new("init_busy_start"), shell::at(card, 278.0, 300.0, 172.0, 30.0), "Start a new agent", true);
+        if pick {
+            Some(BusyAction::Close)
+        } else if wait {
+            Some(BusyAction::Wait)
+        } else if start {
+            Some(BusyAction::StartNew)
         } else {
-            ui.painter().circle_stroke(dot, 4.0, Stroke::new(1.0, s.faint));
+            None
         }
-        ui.label(RichText::new(text).font(regular(12.5)).color(s.text));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let status = if unavailable { "not started" } else { "waiting" };
-            ui.label(RichText::new(status).font(FontId::monospace(10.0)).color(s.faint));
-        });
     });
-}
-
-fn init_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, rows: &[Workspace]) -> Option<Action> {
-    let workspace = state.workspace.clone();
-    let found = workspace.as_deref().and_then(|id| rows.iter().find(|w| w.id == id));
-    let name = found.map_or_else(|| state.name.clone(), |w| workspace_name(w).to_string());
-    shell::title(ui, s, &format!("{name} is ready"));
-    shell::body(ui, s, "The workspace exists. Open its Init page to choose an agent and press Init.");
-    ui.add_space(20.0);
-    workspace_row(ui, s, found, state);
-    if let Some(error) = &state.error {
-        ui.add_space(12.0);
-        shell::error_note(ui, s, error);
-    }
-    let map = found.map(Workspace::map_state).unwrap_or(MapState::None);
-    let open = |init_page: bool| workspace.clone().map(|id| Action::Open { id, init_page });
-    if map == MapState::Map {
-        let clicked = shell::footer(ui, s, &[("Done", false, true), ("Open map", true, true)]);
-        match clicked {
-            Some(0) => Some(Action::Close),
-            Some(1) => open(false).or(Some(Action::Close)),
-            _ => None,
-        }
-    } else {
-        let clicked = shell::footer(ui, s, &[("Done", false, true), ("Open map", false, true), ("Open Init page", true, true)]);
-        match clicked {
-            Some(0) => Some(Action::Close),
-            Some(1) => open(false).or(Some(Action::Close)),
-            Some(2) => open(true).or(Some(Action::Close)),
-            _ => None,
+    let action = if response.should_close() { Some(BusyAction::Close) } else { response.inner };
+    let Some(action) = action else { return };
+    app.new_workspace.busy = None;
+    match action {
+        // The agent menu beside Init is where another agent is picked.
+        BusyAction::Close => {}
+        BusyAction::Wait => app.new_workspace.waiting = Some(busy),
+        BusyAction::StartNew => {
+            app.ws.select(&busy.workspace);
+            app.ws.target = Some(Target::New { kind: busy.kind.clone() });
+            app.ws.act(&ctx, &busy.workspace, true);
         }
     }
 }
 
-fn workspace_row(ui: &mut Ui, s: &shell::Skin, workspace: Option<&Workspace>, state: &State) {
-    let (title, path, branch) = match workspace {
-        Some(w) => (
-            workspace_name(w).to_string(),
-            w.path.clone().unwrap_or_else(|| w.repo.clone().unwrap_or_default()),
-            w.branch.clone().unwrap_or_default(),
-        ),
-        None => (state.name.clone(), state.folder.clone(), state.branch.clone()),
-    };
-    egui::Frame::NONE
-        .fill(s.field)
-        .stroke(Stroke::new(1.0, s.border))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(Margin::symmetric(14, 12))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).font(semibold(13.0)).color(s.text));
-            if !path.is_empty() {
-                ui.label(RichText::new(path).font(FontId::monospace(10.5)).color(s.muted));
-            }
-            if !branch.is_empty() {
-                ui.label(RichText::new(format!("branch {branch}")).font(FontId::monospace(10.0)).color(s.faint));
-            }
-        });
-}
-
-fn machine_chip(ui: &mut Ui, s: &shell::Skin, label: &str, selected: bool) -> bool {
-    let font = semibold(11.0);
-    let width = (shell::text_width(ui, label, font.clone()) + 24.0).min(ui.available_width().max(80.0));
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
-    a11y::button(&response, label);
+/// One row of the machine list: name at the left, its note in the column at 300 pt.
+fn option_row(ui: &mut Ui, s: &shell::Skin, name: &str, note: &str, selected: bool, strong: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+    crate::a11y::button(&response, name);
     let hot = response.hovered() || response.has_focus();
-    let fill = if selected {
-        shell::with_alpha(s.accent, if s.panel == Color32::WHITE { 12 } else { 30 })
-    } else if hot {
-        s.hover
-    } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(14), fill);
-    let border = if selected { s.accent } else { s.border };
-    ui.painter().rect_stroke(rect, CornerRadius::same(14), Stroke::new(1.0, border), StrokeKind::Inside);
-    let ink = if selected {
-        s.accent
-    } else if hot {
-        s.text
-    } else {
-        s.muted
-    };
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
-    response.clicked()
-}
-
-fn machine_option(ui: &mut Ui, s: &shell::Skin, machine: &Machine, selected: bool) -> bool {
-    let label = if machine.name.trim().is_empty() { machine.address.clone() } else { machine.name.clone() };
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
-    a11y::button(&response, &label);
-    let hot = response.hovered() || response.has_focus();
-    if hot || selected {
-        let fill = if selected { shell::with_alpha(s.accent, if s.panel == Color32::WHITE { 10 } else { 26 }) } else { s.hover };
-        ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+    if selected || hot {
+        ui.painter().rect_filled(rect, CornerRadius::same(6), if selected { s.soft } else { s.hover });
     }
-    ui.painter().rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, if selected { s.accent } else { s.border }), StrokeKind::Inside);
-    ui.painter().text(pos2(rect.left() + 12.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &label, semibold(12.0), s.text);
-    let address = machine.ssh.clone().unwrap_or_else(|| machine.address.clone());
-    ui.painter().text(pos2(rect.left() + 12.0, rect.center().y + 9.0), Align2::LEFT_CENTER, address, FontId::monospace(10.0), s.muted);
-    ui.painter().text(pos2(rect.right() - 12.0, rect.center().y), Align2::RIGHT_CENTER, "SSH", FontId::monospace(9.0), s.faint);
+    let font = if strong { semibold(10.5) } else { regular(10.5) };
+    shell::text(ui, rect.min + vec2(10.0, 8.0), name, font, s.text);
+    ui.painter().text(pos2(rect.max.x - 12.0, rect.min.y + 10.0), egui::Align2::RIGHT_TOP, note, egui::FontId::monospace(8.5), s.faint);
     response.clicked()
+}
+
+/// The select's small down arrow, drawn.
+fn chevron(ui: &Ui, c: egui::Pos2, color: egui::Color32) {
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![pos2(c.x - 3.0, c.y - 1.5), pos2(c.x + 3.0, c.y - 1.5), pos2(c.x, c.y + 2.0)],
+        color,
+        Stroke::NONE,
+    ));
+}
+
+/// The folder completions under the field, above everything in the sheet. Returns the one
+/// clicked and where the list is.
+fn suggestion_list(ui: &mut Ui, s: &shell::Skin, anchor: Rect, options: &[String]) -> (Option<String>, Option<Rect>) {
+    if options.is_empty() {
+        return (None, None);
+    }
+    let mut picked = None;
+    let area = egui::Area::new(Id::new("new_workspace_suggest")).order(egui::Order::Tooltip).fixed_pos(anchor.min).show(ui.ctx(), |ui| {
+        egui::Frame::NONE
+            .fill(s.panel)
+            .stroke(Stroke::new(1.0, s.border))
+            .corner_radius(CornerRadius::same(6))
+            .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 16, spread: 0, color: shell::with_alpha(egui::Color32::BLACK, 24) })
+            .inner_margin(egui::Margin::same(4))
+            .show(ui, |ui| {
+                ui.set_width(anchor.width() - 8.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for option in options {
+                    let (row, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+                    if response.hovered() {
+                        ui.painter().rect_filled(row, CornerRadius::same(4), s.soft);
+                    }
+                    let shown = crate::widgets::elide_start_font(ui, option, row.width() - 16.0, egui::FontId::monospace(9.5));
+                    ui.painter().text(row.min + vec2(8.0, 6.0), egui::Align2::LEFT_TOP, shown, egui::FontId::monospace(9.5), s.text);
+                    if response.clicked() {
+                        picked = Some(option.clone());
+                    }
+                }
+            });
+    });
+    (picked, Some(area.response.rect))
+}
+
+/// `~/x` on this computer.
+#[cfg(not(target_arch = "wasm32"))]
+fn expand_home(path: &str) -> std::path::PathBuf {
+    let path = path.trim();
+    match path.strip_prefix('~') {
+        Some(rest) => {
+            std::env::var_os("HOME").map(std::path::PathBuf::from).map(|home| home.join(rest.trim_start_matches('/'))).unwrap_or_else(|| path.into())
+        }
+        None => path.into(),
+    }
+}
+
+/// The folder exists on this computer.
+fn folder_exists(folder: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        expand_home(folder).is_dir()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = folder;
+        true
+    }
+}
+
+/// Directories on this computer that complete `typed`: the entries of its parent that start with
+/// its last part (hidden ones only when that part starts with a dot). An exact directory lists its
+/// children.
+fn suggestions(typed: &str) -> Vec<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let typed = typed.trim();
+        if !(typed.starts_with('/') || typed.starts_with('~')) {
+            return Vec::new();
+        }
+        let (parent, prefix) = match typed.rfind('/') {
+            Some(at) => (typed.get(..=at).unwrap_or(typed), typed.get(at + 1..).unwrap_or("")),
+            None => return Vec::new(),
+        };
+        let Ok(entries) = std::fs::read_dir(expand_home(parent)) else { return Vec::new() };
+        let mut found: Vec<String> = entries
+            .filter_map(Result::ok)
+            .take(4096)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.starts_with(prefix) && (prefix.starts_with('.') || !name.starts_with('.')))
+            .filter(|name| name != prefix)
+            .map(|name| format!("{parent}{name}"))
+            .collect();
+        found.sort();
+        found.truncate(SUGGESTIONS);
+        found
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = typed;
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspaces::AgentDetail;
 
     fn machine() -> Machine {
         Machine { name: "befree".into(), address: "ssh:befree".into(), ssh: Some("befree".into()) }
@@ -717,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_starts_on_the_local_step_with_the_folder_name() {
+    fn opening_starts_on_the_form_with_the_folder_name() {
         let state = form();
         assert!(state.open);
         assert_eq!(state.step, Step::Local);
@@ -729,17 +972,42 @@ mod tests {
     }
 
     #[test]
-    fn the_tabs_and_remote_choice_move_between_steps() {
+    fn the_machine_list_opens_in_place_and_closes_on_a_choice() {
         let mut state = form();
-        state.show_remote();
-        assert_eq!(state.step, Step::Remote);
+        state.pick_machine();
+        assert_eq!(state.step, Step::Connect);
+        assert!(!state.connecting);
         state.choose_machine(Machine { name: "work".into(), address: "ssh:work".into(), ssh: Some("work".into()) });
         assert_eq!(state.step, Step::Local);
         assert_eq!(state.machine.address, "ssh:work");
         state.show_connect();
         assert_eq!(state.step, Step::Connect);
+        assert!(state.connecting);
         state.back();
         assert_eq!(state.step, Step::Local);
+        assert!(!state.connecting);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn connect_needs_a_valid_ssh_target_and_waits_for_that_machine() {
+        let mut state = form();
+        state.show_connect();
+        state.target = "-oProxyCommand=x".into();
+        assert!(state.connect_target().is_none());
+        assert!(state.error.is_some());
+        state.target = "alice@work.example".into();
+        assert_eq!(state.connect_target().as_deref(), Some("alice@work.example"));
+        assert_eq!(state.awaiting.as_deref(), Some("ssh:alice@work.example"));
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn machine_notes_say_where_it_is() {
+        let local = Machine { name: "This computer".into(), address: "127.0.0.1:47822".into(), ssh: None };
+        assert_eq!(machine_note(&local, "127.0.0.1:47822"), "local");
+        assert_eq!(machine_note(&machine(), "ssh:befree"), "ssh · connected");
+        assert_eq!(machine_note(&machine(), "127.0.0.1:47822"), "ssh");
     }
 
     #[test]
@@ -827,5 +1095,54 @@ mod tests {
         assert!(!state.open);
         assert!(state.workspace.is_none());
         assert_eq!(state.step, Step::Local);
+    }
+
+    fn with_agent(status: &str, title: Option<&str>) -> Vec<Workspace> {
+        vec![Workspace {
+            id: "w1".into(),
+            agents_detail: vec![AgentDetail {
+                pane: "w1:p2".into(),
+                kind: "codex".into(),
+                status: status.into(),
+                focused: false,
+                title: title.map(str::to_owned),
+            }],
+            ..Workspace::default()
+        }]
+    }
+
+    #[test]
+    fn init_to_a_working_agent_opens_the_busy_card_with_its_task() {
+        let target = Target::Existing { pane: "w1:p2".into(), kind: "codex".into(), status: "idle".into() };
+        let rows = with_agent("working", Some("mindmap | Working | Sync backend code | main"));
+        let busy = busy_for(&rows, "w1", Some(&target)).expect("busy");
+        assert_eq!(busy.kind, "codex");
+        assert_eq!(busy.task.as_deref(), Some("sync backend code"));
+
+        let rows = with_agent("working", None);
+        assert_eq!(busy_for(&rows, "w1", Some(&target)).and_then(|b| b.task), None);
+
+        assert!(busy_for(&with_agent("idle", None), "w1", Some(&target)).is_none());
+        assert!(busy_for(&rows, "w1", Some(&Target::New { kind: "claude".into() })).is_none());
+        assert!(busy_for(&rows, "w1", None).is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn folder_suggestions_list_matching_directories_only() {
+        let root = std::env::temp_dir().join(format!("mindmap-suggest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("alpha")).expect("dir");
+        std::fs::create_dir_all(root.join("alps")).expect("dir");
+        std::fs::create_dir_all(root.join(".hidden")).expect("dir");
+        std::fs::write(root.join("alfile"), b"x").expect("file");
+        let base = root.to_string_lossy().to_string();
+        let found = suggestions(&format!("{base}/al"));
+        assert_eq!(found, vec![format!("{base}/alpha"), format!("{base}/alps")]);
+        assert_eq!(suggestions(&format!("{base}/.h")), vec![format!("{base}/.hidden")]);
+        assert!(folder_exists(&format!("{base}/alpha")));
+        assert!(!folder_exists(&format!("{base}/nope")));
+        assert!(suggestions("relative/path").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
