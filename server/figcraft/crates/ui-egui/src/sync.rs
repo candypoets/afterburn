@@ -39,16 +39,12 @@ const MAX_NODES: usize = 5_000;
 /// The note is kept well under the service's prompt limit.
 const MAX_NOTE_CHARS: usize = 2_000;
 /// The widget's width.
-const WIDGET_W: f32 = 380.0;
+const WIDGET_W: f32 = 376.0;
 /// The widget's inner padding.
-const PAD: f32 = 18.0;
-/// The top button's height and its distance from the window's edge.
-const BUTTON_H: f32 = 32.0;
-const EDGE: f32 = 18.0;
-/// How many names, files and commits each list shows before `+N more`.
+const PAD: f32 = 19.0;
+/// How many names and files each list shows before `+N more`.
 const NAMES: usize = 4;
 const FILES: usize = 4;
-const COMMITS: usize = 3;
 
 /// The warm map palette, shared with the composer and the map bar.
 const PANEL: Color32 = Color32::WHITE;
@@ -418,6 +414,12 @@ pub enum JobMsg {
 pub struct State {
     /// The widget is showing.
     pub open: bool,
+    /// Where the header's Sync button was drawn last frame (the first-map tooltip hangs under it).
+    pub(crate) button_rect: Option<Rect>,
+    /// The widget body's height last frame, so the viewport hugs it.
+    content_h: f32,
+    /// The widget opened this frame: the press that opened it is not a click outside.
+    just_opened: bool,
     /// A diff or a sync request is on its thread (status polls are not "busy").
     pub busy: bool,
     /// The diff last read; replaced after a successful sync.
@@ -489,35 +491,59 @@ impl State {
 
 /// The Sync action belongs to the map header: one compact button, no floating pill.
 pub fn header_button(app: &mut FigApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    let in_flight = app.sync.in_flight();
-    let starting = app.sync.starting;
-    let label = if in_flight || starting {
-        "Syncing…".to_string()
-    } else {
-        match app.sync.changes() {
-            Some(changes) => format!("Sync {changes}"),
-            None => "Sync".to_string(),
-        }
-    };
-    let color = if in_flight || starting { ACCENT } else { INK };
-    let stroke = if in_flight || starting { ACCENT } else { BORDER };
+    let syncing = app.sync.in_flight() || app.sync.starting;
     let enabled = app.active_workspace.is_some();
-    let button = egui::Button::new(egui::RichText::new(label).size(10.5).color(color))
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0, stroke))
-        .corner_radius(CornerRadius::same(8))
-        .min_size(vec2(78.0, 28.0));
-    let response = ui.add_enabled(enabled, button);
+    let look = button_look(syncing, enabled, app.sync.changes());
+    // `Sync` and, once a diff is read, the change count in a red badge; `Syncing…` in the accent.
+    let font = semibold(10.5);
+    let label_w = text_width(ui, look.label, font.clone());
+    let badge = look.count.map(|count| count.to_string());
+    // An 18 pt circle, widened into a pill for longer counts.
+    let badge_w = badge.as_ref().map(|count| (text_width(ui, count, mono(8.0)) + 9.0).max(18.0));
+    let width = (12.0 + label_w + badge_w.map_or(12.0, |w| 10.0 + w + 6.0)).max(52.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), if enabled { Sense::click() } else { Sense::hover() });
+    app.sync.button_rect = Some(rect);
+    let hot = enabled && response.hovered();
+    ui.painter().rect_filled(rect, CornerRadius::same(8), if hot { SOFT } else { PANEL });
+    ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, look.stroke), StrokeKind::Inside);
+    ui.painter().text(pos2(rect.min.x + 12.0, rect.center().y), Align2::LEFT_CENTER, look.label, font, look.ink);
+    if let (Some(count), Some(badge_w)) = (badge, badge_w) {
+        let pill = egui::Rect::from_min_size(pos2(rect.max.x - 6.0 - badge_w, rect.center().y - 9.0), vec2(badge_w, 18.0));
+        ui.painter().rect_filled(pill, CornerRadius::same(9), ACCENT);
+        ui.painter().text(pill.center(), Align2::CENTER_CENTER, count, mono(8.0), Color32::WHITE);
+    }
     a11y::button(&response, "Sync the map with the workspace");
     let response = response.on_hover_text("Sync the map with the workspace");
-    if response.clicked() {
+    if response.clicked() && enabled {
         open_panel(app, ctx);
     }
+}
+
+/// What the header button shows in each designed state.
+#[derive(Debug, PartialEq, Eq)]
+struct ButtonLook {
+    label: &'static str,
+    /// The change count badge, when a diff found changes.
+    count: Option<usize>,
+    ink: Color32,
+    stroke: Color32,
+}
+
+/// Idle `Sync`; Changes `Sync` with its count; Syncing `Syncing…` in the accent; Disabled grey.
+fn button_look(syncing: bool, enabled: bool, changes: Option<usize>) -> ButtonLook {
+    if syncing {
+        return ButtonLook { label: "Syncing…", count: None, ink: ACCENT, stroke: ACCENT };
+    }
+    if !enabled {
+        return ButtonLook { label: "Sync", count: None, ink: FAINT, stroke: BORDER };
+    }
+    ButtonLook { label: "Sync", count: changes.filter(|n| *n > 0), ink: INK, stroke: BORDER }
 }
 
 /// Open the widget and read a fresh diff from the current map.
 pub fn open_panel(app: &mut FigApp, ctx: &egui::Context) {
     app.sync.open = true;
+    app.sync.just_opened = true;
     app.sync.menu_open = false;
     if app.sync.busy {
         return;
@@ -604,6 +630,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
 
     let scope = scope_label(app);
+    // Under the header (the macOS toolbar band is taller), at the Sync button's right edge.
+    let header_h = if app.ui.title_bar == crate::TitleBar::Inset { crate::MAC_BAND } else { 44.0 };
     let menu_was_open = app.sync.menu_open;
     let mut out = WidgetOut::default();
     // The anchored area takes its first frame's size from `default_size`; without it the
@@ -617,7 +645,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let widget_h = max_h.min(620.0);
     let scroll_h = (widget_h - 96.0 - if job_card { 86.0 } else { 0.0 }).max(140.0);
     let area = egui::Area::new(Id::new("sync_widget"))
-        .anchor(Align2::RIGHT_TOP, vec2(-EDGE, EDGE + BUTTON_H + 10.0))
+        .anchor(Align2::RIGHT_TOP, vec2(-8.0, header_h + 8.0))
         .default_size(vec2(WIDGET_W, widget_h))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
@@ -626,9 +654,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                 .stroke(Stroke::new(1.0, BORDER))
                 .corner_radius(CornerRadius::same(10))
                 .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(36) })
-                .inner_margin(egui::Margin::symmetric(18, 16))
+                .inner_margin(egui::Margin { left: 19, right: 17, top: 17, bottom: 17 })
                 .show(ui, |ui| {
                     ui.set_width(WIDGET_W - 2.0 * PAD);
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     out = widget_body(ui, &mut app.sync, &mut app.compose, &scope, scroll_h);
                 });
         });
@@ -644,7 +673,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let pressed = ctx.input(|input| input.pointer.any_pressed());
     let pointer = ctx.input(|input| input.pointer.interact_pos());
     let inside = pointer.is_some_and(|pos| area.response.rect.contains(pos));
-    if pressed && !inside && !menu_was_open {
+    let just_opened = std::mem::take(&mut app.sync.just_opened);
+    if pressed && !inside && !menu_was_open && !just_opened {
         // Clicking a target in the menu is outside the widget; the popup owns that click.
         app.sync.open = false;
         app.sync.menu_open = false;
@@ -720,104 +750,120 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
     ui.add_space(7.0);
     let covers = if state.all_pages { "every page".to_string() } else { scope.to_string() };
     ui.label(egui::RichText::new(covers).font(regular(11.0)).color(INK));
-    ui.add_space(2.0);
+    ui.add_space(6.0);
     let last_line = match &state.last {
         Some(last) => last_line(last),
         None => "first sync".to_string(),
     };
-    ui.label(egui::RichText::new(last_line).font(mono(9.5)).color(MUTED));
+    ui.label(egui::RichText::new(last_line).font(mono(9.0)).color(MUTED));
     if state.dirty {
+        ui.add_space(7.0);
         ui.label(egui::RichText::new("the map changed since this diff").font(mono(8.5)).color(ACCENT));
     }
+    let mut carded = false;
     if let Some(job) = state.job.as_ref() {
         if job.in_flight() {
-            ui.add_space(10.0);
+            ui.add_space(7.0);
             flight_card(ui, job, compose);
+            carded = true;
         } else if job.failed() {
             let reason = job.reason.clone().unwrap_or_else(|| "The sync failed.".to_string());
-            ui.add_space(10.0);
+            ui.add_space(7.0);
             failed_card(ui, &reason);
+            carded = true;
         }
     }
-    ui.add_space(10.0);
+    ui.add_space(if carded { 9.0 } else { 7.0 });
     divider(ui);
-    ui.add_space(10.0);
+    ui.add_space(7.0);
 
-    egui::ScrollArea::vertical().id_salt("sync_widget_body").max_height(scroll_h).auto_shrink([false, false]).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        if let Some(error) = state.error.clone() {
-            error_block(ui, &error);
-            ui.add_space(10.0);
-        }
+    // The widget hugs its content, as the design draws it: the viewport takes the height the
+    // content measured last frame and scrolls only past the window's height.
+    let fit = if state.content_h > 0.0 { state.content_h.min(scroll_h) } else { scroll_h };
+    let scrolled =
+        egui::ScrollArea::vertical().id_salt("sync_widget_body").max_height(fit).min_scrolled_height(fit).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.set_width(ui.available_width());
+                if let Some(error) = state.error.clone() {
+                    error_block(ui, &error);
+                    ui.add_space(10.0);
+                }
 
-        match state.diff.as_ref() {
-            Some(diff) => {
-                design_section(ui, &diff.map);
-                ui.add_space(14.0);
-                code_section(ui, state.last.as_ref(), &diff.code);
-            }
-            None => {
-                ui.add_space(5.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(7.0, 0.0);
-                    if state.busy {
-                        ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
-                        ui.label(egui::RichText::new("Reading the diff…").font(regular(11.0)).color(MUTED));
-                    } else {
-                        ui.label(egui::RichText::new("No diff read yet.").font(regular(11.0)).color(MUTED));
+                match state.diff.as_ref() {
+                    Some(diff) => {
+                        design_section(ui, &diff.map);
+                        ui.add_space(7.0);
+                        code_section(ui, state.last.as_ref(), &diff.code);
                     }
-                });
-            }
-        }
+                    None => {
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(7.0, 0.0);
+                            if state.busy {
+                                ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
+                                ui.label(egui::RichText::new("Reading the diff…").font(regular(11.0)).color(MUTED));
+                            } else {
+                                ui.label(egui::RichText::new("No diff read yet.").font(regular(11.0)).color(MUTED));
+                            }
+                        });
+                    }
+                }
 
-        ui.add_space(16.0);
-        divider(ui);
-        ui.add_space(14.0);
-        eyebrow(ui, "AGENT", MUTED);
-        ui.add_space(6.0);
-        let picked = target_chip(ui, &compose.targets, compose.target.as_ref(), &mut state.menu_open);
-        if picked.is_some() {
-            compose.target = picked;
-        }
+                ui.add_space(7.0);
+                divider(ui);
+                ui.add_space(7.0);
+                ui.label(egui::RichText::new("AGENT").font(mono(8.5)).color(MUTED));
+                ui.add_space(7.0);
+                let picked = target_chip(ui, &compose.targets, compose.target.as_ref(), &mut state.menu_open);
+                if picked.is_some() {
+                    compose.target = picked;
+                }
 
-        ui.add_space(14.0);
-        eyebrow(ui, "NOTE FOR THIS SYNC", MUTED);
-        ui.add_space(5.0);
-        note_field(ui, &mut state.note);
+                ui.add_space(7.0);
+                ui.label(egui::RichText::new("NOTE FOR THIS SYNC").font(mono(8.5)).color(MUTED));
+                ui.add_space(7.0);
+                note_field(ui, &mut state.note);
 
-        ui.add_space(12.0);
-        let syncing = state.starting || state.in_flight();
-        let locked = state.locked();
-        let target = compose.target.as_ref();
-        let ready = state.diff.as_ref().is_some_and(|diff| diff.ok);
-        let enabled = !locked && target.is_some() && ready && state.has_work();
-        let label = if syncing {
-            "Syncing…".to_string()
-        } else {
-            match target {
-                Some(target) => format!("Sync with {}", kind_label(target.kind())),
-                None => "Sync".to_string(),
-            }
-        };
-        if action_button(ui, &label, enabled, syncing) {
-            out.sync = true;
-        }
-        ui.add_space(6.0);
-        let hint = if target.is_none() {
-            if compose.targets.is_empty() { "No agent is available in this workspace yet." } else { "Choose an agent to sync." }
-        } else if syncing {
-            "The map stays editable while the sync runs."
-        } else if state.busy {
-            "Reading the diff…"
-        } else if !ready {
-            "Refresh the diff to sync."
-        } else if !state.has_work() {
-            "Change the map or add a note to sync."
-        } else {
-            "The map stays editable."
-        };
-        ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
-    });
+                ui.add_space(7.0);
+                let syncing = state.starting || state.in_flight();
+                let locked = state.locked();
+                let target = compose.target.as_ref();
+                let ready = state.diff.as_ref().is_some_and(|diff| diff.ok);
+                let enabled = !locked && target.is_some() && ready && state.has_work();
+                let label = if syncing {
+                    "Syncing…".to_string()
+                } else {
+                    match target {
+                        Some(target) => format!("Sync with {}", kind_label(target.kind())),
+                        None => "Sync".to_string(),
+                    }
+                };
+                if action_button(ui, &label, enabled, syncing) {
+                    out.sync = true;
+                }
+                ui.add_space(7.0);
+                let hint = if target.is_none() {
+                    if compose.targets.is_empty() { "No agent is available in this workspace yet." } else { "Choose an agent to sync." }
+                } else if syncing {
+                    "The map stays editable while the sync runs."
+                } else if state.busy {
+                    "Reading the diff…"
+                } else if !ready {
+                    "Refresh the diff to sync."
+                } else if !state.has_work() {
+                    "Change the map or add a note to sync."
+                } else {
+                    "The map stays editable."
+                };
+                ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
+            },
+        );
+    let measured = scrolled.content_size.y;
+    if (measured - state.content_h).abs() > 0.5 {
+        state.content_h = measured;
+        ui.ctx().request_repaint();
+    }
     out
 }
 
@@ -830,7 +876,7 @@ fn close_button(ui: &mut Ui) -> bool {
     if hot {
         ui.painter().circle_filled(rect.center(), 9.0, SOFT);
     }
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "×", regular(13.0), if hot { ACCENT } else { MUTED });
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "×", mono(11.0), if hot { ACCENT } else { MUTED });
     response.clicked()
 }
 
@@ -842,20 +888,14 @@ fn flight_card(ui: &mut Ui, job: &Job, compose: &crate::compose::State) {
         .fill(SOFT)
         .stroke(Stroke::new(1.0, ACCENT))
         .corner_radius(CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(12, 10))
+        .inner_margin(egui::Margin { left: 13, right: 13, top: 10, bottom: 10 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
-                ui.add(egui::Spinner::new().size(13.0).color(ACCENT));
-                ui.label(egui::RichText::new(format!("Sync in flight · {kind}")).font(semibold(11.0)).color(ACCENT));
-            });
-            ui.add_space(4.0);
+            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.label(egui::RichText::new(format!("Sync in flight · {kind}")).font(semibold(11.0)).color(ACCENT));
             let started = job.started.trim();
             let line = if started.is_empty() { "started just now".to_string() } else { format!("started {started}") };
             ui.label(egui::RichText::new(line).font(mono(9.0)).color(MUTED));
-            ui.add_space(3.0);
-            ui.label(egui::RichText::new("The map stays editable.").font(mono(8.5)).color(FAINT));
         });
 }
 
@@ -865,12 +905,12 @@ fn failed_card(ui: &mut Ui, reason: &str) {
         .fill(SOFT)
         .stroke(Stroke::new(1.0, DANGER))
         .corner_radius(CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(12, 10))
+        .inner_margin(egui::Margin { left: 13, right: 13, top: 10, bottom: 10 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 3.0;
             ui.label(egui::RichText::new("Sync failed").font(semibold(11.0)).color(DANGER));
-            ui.add_space(3.0);
-            paragraph(ui, reason, 10.5, DANGER);
+            ui.add(egui::Label::new(egui::RichText::new(reason).font(mono(9.0)).color(DANGER)).wrap());
         });
 }
 
@@ -889,48 +929,51 @@ fn error_block(ui: &mut Ui, error: &str) {
 
 /// `DESIGN CHANGES`: the counts, then up to four names of each kind.
 fn design_section(ui: &mut Ui, map: &MapDiff) {
-    eyebrow(ui, "DESIGN CHANGES", ACCENT);
-    ui.add_space(6.0);
+    ui.label(egui::RichText::new("DESIGN CHANGES").font(mono(9.0)).color(ACCENT));
     if map.total() == 0 {
-        paragraph(ui, "No design changes since the last sync.", 11.0, MUTED);
+        ui.add_space(7.0);
+        ui.label(egui::RichText::new("No design changes since the last sync.").font(regular(10.5)).color(MUTED));
         return;
     }
     if !map.added.is_empty() {
         change_group(ui, "+", "added", MAP_INK, map.added.iter().map(|card| card.name.as_str()));
     }
-    if !map.removed.is_empty() {
-        change_group(ui, "−", "removed", DANGER, map.removed.iter().map(|card| card.name.as_str()));
-    }
     if !map.changed.is_empty() {
         change_group(ui, "~", "changed", ACCENT, map.changed.iter().map(|change| change.name.as_str()));
     }
+    if !map.removed.is_empty() {
+        change_group(ui, "−", "removed", DANGER, map.removed.iter().map(|card| card.name.as_str()));
+    }
 }
 
-/// One count line and its names (capped, then `+N more`).
+/// `+  3 added` in the group's colour, then its names on one muted line (`A · B · C`).
 fn change_group<'a>(ui: &mut Ui, marker: &str, label: &str, color: Color32, names: impl Iterator<Item = &'a str>) {
     let names: Vec<&str> = names.collect();
-    ui.add_space(5.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-        ui.label(egui::RichText::new(marker).font(semibold(11.5)).color(color));
-        ui.label(egui::RichText::new(names.len().to_string()).font(semibold(11.5)).color(INK));
-        ui.label(egui::RichText::new(label).font(regular(11.0)).color(MUTED));
-    });
-    for name in names.iter().take(NAMES) {
-        indented_name(ui, name, INK);
+    ui.add_space(7.0);
+    ui.label(egui::RichText::new(format!("{marker}  {} {label}", names.len())).font(regular(10.5)).color(color));
+    if names.is_empty() {
+        return;
     }
-    if names.len() > NAMES {
-        indented_name(ui, &format!("+{} more", names.len() - NAMES), FAINT);
-    }
+    ui.add_space(7.0);
+    indented_name(ui, &names_line(&names), MUTED);
 }
 
-/// A name under a count line, elided to the widget's width.
+/// Up to [`NAMES`] names joined by ` · `, then `+N more`.
+fn names_line(names: &[&str]) -> String {
+    let mut line = names.iter().take(NAMES).copied().collect::<Vec<_>>().join(" · ");
+    if names.len() > NAMES {
+        line.push_str(&format!(" · +{} more", names.len() - NAMES));
+    }
+    line
+}
+
+/// A line under a count, indented under its label and elided to the widget's width.
 fn indented_name(ui: &mut Ui, name: &str, color: Color32) {
     ui.horizontal(|ui| {
         ui.add_space(14.0);
         let room = ui.available_width().max(40.0);
-        let shown = widgets::elide_font(ui, name, room, regular(11.0));
-        ui.label(egui::RichText::new(shown).font(regular(11.0)).color(color));
+        let shown = widgets::elide_font(ui, name, room, regular(10.5));
+        ui.label(egui::RichText::new(shown).font(regular(10.5)).color(color));
     });
 }
 
@@ -946,68 +989,49 @@ fn code_section(ui: &mut Ui, last: Option<&Last>, code: &CodeDiff) {
         (false, Some(commit)) => format!("CODE SINCE {}", short_commit(&commit)),
         (false, None) => "CODE SINCE THE LAST SYNC".to_string(),
     };
-    eyebrow(ui, &title, MUTED);
-    ui.add_space(6.0);
+    ui.label(egui::RichText::new(title).font(mono(9.0)).color(MUTED));
     if !code.scope.is_empty() {
         let shown: Vec<&str> = code.scope.iter().take(FILES).map(String::as_str).collect();
         let mut line = format!("in {}", shown.join(", "));
         if code.scope.len() > FILES {
             line.push_str(&format!(" +{} more", code.scope.len() - FILES));
         }
-        paragraph(ui, &line, 10.0, FAINT);
-        ui.add_space(3.0);
+        ui.add_space(7.0);
+        ui.add(egui::Label::new(egui::RichText::new(line).font(regular(10.0)).color(FAINT)).wrap());
     }
+    ui.add_space(7.0);
     if first {
-        paragraph(ui, "first sync: the map is the baseline.", 11.0, MUTED);
-        ui.add_space(3.0);
+        ui.label(egui::RichText::new("first sync: the map is the baseline.").font(regular(10.5)).color(MUTED));
     } else {
         let files = code.files.len();
         let commits = code.commits.len();
-        let counts = format!("{files} file{} · {commits} commit{}", if files == 1 { "" } else { "s" }, if commits == 1 { "" } else { "s" });
-        ui.label(egui::RichText::new(counts).font(mono(9.0)).color(MUTED));
+        if files == 0 && commits == 0 && code.note.as_deref().unwrap_or("").trim().is_empty() {
+            ui.label(egui::RichText::new("No code changes since the last sync.").font(regular(10.5)).color(MUTED));
+        } else {
+            let counts = format!("{files} file{} · {commits} commit{}", if files == 1 { "" } else { "s" }, if commits == 1 { "" } else { "s" });
+            ui.label(egui::RichText::new(counts).font(regular(9.5)).color(MUTED));
+        }
     }
     for file in code.files.iter().take(FILES) {
+        ui.add_space(7.0);
         file_row(ui, file);
     }
     if code.files.len() > FILES {
-        indented_name(ui, &format!("+{} more files", code.files.len() - FILES), FAINT);
-    }
-    for commit in code.commits.iter().take(COMMITS) {
-        commit_row(ui, commit);
-    }
-    if code.commits.len() > COMMITS {
-        indented_name(ui, &format!("+{} more commits", code.commits.len() - COMMITS), FAINT);
+        ui.add_space(7.0);
+        ui.label(egui::RichText::new(format!("+{} more files", code.files.len() - FILES)).font(regular(10.0)).color(FAINT));
     }
     if let Some(note) = code.note.as_deref().map(str::trim).filter(|note| !note.is_empty()) {
-        ui.add_space(3.0);
-        paragraph(ui, note, 10.5, FAINT);
-    }
-    if !first && code.files.is_empty() && code.commits.is_empty() && code.note.as_deref().unwrap_or("").trim().is_empty() {
-        ui.add_space(3.0);
-        paragraph(ui, "No code changes since the last sync.", 11.0, MUTED);
+        ui.add_space(7.0);
+        paragraph(ui, note, 10.0, FAINT);
     }
 }
 
-/// One changed file: the path on the left, its line counts at the right.
+/// One changed file: `service/src/sync.rs   +240/−3`, one line.
 fn file_row(ui: &mut Ui, file: &FileDelta) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-    let stats = format!("+{}/−{}", file.added, file.removed);
-    let stats_w = text_width(ui, &stats, mono(9.0)) + 8.0;
-    let path_room = (rect.width() - stats_w).max(40.0);
-    let path = widgets::elide_start_font(ui, &file.path, path_room, mono(9.5));
-    ui.painter().text(pos2(rect.min.x + 14.0, rect.center().y), Align2::LEFT_CENTER, path, mono(9.5), INK);
-    ui.painter().text(pos2(rect.max.x, rect.center().y), Align2::RIGHT_CENTER, stats, mono(9.0), MAP_INK);
-}
-
-/// One commit: its short hash, then the subject.
-fn commit_row(ui: &mut Ui, commit: &CommitInfo) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-    let hash = short_commit(&commit.hash);
-    let hash_w = text_width(ui, &hash, mono(9.0)) + 8.0;
-    let subject_room = (rect.width() - hash_w - 14.0).max(40.0);
-    let subject = widgets::elide_font(ui, &commit.subject, subject_room, regular(10.5));
-    ui.painter().text(pos2(rect.min.x + 14.0, rect.center().y), Align2::LEFT_CENTER, hash, mono(9.0), FAINT);
-    ui.painter().text(pos2(rect.min.x + 14.0 + hash_w, rect.center().y), Align2::LEFT_CENTER, subject, regular(10.5), MUTED);
+    let stats = format!("   +{}/−{}", file.added, file.removed);
+    let room = (ui.available_width() - text_width(ui, &stats, regular(10.0))).max(40.0);
+    let path = widgets::elide_start_font(ui, &file.path, room, regular(10.0));
+    ui.label(egui::RichText::new(format!("{path}{stats}")).font(regular(10.0)).color(INK));
 }
 
 /// The compact target chip; true when it should open, and the pick from its menu.
@@ -1022,15 +1046,16 @@ fn target_chip(ui: &mut Ui, targets: &[TargetInfo], selected: Option<&Target>, m
         (Some(target), _) => kind_label(target.kind()).to_string(),
         (None, _) => "choose an agent".to_string(),
     };
-    let width = 224.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
+    // As wide as its label: `codex · idle  ▾`.
+    let shown = widgets::elide_font(ui, &label, 220.0, semibold(10.5));
+    let width = text_width(ui, &shown, semibold(10.5)) + 36.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     a11y::button(&response, "Choose the agent to sync with");
     let hot = response.hovered() || *menu_open;
     ui.painter().rect_filled(rect, CornerRadius::same(6), if hot { SOFT } else { PANEL });
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, if hot { ACCENT } else { BORDER }), StrokeKind::Inside);
-    let shown = widgets::elide_font(ui, &label, width - 34.0, regular(10.5));
-    ui.painter().text(pos2(rect.min.x + 11.0, rect.center().y), Align2::LEFT_CENTER, shown, regular(10.5), INK);
+    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, BORDER), StrokeKind::Inside);
+    ui.painter().text(pos2(rect.min.x + 11.0, rect.center().y), Align2::LEFT_CENTER, shown, semibold(10.5), INK);
     let c = pos2(rect.max.x - 13.0, rect.center().y + 0.5);
     ui.painter().add(egui::Shape::convex_polygon(
         vec![pos2(c.x - 3.5, c.y - 1.5), pos2(c.x + 3.5, c.y - 1.5), pos2(c.x, c.y + 2.0)],
@@ -1163,9 +1188,9 @@ fn cli_chip(ui: &mut Ui, kind: &str, selected: bool) -> bool {
 
 /// One scope choice in the widget's header.
 fn scope_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
-    let width = text_width(ui, label, semibold(9.5)) + 16.0;
+    let width = text_width(ui, label, semibold(9.5)) + 18.0;
     let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), sense);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 19.0), sense);
     let response = if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
     a11y::button(&response, &format!("Sync {}", label.to_lowercase()));
     let hot = enabled && response.hovered();
@@ -1174,10 +1199,10 @@ fn scope_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
     } else if hot {
         SOFT
     } else {
-        Color32::TRANSPARENT
+        PANEL
     };
     ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
-    let border = if selected || hot { ACCENT } else { BORDER };
+    let border = if selected { ACCENT } else { BORDER };
     ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, border), StrokeKind::Inside);
     let ink = if selected || hot { ACCENT } else { MUTED };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(9.5), ink);
@@ -1186,20 +1211,21 @@ fn scope_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
 
 /// The note field: multiline, capped, with the design's placeholder.
 fn note_field(ui: &mut Ui, note: &mut String) {
+    // One line tall until the note needs more, as the design draws it.
     egui::Frame::NONE
-        .fill(SOFT)
+        .fill(Color32::from_rgb(0xF1, 0xF0, 0xED))
         .stroke(Stroke::new(1.0, BORDER))
         .corner_radius(CornerRadius::same(6))
-        .inner_margin(egui::Margin::symmetric(10, 7))
+        .inner_margin(egui::Margin::symmetric(11, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.add(
                 egui::TextEdit::multiline(note)
                     .frame(egui::Frame::NONE)
-                    .font(regular(11.0))
+                    .font(regular(10.5))
                     .desired_width(f32::INFINITY)
-                    .desired_rows(3)
-                    .hint_text(egui::RichText::new("Add a note for this sync…").font(regular(11.0)).color(FAINT)),
+                    .desired_rows(1)
+                    .hint_text(egui::RichText::new("Add a note for the agent…").font(regular(10.5)).color(FAINT)),
             );
         });
     if note.chars().count() > MAX_NOTE_CHARS {
@@ -1209,33 +1235,16 @@ fn note_field(ui: &mut Ui, note: &mut String) {
 
 /// The widget's one action: accent when it can run, soft while it cannot.
 fn action_button(ui: &mut Ui, label: &str, enabled: bool, busy: bool) -> bool {
-    let height = 30.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), if enabled { Sense::click() } else { Sense::hover() });
+    // As wide as its label with 16 pt either side, 26 pt tall.
+    let width = text_width(ui, label, semibold(10.5)) + 32.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 26.0), if enabled { Sense::click() } else { Sense::hover() });
     let response = response.on_hover_cursor(if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default });
     a11y::button(&response, label);
-    let fill = if enabled {
-        if response.hovered() { ACCENT_HOVER } else { ACCENT }
-    } else if busy {
-        SOFT
-    } else {
-        Color32::from_rgb(0xF1, 0xEC, 0xE7)
-    };
+    let fill = if enabled { if response.hovered() { ACCENT_HOVER } else { ACCENT } } else { Color32::from_rgb(0xE8, 0xE5, 0xE0) };
     ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-    if !enabled {
-        ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, BORDER), StrokeKind::Inside);
-    }
     let ink = if enabled { Color32::WHITE } else { FAINT };
-    if busy {
-        let font = semibold(11.5);
-        let text_w = text_width(ui, label, font.clone());
-        let total = text_w + 18.0;
-        let start = rect.center().x - total / 2.0;
-        let spinner = Rect::from_center_size(pos2(start + 5.5, rect.center().y), vec2(11.0, 11.0));
-        ui.put(spinner, egui::Spinner::new().size(11.0).color(ACCENT));
-        ui.painter().text(pos2(start + 18.0, rect.center().y), Align2::LEFT_CENTER, label, font, ink);
-    } else {
-        ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(11.5), ink);
-    }
+    let _ = busy;
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(10.5), ink);
     response.clicked() && enabled
 }
 

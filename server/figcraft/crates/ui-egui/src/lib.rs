@@ -24,6 +24,7 @@ pub mod dev_mode;
 pub mod dialogs;
 pub mod export_panel;
 pub mod field_math;
+pub mod first_map;
 pub mod font_preview;
 pub mod frame_labels;
 pub mod frame_presets;
@@ -89,32 +90,38 @@ fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
     resp.on_hover_text(if open { "Hide sidebar" } else { "Show sidebar" })
 }
 
+/// A root page's tab: the active one sits on a soft fill with the accent underline, inset 6 pt;
+/// the others are plain muted text. Delete lives behind a × that shows only on hover.
 fn page_tab(ui: &mut egui::Ui, name: &str, active: bool) -> (egui::Response, bool) {
-    let font = crate::theme::semibold(11.5);
-    let width = name.chars().count() as f32 * 6.7 + 40.0;
+    let font = if active { crate::theme::semibold(11.5) } else { crate::theme::regular(11.5) };
+    let text_w = ui.painter().layout_no_wrap(name.to_string(), font.clone(), egui::Color32::WHITE).size().x;
+    let width = text_w + 24.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
-    let hot = resp.hovered();
+    let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 2.0, rect.top() + 6.0), egui::vec2(14.0, 14.0));
+    let close = ui.interact(close_rect, ui.id().with(("close_page", name)), egui::Sense::click()).on_hover_text("Delete page");
+    let hot = resp.hovered() || close.hovered();
     let p = ui.painter();
     if active {
-        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF8, 0xF6, 0xF3));
-        p.line_segment(
-            [egui::pos2(rect.left() + 6.0, rect.bottom() - 2.0), egui::pos2(rect.right() - 20.0, rect.bottom() - 2.0)],
-            egui::Stroke::new(2.0, egui::Color32::from_rgb(0xB5, 0x45, 0x2F)),
+        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF1, 0xF0, 0xED));
+        p.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(rect.left() + 6.0, rect.bottom() - 2.0), egui::pos2(rect.right() - 6.0, rect.bottom())),
+            egui::CornerRadius::ZERO,
+            egui::Color32::from_rgb(0xB5, 0x45, 0x2F),
         );
     } else if hot {
-        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF8, 0xF6, 0xF3));
+        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF7, 0xF6, 0xF3));
     }
     let color = if active { egui::Color32::from_rgb(0x1A, 0x1A, 0x1A) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
-    p.text(egui::pos2(rect.left() + 12.0, rect.center().y), egui::Align2::LEFT_CENTER, name, font, color);
+    p.text(egui::pos2(rect.left() + 12.0, rect.center().y - 1.0), egui::Align2::LEFT_CENTER, name, font, color);
     a11y::button(&resp, &format!("Open page {name}"));
-    let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 13.0, rect.center().y), egui::vec2(18.0, 22.0));
-    let close = ui.interact(close_rect, ui.id().with(("close_page", name)), egui::Sense::click()).on_hover_text("Delete page");
-    if active || hot || close.hovered() {
+    if hot {
+        p.circle_filled(close_rect.center(), 6.5, egui::Color32::WHITE);
+        p.circle_stroke(close_rect.center(), 6.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(0xE3, 0xE2, 0xDF)));
         p.text(
             close_rect.center(),
             egui::Align2::CENTER_CENTER,
             "×",
-            egui::FontId::proportional(12.0),
+            crate::theme::regular(10.0),
             if close.hovered() { egui::Color32::from_rgb(0x9E, 0x3B, 0x2C) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) },
         );
     }
@@ -797,6 +804,8 @@ pub struct FigApp {
     pub ui: UiState,
     /// The agent breakdown modal.
     pub agents_modal: agents::State,
+    /// The first map's banner and the Sync tooltip (the onboarding design's First map).
+    pub first_map: first_map::State,
     /// A page deletion waiting for confirmation.
     pub page_delete: Option<figcraft_doc::NodeId>,
     /// The page/subpage tree popover.
@@ -871,6 +880,7 @@ impl FigApp {
             page_delete: None,
             page_tree: page_tree::State::default(),
             agents_modal: agents::State::default(),
+            first_map: first_map::State::default(),
             new_page: new_page::State::default(),
             compose: compose::State::default(),
             sync: sync::State::default(),
@@ -1726,7 +1736,7 @@ impl FigApp {
                             self.ws.refresh(&ctx);
                         }
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     for (id, name) in &pages {
                         let (response, close) = page_tab(ui, name, Some(*id) == current_root);
                         if close {
@@ -1742,10 +1752,11 @@ impl FigApp {
                                 self.run("page.select", serde_json::json!({"id": id}));
                             }
                         }
-                        ui.add_space(2.0);
+                        ui.add_space(4.0);
                     }
+                    ui.add_space(2.0);
                     if ui
-                        .add(egui::Button::new(egui::RichText::new("+ Page").size(10.5).color(muted)).frame(false))
+                        .add(egui::Button::new(egui::RichText::new("+ Page").font(crate::theme::regular(10.5)).color(muted)).frame(false))
                         .on_hover_text("New page")
                         .clicked()
                     {
@@ -1754,17 +1765,16 @@ impl FigApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(8.0);
                         sync::header_button(self, ui, &ctx);
-                        ui.add_space(12.0);
+                        ui.add_space(30.0);
                         ui.label(
-                            egui::RichText::new(if joined { format!("{people} live") } else { "offline".to_string() }).size(10.0).color(if joined {
-                                egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
-                            } else {
-                                muted
-                            }),
+                            egui::RichText::new(if joined { format!("{people} live") } else { "offline".to_string() })
+                                .font(egui::FontId::monospace(10.0))
+                                .color(if joined { egui::Color32::from_rgb(0x2F, 0x6F, 0x6A) } else { muted }),
                         );
                         let (summary, color) = agents::summary(&self.compose.targets, self.compose.targets_error.as_deref());
-                        ui.add_space(10.0);
-                        let response = ui.add(egui::Button::new(egui::RichText::new(summary).size(9.5).color(color)).frame(false));
+                        ui.add_space(6.0);
+                        let response =
+                            ui.add(egui::Button::new(egui::RichText::new(summary).font(egui::FontId::monospace(9.5)).color(color)).frame(false));
                         a11y::button(&response, "Agent breakdown");
                         if response.on_hover_text("Agent breakdown").clicked() {
                             self.agents_modal.open = true;
@@ -1785,34 +1795,49 @@ impl FigApp {
                 .map(|(doc, page)| page_tree::path(doc, page).into_iter().filter_map(|id| doc.node(id).map(|node| (id, node.name.clone()))).collect())
                 .unwrap_or_default();
             if breadcrumb.len() > 1 {
-                let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
+                // The path under the tabs: every crumb before the last is a link to that page.
+                let faint = egui::Color32::from_rgb(0x9A, 0x97, 0x91);
                 let ink = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+                let accent = egui::Color32::from_rgb(0xB5, 0x45, 0x2F);
                 let last = breadcrumb.len() - 1;
                 let path = breadcrumb.clone();
-                egui::Panel::top("map_breadcrumb").exact_size(30.0).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                let strip = egui::Color32::from_rgb(0xF8, 0xF6, 0xF3);
+                let mut open = None;
+                egui::Panel::top("map_breadcrumb").exact_size(22.0).resizable(false).frame(egui::Frame::NONE.fill(strip)).show(ui, |ui| {
                     let rect = ui.max_rect();
                     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
-                    ui.horizontal_centered(|ui| {
-                        ui.add_space(12.0);
-                        for (index, (id, name)) in path.iter().enumerate() {
-                            if index > 0 {
-                                ui.label(egui::RichText::new("›").font(egui::FontId::monospace(9.5)).color(muted));
+                    let font = crate::theme::regular(10.0);
+                    let mut x = rect.left() + 12.0;
+                    for (index, (id, name)) in path.iter().enumerate() {
+                        if index > 0 {
+                            ui.painter().text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, "›", font.clone(), faint);
+                            x += 14.0;
+                        }
+                        let current = index == last;
+                        let galley = ui.painter().layout_no_wrap(name.clone(), font.clone(), ink);
+                        let crumb = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(galley.size().x, rect.height()));
+                        let color = if current { ink } else { accent };
+                        ui.painter().text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, name, font.clone(), color);
+                        if !current {
+                            let response = ui
+                                .interact(crumb, ui.id().with(("crumb", id.0)), egui::Sense::click())
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            a11y::button(&response, &format!("Open {name}"));
+                            if response.hovered() {
+                                let y = rect.center().y + 6.5;
+                                ui.painter()
+                                    .line_segment([egui::pos2(crumb.left(), y), egui::pos2(crumb.right(), y)], egui::Stroke::new(1.0, accent));
                             }
-                            let current = index == last;
-                            let response = ui.add(
-                                egui::Button::new(egui::RichText::new(name).font(egui::FontId::monospace(9.5)).color(if current {
-                                    ink
-                                } else {
-                                    muted
-                                }))
-                                .frame(false),
-                            );
-                            if !current && response.on_hover_text(format!("Open {name}")).clicked() {
-                                self.run("page.select", serde_json::json!({"id": id}));
+                            if response.on_hover_text(format!("Open {name}")).clicked() {
+                                open = Some(*id);
                             }
                         }
-                    });
+                        x = crumb.right() + 6.0;
+                    }
                 });
+                if let Some(id) = open {
+                    self.run("page.select", serde_json::json!({"id": id}));
+                }
             }
         }
         if map_mode && self.ws.pane_open {
@@ -1842,6 +1867,10 @@ impl FigApp {
             compose::show(self, &ctx);
             // The Sync button and widget, beside the map bar and above the composer.
             sync::show(self, &ctx);
+            // A map Init just opened: who is drawing it, and what Sync is for (once).
+            first_map::observe(self, &ctx);
+            let header_h = if self.ui.title_bar == TitleBar::Inset { MAC_BAND } else { 44.0 };
+            first_map::show(self, &ctx, header_h);
             agents::show(self, &ctx);
             new_page::show(self, &ctx);
             page_delete::show(self, &ctx);

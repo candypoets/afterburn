@@ -30,16 +30,18 @@ use crate::workspaces::Target;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-/// The composer never grows wider than this.
-const PANEL_MAX_W: f32 = 900.0;
+/// The composer spans the canvas with 24 pt either side, never wider than this.
+const PANEL_MAX_W: f32 = 1600.0;
 /// The least it shrinks to in a narrow window.
 const PANEL_MIN_W: f32 = 280.0;
-/// Room left at the sides of the window.
+/// Room left at the sides of the canvas (24 pt each).
 const PANEL_SIDE: f32 = 48.0;
-/// The space between the bar and the window's bottom edge.
-const PANEL_BOTTOM: f32 = 18.0;
+/// The space between the bar and the status bar under it.
+const PANEL_GAP: f32 = 26.0;
 /// The round Send button's size.
-const SEND_D: f32 = 30.0;
+const SEND_D: f32 = 28.0;
+/// The agent chip's height; it sits on the field's bottom edge with Send.
+const TARGET_H: f32 = 24.0;
 /// How many draft chips fit in the strip before `+N`.
 const VISIBLE_DRAFTS: usize = 3;
 
@@ -221,37 +223,46 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let node = node_id.and_then(|id| node_name(app, id));
     let page_name = page.and_then(|id| node_name(app, id));
     let has_selection = !selection.is_empty();
-    let comments = comment_count(app, node_id, page);
+    // What a send from here carries: the drafts in the card's subtree, or on the whole page.
+    let included = included_drafts(app, &selection, page);
+    let comments = included.len();
     let plural = if comments == 1 { "" } else { "s" };
     let context = match (node.as_deref(), page_name.as_deref()) {
         (Some(node), _) => format!("COMMENTING ON · {node} · {comments} comment{plural} in the tree"),
         (None, Some(page)) => format!("COMMENTING ON · {page} · whole page · {comments} comment{plural}"),
         _ => "COMMENTING ON".to_string(),
     };
-    let included = included_drafts(app, &selection, page);
     let active = app.active_workspace.is_some();
+    draft_glow(app, ctx, page);
+    tree_panel(app, ctx, node_id, page, &included);
     // The workspace pane takes the left edge; the composer belongs to the canvas, not the pane.
     let pane = if app.ws.pane_open { 300.0 } else { 0.0 };
     let width = (ctx.content_rect().width() - pane - PANEL_SIDE).clamp(PANEL_MIN_W, PANEL_MAX_W);
 
     let mut send = false;
-    egui::Area::new(Id::new("map_composer")).anchor(Align2::CENTER_BOTTOM, vec2(pane / 2.0, -PANEL_BOTTOM)).order(egui::Order::Foreground).show(
-        ctx,
-        |ui| {
+    let mut clear = false;
+    egui::Area::new(Id::new("map_composer"))
+        .anchor(Align2::CENTER_BOTTOM, vec2(pane / 2.0, -(crate::status_bar::HEIGHT + PANEL_GAP)))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
             egui::Frame::NONE
                 .fill(PANEL)
                 .stroke(Stroke::new(1.0, BORDER))
                 .corner_radius(CornerRadius::same(10))
                 .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(24) })
-                .inner_margin(Margin::symmetric(16, 10))
+                .inner_margin(Margin::symmetric(15, 12))
                 .show(ui, |ui| {
-                    ui.set_width((width - 32.0).max(40.0));
-                    ui.set_min_height(74.0);
+                    ui.set_width((width - 30.0).max(40.0));
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     let names = Names { node: node.as_deref(), page: page_name.as_deref(), node_id, page_id: page };
-                    send = body(ui, &mut app.compose, &context, &names, has_selection, active, &included, comments);
+                    let out = body(ui, &mut app.compose, &context, &names, has_selection, active, &included, comments);
+                    send = out.send;
+                    clear = out.clear;
                 });
-        },
-    );
+        });
+    if clear {
+        app.run("select.none", serde_json::json!({}));
+    }
     if app.compose.page_from_card {
         app.compose.page_from_card = false;
         if let (Some(node_id), Some(page_id), Some(node_name), Some(page_name)) = (node_id, page, node.as_deref(), page_name.as_deref()) {
@@ -280,7 +291,16 @@ struct Names<'a> {
     page_id: Option<NodeId>,
 }
 
-/// The bar's contents; true when Send was pressed.
+/// What the human asked of the bar this frame.
+#[derive(Default)]
+struct BodyOut {
+    /// Send was pressed (or Cmd+Enter).
+    send: bool,
+    /// `×  clear selection`: comment on the whole page again.
+    clear: bool,
+}
+
+/// The bar's contents.
 fn body(
     ui: &mut Ui,
     state: &mut State,
@@ -290,7 +310,8 @@ fn body(
     active: bool,
     included: &[usize],
     comments: usize,
-) -> bool {
+) -> BodyOut {
+    let mut out = BodyOut::default();
     // A draft may leave the list while its chip was active (sent, or removed elsewhere): never
     // keep editing one that is gone.
     if state.editing.is_some_and(|index| index >= state.drafts.len()) {
@@ -301,31 +322,24 @@ fn body(
         Some((index, draft)) => editing_context(draft, included, index),
         None => context.to_string(),
     };
-    let context_color = if editing.is_some() {
-        EDIT
-    } else if has_selection {
-        ACCENT
-    } else {
-        FAINT
-    };
+    // The context line is the accent in every state, as the design draws it.
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(&context_line).font(mono(9.0)).color(context_color));
-        if let Some(node_id) = names.node_id {
+        ui.spacing_mut().item_spacing.x = 14.0;
+        ui.label(egui::RichText::new(&context_line).font(mono(8.5)).color(ACCENT));
+        if has_selection && names.node_id.is_some() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(egui::Button::new(egui::RichText::new("+ Page").font(mono(8.5)).color(MUTED)).frame(false))
-                    .on_hover_text("New page from this card")
-                    .clicked()
-                {
+                if text_action(ui, "×  clear selection", "Comment on the whole page") {
+                    out.clear = true;
+                }
+                if text_action(ui, "+ Page", "New page from this card") {
                     state.page_from_card = true;
-                    let _ = node_id;
                 }
             });
         }
     });
 
     if !included.is_empty() {
-        ui.add_space(4.0);
+        ui.add_space(6.0);
         draft_strip(ui, state, included);
     }
     ui.add_space(6.0);
@@ -365,22 +379,25 @@ fn body(
     }
 
     let mut send = false;
+    // The agent chip and Send sit on the field's bottom edge, so a growing field rises alone:
+    // both take the field's height and draw at its foot.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         let available = ui.available_width();
         let chip_label = target_label(state);
-        let chip_w = (text_width(ui, &chip_label, regular(10.5)) + 34.0).min(150.0);
-        let input_w = (available - chip_w - SEND_D - 18.0).max(90.0);
+        let chip_w = (text_width(ui, &chip_label, regular(10.5)) + 30.0).clamp(62.0, 150.0);
+        let input_w = (available - chip_w - SEND_D - 16.0).max(90.0);
 
         let placeholder = if names.node.is_some() { "Comment on this card and its children…" } else { "Comment on the whole page…" };
         // Grow with the prompt, up to eight rows; the full text stays reachable by scrolling.
         let per_line = ((input_w - 20.0) / 6.5).max(12.0);
         let rows = state.input.split('\n').map(|line| ((line.chars().count() as f32 / per_line).ceil() as usize).max(1)).sum::<usize>().clamp(1, 8);
+        let editing_now = state.editing.is_some();
         let input_response = egui::Frame::NONE
-            .fill(SOFT)
-            .stroke(Stroke::new(1.0, if state.editing.is_some() { EDIT } else { BORDER }))
+            .fill(if editing_now { PANEL } else { SOFT })
+            .stroke(Stroke::new(1.0, if editing_now { EDIT } else { BORDER }))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(Margin::symmetric(10, 5))
+            .inner_margin(Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.set_width((input_w - 20.0).max(40.0));
                 ui.add(
@@ -399,8 +416,9 @@ fn body(
             state.focus_input = false;
         }
 
+        let row_h = input_response.rect.height().max(SEND_D);
         ui.add_space(8.0);
-        let target_response = target_chip(ui, state, chip_w);
+        let target_response = target_chip(ui, state, chip_w, row_h);
         if target_response.clicked() {
             state.menu_open = !state.menu_open;
         }
@@ -410,7 +428,7 @@ fn body(
 
         ui.add_space(8.0);
         let can_send = active && state.target.is_some() && (!state.input.trim().is_empty() || !included.is_empty()) && !state.busy;
-        if send_button(ui, state.busy, can_send) {
+        if send_button(ui, state.busy, can_send, row_h) {
             send = true;
         }
     });
@@ -424,7 +442,7 @@ fn body(
         state.save_edited();
     }
 
-    ui.add_space(3.0);
+    ui.add_space(6.0);
     let hint = if state.editing.is_some() {
         "⇧⏎ save changes   ·   Esc stop editing   ·   × on the chip removes it".to_string()
     } else if !active {
@@ -433,7 +451,18 @@ fn body(
         format!("⏎ new line   ·   ⇧⏎ comment   ·   ⌘⏎ send all   ·   {comments} in the tree")
     };
     ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
-    send
+    out.send = send;
+    out
+}
+
+/// A quiet mono action at the right of the context line (`×  clear selection`, `+ Page`).
+fn text_action(ui: &mut Ui, label: &str, tip: &str) -> bool {
+    let size = vec2(text_width(ui, label, mono(8.5)), 12.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    a11y::button(&resp, label);
+    let ink = if resp.hovered() { INK } else { MUTED };
+    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, label, mono(8.5), ink);
+    resp.on_hover_text(tip).clicked()
 }
 
 /// The context line while a draft is open in the field: `EDITING DRAFT · on Card · 1 of 2`.
@@ -448,17 +477,127 @@ fn editing_context(draft: &Draft, included: &[usize], index: usize) -> String {
     format!("EDITING DRAFT  ·  {on}  ·  {position} of {total}")
 }
 
-/// Open comment threads in the selected card's subtree, or on the page.
-fn comment_count(app: &FigApp, node: Option<NodeId>, page: Option<NodeId>) -> usize {
-    let Ok(doc) = app.session.doc() else { return 0 };
-    if let Some(node) = node {
-        let ids: HashSet<NodeId> = doc.subtree(node).into_iter().collect();
-        doc.comments.iter().filter(|comment| !comment.resolved && comment.anchor.is_some_and(|anchor| ids.contains(&anchor))).count()
-    } else if let Some(page) = page {
-        doc.comments.iter().filter(|comment| !comment.resolved && comment.page == page).count()
-    } else {
-        0
+/// One line of the comment tree: a card under the selection and the drafts it carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeRow {
+    pub name: String,
+    pub count: usize,
+}
+
+/// The comment tree a send would carry: the root's total, then each other card with drafts, in the
+/// order its first draft was written. Drafts on the root itself count only in the total.
+pub fn tree_rows(drafts: &[Draft], included: &[usize], root: Option<NodeId>) -> (usize, Vec<TreeRow>) {
+    let mut rows: Vec<(Option<NodeId>, TreeRow)> = Vec::new();
+    for draft in included.iter().filter_map(|index| drafts.get(*index)) {
+        if draft.node_id.is_some() && draft.node_id == root {
+            continue;
+        }
+        let name = draft.node.clone().unwrap_or_else(|| "Whole page".to_string());
+        match rows.iter_mut().find(|(id, row)| *id == draft.node_id && (draft.node_id.is_some() || row.name == name)) {
+            Some((_, row)) => row.count += 1,
+            None => rows.push((draft.node_id, TreeRow { name, count: 1 })),
+        }
     }
+    (included.len(), rows.into_iter().map(|(_, row)| row).collect())
+}
+
+/// `COMMENT TREE` at the top right of the canvas: what a prompt on the selection (or the page)
+/// carries, so the human sees the subtree before sending. Only when there is something to carry.
+fn tree_panel(app: &FigApp, ctx: &egui::Context, node_id: Option<NodeId>, page: Option<NodeId>, included: &[usize]) {
+    if included.is_empty() {
+        return;
+    }
+    let (total, rows) = tree_rows(&app.compose.drafts, included, node_id);
+    let root = match node_id {
+        Some(id) => node_name(app, id).unwrap_or_else(|| "This card".to_string()),
+        None => page.and_then(|id| node_name(app, id)).map(|name| format!("{name} · whole page")).unwrap_or_else(|| "Whole page".to_string()),
+    };
+    let header_h = if app.ui.title_bar == crate::TitleBar::Inset { crate::MAC_BAND } else { 44.0 };
+    let note = match rows.len() {
+        0 => format!("A prompt on {} carries {}.", short(&root), if total == 1 { "it" } else { "them" }),
+        2 => format!("A prompt on {} carries both.", short(&root)),
+        n => format!("A prompt on {} carries all {}.", short(&root), n),
+    };
+    egui::Area::new(Id::new("map_comment_tree"))
+        .anchor(Align2::RIGHT_TOP, vec2(-40.0, header_h + 40.0))
+        .order(egui::Order::Middle)
+        .interactable(false)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(PANEL)
+                .stroke(Stroke::new(1.0, BORDER))
+                .corner_radius(CornerRadius::same(8))
+                .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(20) })
+                .inner_margin(Margin { left: 14, right: 14, top: 12, bottom: 14 })
+                .show(ui, |ui| {
+                    ui.set_width(252.0);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(egui::RichText::new("COMMENT TREE").font(mono(8.5)).color(ACCENT));
+                    ui.add_space(13.0);
+                    let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+                    let name = widgets::elide_font(ui, &root, line.width() - 30.0, semibold(11.5));
+                    ui.painter().text(line.left_center(), Align2::LEFT_CENTER, name, semibold(11.5), INK);
+                    ui.painter().text(line.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, total.to_string(), mono(9.0), ACCENT);
+                    if !rows.is_empty() {
+                        ui.add_space(8.0);
+                        let (rule, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+                        ui.painter()
+                            .line_segment([rule.left_center() + vec2(8.0, 0.0), rule.right_center() + vec2(8.0, 0.0)], Stroke::new(1.0, BORDER));
+                        ui.add_space(6.0);
+                        let last = rows.len() - 1;
+                        for (index, row) in rows.iter().enumerate() {
+                            let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
+                            let branch = if index == last { "└" } else { "├" };
+                            ui.painter().text(line.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, branch, regular(10.5), INK);
+                            let name = widgets::elide_font(ui, &row.name, line.width() - 60.0, regular(10.5));
+                            ui.painter().text(line.left_center() + vec2(24.0, 0.0), Align2::LEFT_CENTER, name, regular(10.5), INK);
+                            ui.painter().text(line.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, row.count.to_string(), mono(9.0), MUTED);
+                        }
+                    }
+                    ui.add_space(10.0);
+                    ui.add(egui::Label::new(egui::RichText::new(note).font(mono(8.5)).color(MUTED)).wrap());
+                });
+        });
+}
+
+/// Cards waiting with a draft comment glow blue on the canvas until a send carries them away
+/// ("before: cards glow; after: no glow, sent once").
+fn draft_glow(app: &FigApp, ctx: &egui::Context, page: Option<NodeId>) {
+    let Ok(doc) = app.session.doc() else { return };
+    let mut cards: Vec<NodeId> = app.compose.drafts.iter().filter(|draft| draft.page_id == page).filter_map(|draft| draft.node_id).collect();
+    cards.sort_by_key(|id| id.0);
+    cards.dedup();
+    if cards.is_empty() {
+        return;
+    }
+    let zoom = app.session.ds().map(|ds| ds.view.zoom).unwrap_or(1.0) as f32;
+    let clip = app.canvas.rect;
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::new("map_draft_glow"))).with_clip_rect(clip);
+    let radius = (8.0 * zoom).clamp(0.0, 40.0) as u8;
+    for id in cards {
+        let Some(bounds) = doc.world_bounds(id) else { continue };
+        let min = app.to_screen(bounds.x0, bounds.y0);
+        let max = app.to_screen(bounds.x1, bounds.y1);
+        let rect = Rect::from_min_max(min, max);
+        if !rect.is_finite() || !rect.intersects(clip) {
+            continue;
+        }
+        // A soft blue halo, then the card's pale blue edge.
+        for (grow, alpha) in [(6.0, 14u8), (4.0, 26), (2.5, 40), (1.0, 60)] {
+            painter.rect_stroke(
+                rect.expand(grow),
+                CornerRadius::same(radius.saturating_add(grow as u8)),
+                Stroke::new(2.0, Color32::from_rgba_unmultiplied(0x2F, 0x6F, 0xDB, alpha)),
+                StrokeKind::Outside,
+            );
+        }
+        painter.rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_rgb(0xA9, 0xC2, 0xEE)), StrokeKind::Inside);
+    }
+}
+
+/// A root name without the ` · whole page` suffix, for the note.
+fn short(root: &str) -> &str {
+    root.split(" · ").next().unwrap_or(root)
 }
 
 /// The draft chips above the input: the first few, each editable and removable, then `+N`.
@@ -469,11 +608,7 @@ fn draft_strip(ui: &mut Ui, state: &mut State, included: &[usize]) {
         let visible = included.len().min(VISIBLE_DRAFTS);
         for &index in included.iter().take(visible) {
             let Some(draft) = state.drafts.get(index) else { continue };
-            let text = draft.text.replace('\n', " ");
-            let label = match draft.node.as_deref() {
-                Some(node) => format!("{node} · {text}"),
-                None => format!("Whole page · {text}"),
-            };
+            let label = draft.text.replace('\n', " ");
             if let Some(clicked) = draft_chip(ui, index, &label, state.editing == Some(index)) {
                 action = Some(clicked);
             }
@@ -501,9 +636,9 @@ enum DraftAction {
 
 /// One draft chip: clicking its label opens the draft for editing; the × at its right removes it.
 fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool) -> Option<DraftAction> {
-    let shown = widgets::elide_font(ui, text, 180.0, regular(10.5));
-    let width = text_width(ui, &shown, regular(10.5)) + 32.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
+    let shown = widgets::elide_font(ui, text, 200.0, regular(10.5));
+    let width = text_width(ui, &shown, regular(10.5)) + 33.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 20.0), Sense::hover());
     let x_rect = Rect::from_min_max(pos2(rect.max.x - DRAFT_X_W, rect.min.y), rect.max);
     let body_rect = Rect::from_min_max(rect.min, pos2(rect.max.x - DRAFT_X_W, rect.max.y));
     // The × is added last, so it sits above the label's click area and gets the click.
@@ -516,16 +651,17 @@ fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool) -> Option<Dra
     let fill = if active {
         EDIT_FILL
     } else if hot {
-        Color32::from_rgb(0xF1, 0xEC, 0xE7)
+        Color32::from_rgb(0xF1, 0xF0, 0xED)
     } else {
         SOFT
     };
-    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
+    // A pill: 20 pt tall, fully rounded.
+    ui.painter().rect_filled(rect, CornerRadius::same(10), fill);
     let border = if active { EDIT } else { BORDER };
-    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(if active { 1.5 } else { 1.0 }, border), StrokeKind::Inside);
+    ui.painter().rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, border), StrokeKind::Inside);
     ui.painter().text(pos2(rect.min.x + 9.0, rect.center().y), Align2::LEFT_CENTER, &shown, regular(10.5), if active { EDIT } else { INK });
-    let x_color = if close.hovered() { ACCENT } else { MUTED };
-    ui.painter().text(pos2(rect.max.x - 10.0, rect.center().y), Align2::RIGHT_CENTER, "×", regular(11.0), x_color);
+    let x_color = if close.hovered() { ACCENT } else { FAINT };
+    ui.painter().text(pos2(rect.max.x - 9.0, rect.center().y), Align2::RIGHT_CENTER, "×", regular(10.5), x_color);
     if close.clicked() {
         Some(DraftAction::Remove(index))
     } else if body.clicked() {
@@ -544,15 +680,19 @@ fn target_label(state: &State) -> String {
 }
 
 /// The target chip; clicking it opens or closes the agent menu.
-fn target_chip(ui: &mut Ui, state: &State, width: f32) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(width.max(64.0), SEND_D), Sense::click());
+fn target_chip(ui: &mut Ui, state: &State, width: f32, row_h: f32) -> Response {
+    let (outer, _) = ui.allocate_exact_size(vec2(width, row_h), Sense::hover());
+    // 24 pt tall, 3.5 pt above the field's bottom edge, like Send.
+    let bottom = outer.max.y - 3.5;
+    let rect = Rect::from_min_max(pos2(outer.min.x, bottom - TARGET_H), pos2(outer.max.x, bottom));
+    let resp = ui.interact(rect, Id::new("map_composer_target_chip"), Sense::click());
     a11y::button(&resp, "Choose the agent to send the comment to");
     let hot = resp.hovered() || state.menu_open;
     ui.painter().rect_filled(rect, CornerRadius::same(6), if hot { SOFT } else { PANEL });
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, if hot { ACCENT } else { BORDER }), StrokeKind::Inside);
+    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, BORDER), StrokeKind::Inside);
     let label = widgets::elide_font(ui, &target_label(state), (width - 30.0).max(24.0), regular(10.5));
     ui.painter().text(pos2(rect.min.x + 11.0, rect.center().y), Align2::LEFT_CENTER, &label, regular(10.5), INK);
-    let c = pos2(rect.max.x - 13.0, rect.center().y + 0.5);
+    let c = pos2(rect.max.x - 12.0, rect.center().y + 0.5);
     ui.painter().add(egui::Shape::convex_polygon(
         vec![pos2(c.x - 3.5, c.y - 1.5), pos2(c.x + 3.5, c.y - 1.5), pos2(c.x, c.y + 2.0)],
         MUTED,
@@ -688,26 +828,22 @@ fn cli_chip(ui: &mut Ui, kind: &str, selected: bool) -> bool {
 }
 
 /// The round Send button: a drawn arrow up, so no font has to have the glyph.
-fn send_button(ui: &mut Ui, busy: bool, enabled: bool) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(SEND_D, SEND_D), Sense::click());
+fn send_button(ui: &mut Ui, busy: bool, enabled: bool, row_h: f32) -> bool {
+    let (outer, _) = ui.allocate_exact_size(vec2(SEND_D, row_h), Sense::hover());
+    let rect = Rect::from_min_size(pos2(outer.min.x, outer.max.y - 1.5 - SEND_D), vec2(SEND_D, SEND_D));
+    let resp = ui.interact(rect, Id::new("map_composer_send"), Sense::click());
     a11y::button(&resp, "Send the prompt");
-    let fill = if !enabled {
-        Color32::from_rgb(0xF1, 0xEC, 0xE7)
-    } else if resp.hovered() {
-        ACCENT_HOVER
-    } else {
-        ACCENT
-    };
+    // The accent in every state, as the design draws it; hover lightens it only when it can send.
+    let fill = if enabled && resp.hovered() { ACCENT_HOVER } else { ACCENT };
     ui.painter().circle_filled(rect.center(), SEND_D / 2.0, fill);
+    let c = rect.center();
     if busy {
-        ui.painter().text(rect.center(), Align2::CENTER_CENTER, "…", regular(12.0), MUTED);
+        ui.painter().text(c, Align2::CENTER_CENTER, "…", regular(12.0), Color32::WHITE);
     } else {
-        let c = rect.center();
-        let col = if enabled { Color32::WHITE } else { FAINT };
-        let stroke = Stroke::new(1.6, col);
-        ui.painter().line_segment([c + vec2(0.0, 5.0), c + vec2(0.0, -5.0)], stroke);
-        ui.painter().line_segment([c + vec2(-4.0, -1.0), c + vec2(0.0, -5.0)], stroke);
-        ui.painter().line_segment([c + vec2(4.0, -1.0), c + vec2(0.0, -5.0)], stroke);
+        let stroke = Stroke::new(1.5, Color32::WHITE);
+        ui.painter().line_segment([c + vec2(0.0, 4.5), c + vec2(0.0, -4.5)], stroke);
+        ui.painter().line_segment([c + vec2(-3.5, -1.0), c + vec2(0.0, -4.5)], stroke);
+        ui.painter().line_segment([c + vec2(3.5, -1.0), c + vec2(0.0, -4.5)], stroke);
     }
     resp.clicked() && enabled
 }
@@ -1265,7 +1401,7 @@ mod tests {
             let mut out = self.ctx.run_ui(input, |ui| {
                 ui.set_width(760.0);
                 let names = Names { node: Some("Card"), page: Some("Page"), node_id: None, page_id: None };
-                send = body(ui, state, "COMMENTING ON · Card · 0 comments", &names, true, true, included, 0);
+                send = body(ui, state, "COMMENTING ON · Card · 0 comments", &names, true, true, included, 0).send;
             });
             out.textures_delta.clear();
             (send, flat(&out.shapes))
@@ -1320,7 +1456,7 @@ mod tests {
         assert_eq!(bar.caret(), Some("Fix the lane".chars().count()), "the caret waits at the end");
         let (send, shapes) = bar.frame(vec![]);
         assert!(!send);
-        assert!(has_text(&shapes, "Alpha · Fix the lane"), "the chip stays in the strip");
+        assert!(has_text(&shapes, "Fix the lane"), "the chip stays in the strip, showing the draft's text");
     }
 
     #[test]
@@ -1336,8 +1472,8 @@ mod tests {
         assert!(bar.state.input.is_empty());
 
         let (_, shapes) = bar.frame(vec![]);
-        assert!(has_text(&shapes, "Beta · Merge agents"));
-        assert!(!has_text(&shapes, "Alpha · Fix the lane"));
+        assert!(has_text(&shapes, "Merge agents"));
+        assert!(!has_text(&shapes, "Fix the lane"));
     }
 
     #[test]
@@ -1389,5 +1525,46 @@ mod tests {
         bar.key(Key::Backspace, Modifiers::NONE);
         assert_eq!(bar.state.editing, None);
         assert_eq!(bar.state.drafts[0].text, "Fix the lane", "Backspace keeps the draft");
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    fn draft(text: &str, node: Option<(&str, u64)>) -> Draft {
+        Draft {
+            text: text.to_string(),
+            node: node.map(|(name, _)| name.to_string()),
+            page: Some("Overview".to_string()),
+            node_id: node.map(|(_, id)| NodeId(id)),
+            page_id: Some(NodeId(1)),
+        }
+    }
+
+    #[test]
+    fn the_tree_counts_the_root_and_lists_each_card_below_it() {
+        let drafts = vec![
+            draft("on the card", Some(("Components", 10))),
+            draft("a variant", Some(("Variants", 11))),
+            draft("an override", Some(("Overrides", 12))),
+            draft("another override", Some(("Overrides", 12))),
+        ];
+        let (total, rows) = tree_rows(&drafts, &[0, 1, 2, 3], Some(NodeId(10)));
+        assert_eq!(total, 4);
+        assert_eq!(
+            rows,
+            vec![TreeRow { name: "Variants".into(), count: 1 }, TreeRow { name: "Overrides".into(), count: 2 }],
+            "the root's own draft counts in the total only"
+        );
+    }
+
+    #[test]
+    fn a_page_tree_groups_page_drafts_under_whole_page() {
+        let drafts = vec![draft("page note", None), draft("card note", Some(("Card", 5))), draft("second page note", None)];
+        let (total, rows) = tree_rows(&drafts, &[0, 1, 2], None);
+        assert_eq!(total, 3);
+        assert_eq!(rows, vec![TreeRow { name: "Whole page".into(), count: 2 }, TreeRow { name: "Card".into(), count: 1 }]);
+        assert_eq!(tree_rows(&drafts, &[], None), (0, Vec::new()));
     }
 }
