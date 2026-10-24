@@ -1,23 +1,21 @@
-//! The Add machine modal: one page-wide modal with the setup states side by side.
+//! The Add machine modal: a 460 × 340 card that walks one SSH host through setup.
 //!
-//! Design: `Widget Add machine` on the Mindmap page (states Add machine, Review, Setting up,
-//! Needs attention, Connected).
+//! Design: `Widget Add machine` on the Mindmap page (states Pick a host, Review, Setting up,
+//! Needs attention, Connected). The hosts come from `~/.ssh/config`; a `user@host` can be typed.
 //!
 //! The setup itself is the host strip's: [`crate::node_hosts::begin`] runs the same
 //! [`prepare`](crate::node_hosts) work the strip runs, reports each phase, and this modal maps
 //! its outcome to a step. The step machine is pure state, so its transitions are unit-tested
 //! without a window.
 
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Id, Rect, Ui, pos2, vec2};
 
 use crate::FigApp;
-use crate::a11y;
-use crate::theme::{Tokens, regular, semibold};
+use crate::theme::Tokens;
 
-/// The modal's surface width, as in the design.
-const WIDTH: f32 = 940.0;
-/// The space between the surface and the window edge before the modal shrinks.
-const EDGE: f32 = 48.0;
+/// The card's size, as in the design.
+const WIDTH: f32 = 460.0;
+const HEIGHT: f32 = 340.0;
 
 /// The five states of the design.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,8 +71,8 @@ impl Stage {
     pub fn label(self) -> &'static str {
         match self {
             Stage::Ssh => "SSH",
-            Stage::Copy => "Copy mindmap-node to ~/.local/bin",
-            Stage::Start => "Start it on 127.0.0.1:47822",
+            Stage::Copy => "Copy the node",
+            Stage::Start => "Start the node",
             Stage::Herdr => "Check Herdr",
         }
     }
@@ -82,9 +80,19 @@ impl Stage {
     fn done(self) -> &'static str {
         match self {
             Stage::Ssh => "connected",
-            Stage::Copy => "copied",
+            Stage::Copy => "done",
             Stage::Start => "running",
             Stage::Herdr => "ready",
+        }
+    }
+
+    /// The word while the stage runs.
+    fn active(self) -> &'static str {
+        match self {
+            Stage::Ssh => "connecting",
+            Stage::Copy => "copying",
+            Stage::Start => "running",
+            Stage::Herdr => "checking",
         }
     }
 }
@@ -133,6 +141,12 @@ pub struct State {
     pub warning: Option<String>,
     /// The workspaces the node listed once connected; `None` until its list arrives.
     pub workspaces: Option<usize>,
+    /// The hosts `~/.ssh/config` names, read when the modal opens.
+    pub hosts: Vec<ssh_config::SshHost>,
+    /// The `user@host` typed under the list (the first state's field).
+    pub manual: String,
+    /// The host picked in the list, used while nothing is typed.
+    pub picked: String,
 }
 
 impl State {
@@ -150,10 +164,38 @@ impl State {
         self.current = Stage::Ssh;
         self.warning = None;
         self.workspaces = None;
+        self.manual.clear();
+        self.picked.clear();
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.host = None;
+            self.hosts = ssh_config::read();
         }
+        // The first host is picked, as the design shows it.
+        if let Some(first) = self.hosts.first() {
+            self.picked = first.alias.clone();
+            self.target = first.alias.clone();
+            self.derive_name();
+        }
+    }
+
+    /// Pick a host from the list: it becomes the SSH target and the display name.
+    pub fn pick(&mut self, alias: &str) {
+        self.target = alias.to_string();
+        self.picked = alias.to_string();
+        self.manual.clear();
+        self.name_touched = false;
+        self.derive_name();
+        self.error = None;
+    }
+
+    /// The typed `user@host` changed: it replaces the picked host while it has text.
+    pub fn typed(&mut self) {
+        let manual = self.manual.trim().to_string();
+        self.target = if manual.is_empty() { self.picked.clone() } else { manual };
+        self.name_touched = false;
+        self.derive_name();
+        self.error = None;
     }
 
     /// Close the modal and stop the setup if it is still running.
@@ -376,12 +418,12 @@ impl State {
     /// The word beside a stage in the list.
     pub fn stage_status(&self, stage: Stage) -> &'static str {
         match self.stage_state(stage) {
-            StageState::Active => "working…",
+            StageState::Active => stage.active(),
             StageState::Done => stage.done(),
             StageState::Waiting => "waiting",
             StageState::Skipped => "not needed",
             StageState::Failed => "failed",
-            StageState::NeedsApproval => "Herdr missing",
+            StageState::NeedsApproval => "missing",
         }
     }
 
@@ -416,6 +458,26 @@ pub fn open(app: &mut FigApp) {
     app.machine_modal.begin();
 }
 
+/// Open the modal straight into setup for `target` (the New workspace sheet's Connect).
+pub fn connect(app: &mut FigApp, target: &str) {
+    app.machine_modal.begin();
+    app.machine_modal.manual = target.trim().to_string();
+    app.machine_modal.typed();
+    if app.machine_modal.continue_to_review()
+        && let Some(machine) = app.machine_modal.start()
+    {
+        start_setup(app, machine, false);
+    }
+}
+
+/// What the cards show that lives outside the modal's own state.
+struct Context {
+    /// The node version the local node reported (`0.1.0`), for the Review and Connected lines.
+    node: Option<String>,
+    /// The connected machine's workspaces are open in the sidebar.
+    listed: bool,
+}
+
 /// Draw the modal when open.
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     if !app.machine_modal.open {
@@ -431,19 +493,23 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         let count = app.ws.rows.len();
         app.machine_modal.set_workspaces(count);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    let listed = app.machine_modal.host.as_ref().is_some_and(|host| app.ws.open.contains(&host.address));
+    #[cfg(target_arch = "wasm32")]
+    let listed = false;
+    let extra = Context { node: app.ws.node_version.clone(), listed };
     let tokens = Tokens::get(&ctx);
     let skin = shell::Skin::of(&tokens);
-    let width = (WIDTH - 56.0).min((ctx.content_rect().width() - EDGE - 56.0).max(320.0));
     let (should_close, action) = {
         let state = &mut app.machine_modal;
-        let response =
-            egui::Modal::new(Id::new("machine_modal")).backdrop_color(shell::scrim(&tokens)).frame(shell::surface(&skin)).show(&ctx, |ui| {
-                ui.set_width(width);
-                body(state, ui, &skin)
-            });
+        let response = egui::Modal::new(Id::new("machine_modal"))
+            .backdrop_color(shell::scrim(&tokens))
+            .frame(shell::surface(&skin))
+            .show(&ctx, |ui| body(state, ui, &skin, &extra));
         (response.should_close(), response.inner)
     };
-    if should_close {
+    // Escape and a click outside close the card; a running setup keeps its own Cancel.
+    if should_close && app.machine_modal.step != Step::SettingUp {
         app.machine_modal.close();
         return;
     }
@@ -469,6 +535,14 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
                 start_setup(app, machine, false);
             }
         }
+        Action::Toggle => {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(host) = app.machine_modal.host.clone()
+                && !app.ws.open.remove(&host.address)
+            {
+                app.ws.open.insert(host.address);
+            }
+        }
         Action::Done => {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -488,7 +562,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     }
 }
 
-/// Start the host strip's setup for the modal and keep its progress channel.
+/// Start the host setup for the modal and keep its progress channel.
 fn start_setup(app: &mut FigApp, machine: Machine, install: bool) {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -520,7 +594,10 @@ fn poll(app: &mut FigApp, ctx: &egui::Context) {
     for phase in phases {
         app.machine_modal.reach(phase);
     }
-    let Some(outcome) = outcome else { return };
+    let Some(outcome) = outcome else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        return;
+    };
     match outcome {
         crate::node_hosts::Outcome::Ready(host) => {
             let saved = crate::node_hosts::remember(&mut app.ws.hosts, &host);
@@ -554,436 +631,692 @@ enum Action {
     Install,
     Retry,
     Done,
+    /// The Connected card's toggle: list the machine's workspaces in the sidebar, or not.
+    Toggle,
 }
 
-fn body(state: &mut State, ui: &mut Ui, s: &shell::Skin) -> Option<Action> {
-    let mut action = None;
-    if shell::header(ui, s, "ADD MACHINE", step_note(state.step)) {
-        action = Some(Action::Close);
+fn body(state: &mut State, ui: &mut Ui, s: &shell::Skin, extra: &Context) -> Option<Action> {
+    let card = shell::card(ui, WIDTH, HEIGHT);
+    match state.step {
+        Step::Add => pick_step(state, ui, s, card),
+        Step::Review => review_step(state, ui, s, card, extra),
+        Step::SettingUp => setup_step(state, ui, s, card),
+        Step::NeedsAttention => attention_step(state, ui, s, card),
+        Step::Connected => connected_step(state, ui, s, card, extra),
     }
-    ui.add_space(10.0);
-    action = action.or(match state.step {
-        Step::Add => add_step(state, ui, s),
-        Step::Review => review_step(state, ui, s),
-        Step::SettingUp => setup_step(state, ui, s),
-        Step::NeedsAttention => attention_step(state, ui, s),
-        Step::Connected => connected_step(state, ui, s),
+}
+
+/// The footer: a quiet button at the left, the dark one at the right, both 30 pt at `y`.
+fn footer(ui: &mut Ui, s: &shell::Skin, card: Rect, y: f32, left: Option<(&str, f32)>, right: Option<(&str, f32, bool)>) -> (bool, bool) {
+    let left = left.is_some_and(|(label, width)| {
+        shell::quiet_button(ui, s, Id::new(("machine_modal_left", label)), shell::at(card, 24.0, y, width, 30.0), label)
     });
-    action
+    let right = right.is_some_and(|(label, width, enabled)| {
+        let width = shell::primary_width(ui, label, width);
+        shell::primary_button(ui, s, Id::new(("machine_modal_right", label)), shell::at(card, WIDTH - 24.0 - width, y, width, 30.0), label, enabled)
+    });
+    (left, right)
 }
 
-fn step_note(step: Step) -> &'static str {
-    match step {
-        Step::Add => "STEP 1 OF 2",
-        Step::Review => "STEP 2 OF 2",
-        Step::SettingUp | Step::NeedsAttention | Step::Connected => "SETUP",
+fn pick_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, card: Rect) -> Option<Action> {
+    shell::eyebrow(ui, card, 22.0, "CONNECT A MACHINE", s.accent);
+    shell::title(ui, s, card, 40.0, "Add an SSH host", 22.0);
+    shell::body(ui, s, card, 74.0, WIDTH - 48.0, "A host from ~/.ssh/config, reached without a prompt. Mindmap never sees your password.");
+    shell::label(ui, s, card, 116.0, "HOSTS");
+
+    // The hosts, three rows tall; more scroll.
+    let list = shell::at(card, 24.0, 132.0, WIDTH - 48.0, 94.0);
+    let typing = !state.manual.trim().is_empty();
+    let mut picked = None;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
+        ui.set_clip_rect(list.intersect(ui.clip_rect()));
+        egui::ScrollArea::vertical().id_salt("machine_modal_hosts").auto_shrink([false, false]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            if state.hosts.is_empty() {
+                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), egui::Sense::hover());
+                shell::mono(ui, pos2(rect.min.x + 10.0, rect.min.y + 9.0), "No hosts in ~/.ssh/config: type one below.", 8.5, s.faint);
+            }
+            for host in &state.hosts {
+                let selected = !typing && state.picked == host.alias;
+                if shell::host_row(ui, s, &host.alias, &host.detail(), selected) {
+                    picked = Some(host.alias.clone());
+                }
+            }
+        });
+    });
+    if let Some(alias) = picked {
+        state.pick(&alias);
+    }
+
+    let field = shell::at(card, 24.0, 234.0, WIDTH - 48.0, 30.0);
+    if shell::field(ui, s, Id::new("machine_modal_manual"), field, &mut state.manual, "or type user@host…", shell::FieldFont::Mono(9.0)) {
+        state.typed();
+    }
+    match &state.error {
+        Some(error) => shell::mono_wrapped(ui, card, 24.0, 276.0, WIDTH - 48.0, error, 8.5, s.accent),
+        None => shell::mono(ui, card.min + vec2(24.0, 276.0), "Display name comes from the host; you can rename it later.", 8.5, s.faint),
+    }
+    let enabled = !state.target.trim().is_empty();
+    match footer(ui, s, card, 300.0, Some(("Cancel", 90.0)), Some(("Continue", 100.0, enabled))) {
+        (true, _) => Some(Action::Close),
+        (_, true) => Some(Action::Continue),
+        _ => {
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            (enter && enabled).then_some(Action::Continue)
+        }
     }
 }
 
-fn add_step(state: &mut State, ui: &mut Ui, s: &shell::Skin) -> Option<Action> {
-    shell::title(ui, s, "Which machine?");
-    shell::body(ui, s, "An SSH target Mindmap can reach without a prompt: a Host from your ~/.ssh/config, or user@host.");
-    ui.add_space(22.0);
-    let changed = shell::field(ui, s, "SSH target", "Host from ~/.ssh/config, or user@host", &mut state.target);
-    if changed {
-        state.derive_name();
+fn review_step(state: &State, ui: &mut Ui, s: &shell::Skin, card: Rect, extra: &Context) -> Option<Action> {
+    let name = state.machine_name();
+    shell::eyebrow(ui, card, 22.0, "REVIEW", s.accent);
+    shell::title(ui, s, card, 40.0, &format!("Mindmap will do this on {name}"), 20.0);
+    let copy = match extra.node.as_deref().map(short_version) {
+        Some(version) => format!("Copy mindmap-node {version} to ~/.local/bin"),
+        None => "Copy mindmap-node to ~/.local/bin".to_string(),
+    };
+    let rows =
+        [copy, "Start it on 127.0.0.1:47822".to_string(), format!("Add {name} as a machine in Herdr"), "Install Herdr if it is missing".to_string()];
+    for (index, row) in rows.iter().enumerate() {
+        let y = 86.0 + 26.0 * index as f32;
+        shell::mark(ui, card, y, shell::Mark::Check, s.teal);
+        shell::row_text(ui, s, card, 44.0, y, row);
     }
-    ui.add_space(14.0);
-    let name = shell::field(ui, s, "Display name", "e.g. befree", &mut state.name);
-    if name {
-        state.name_edited();
-    }
-    if let Some(error) = &state.error {
-        ui.add_space(12.0);
-        shell::error_note(ui, s, error);
-    }
-    ui.add_space(16.0);
-    shell::note(
+    shell::note_box(
         ui,
         s,
-        "Mindmap never asks for a password here: set up your SSH key in a terminal first. It never uses sudo, agent forwarding, or copies your keys.",
+        shell::at(card, 24.0, 200.0, WIDTH - 48.0, 42.0),
+        "Never: sudo, passwords, agent forwarding, or copying your keys.",
+        false,
     );
-    let clicked = shell::footer(ui, s, &[("Cancel", false, true), ("Continue", true, true)]);
-    match clicked {
-        Some(0) => Some(Action::Close),
-        Some(1) => Some(Action::Continue),
+    match footer(ui, s, card, 300.0, Some(("Back", 70.0)), Some(("Start setup", 120.0, true))) {
+        (true, _) => Some(Action::Back),
+        (_, true) => Some(Action::Start),
         _ => None,
     }
 }
 
-fn review_step(state: &State, ui: &mut Ui, s: &shell::Skin) -> Option<Action> {
+fn setup_step(state: &State, ui: &mut Ui, s: &shell::Skin, card: Rect) -> Option<Action> {
     let name = state.machine_name();
-    shell::title(ui, s, &format!("Mindmap will do this on {name}"));
-    shell::body(ui, s, "One setup, no prompts after this.");
-    ui.add_space(20.0);
-    for line in ["Copy mindmap-node to ~/.local/bin", "Start it on 127.0.0.1:47822", "Install Herdr if it is missing (asks again)"] {
-        review_line(ui, s, line);
+    shell::eyebrow(ui, card, 22.0, "SETTING UP", s.accent);
+    shell::title(ui, s, card, 40.0, &format!("Connecting to {name}"), 22.0);
+    for (index, stage) in Stage::ALL.into_iter().enumerate() {
+        stage_line(ui, s, card, 86.0 + 26.0 * index as f32, stage, state);
     }
-    review_line(ui, s, &format!("Save {name} as a machine in Herdr"));
-    ui.add_space(18.0);
-    shell::note(ui, s, "Never: sudo, passwords, agent forwarding, or copying your keys.");
-    let clicked = shell::footer(ui, s, &[("Back", false, true), ("Start setup", true, true)]);
-    match clicked {
-        Some(0) => Some(Action::Back),
-        Some(1) => Some(Action::Start),
+    shell::note_box(
+        ui,
+        s,
+        shell::at(card, 24.0, 204.0, WIDTH - 48.0, 44.0),
+        "One SSH connection stays open; the node listens on loopback only.",
+        false,
+    );
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+    match footer(ui, s, card, 300.0, Some(("Cancel", 80.0)), None) {
+        (true, _) => Some(Action::Close),
         _ => None,
     }
 }
 
-fn review_line(ui: &mut Ui, s: &shell::Skin, text: &str) {
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(vec2(18.0, 24.0), Sense::hover());
-        ui.painter().circle_filled(pos2(rect.left() + 4.0, rect.center().y), 2.5, s.accent);
-        ui.add(egui::Label::new(RichText::new(text).font(regular(13.0)).color(s.text)).wrap());
-    });
-    ui.add_space(4.0);
-}
-
-fn setup_step(state: &State, ui: &mut Ui, s: &shell::Skin) -> Option<Action> {
-    let name = state.machine_name();
-    shell::title(ui, s, &format!("Connecting to {name}"));
-    shell::body(ui, s, "Mindmap copies, starts and checks its node over SSH. This can take a minute.");
-    ui.add_space(22.0);
-    for stage in Stage::ALL {
-        stage_line(ui, s, stage, state);
-    }
-    ui.add_space(18.0);
-    let clicked = shell::footer(ui, s, &[("Cancel", false, true)]);
-    match clicked {
-        Some(0) => Some(Action::Close),
-        _ => None,
-    }
-}
-
-fn stage_line(ui: &mut Ui, s: &shell::Skin, stage: Stage, state: &State) {
+/// One setup step: its mark, its name, and its word in the status column.
+fn stage_line(ui: &mut Ui, s: &shell::Skin, card: Rect, y: f32, stage: Stage, state: &State) {
     let status = state.stage_state(stage);
-    let color = match status {
-        StageState::Done => s.success,
-        StageState::Failed => s.danger,
-        StageState::Active | StageState::NeedsApproval => s.accent,
-        StageState::Waiting | StageState::Skipped => s.faint,
+    let (mark, color) = match status {
+        StageState::Done => (shell::Mark::Check, s.teal),
+        StageState::Active => (shell::Mark::Dot, s.teal),
+        StageState::Failed | StageState::NeedsApproval => (shell::Mark::Cross, s.accent),
+        StageState::Skipped => (shell::Mark::Dash, s.faint),
+        StageState::Waiting => (shell::Mark::Small, s.faint),
     };
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
-    let dot = pos2(rect.left() + 7.0, rect.center().y);
-    match status {
-        StageState::Done => {
-            let stroke = Stroke::new(1.6, color);
-            ui.painter().line_segment([pos2(dot.x - 4.0, dot.y), pos2(dot.x - 1.0, dot.y + 3.5)], stroke);
-            ui.painter().line_segment([pos2(dot.x - 1.0, dot.y + 3.5), pos2(dot.x + 4.5, dot.y - 4.0)], stroke);
-        }
-        StageState::Failed => {
-            let stroke = Stroke::new(1.6, color);
-            ui.painter().line_segment([pos2(dot.x - 4.0, dot.y - 4.0), pos2(dot.x + 4.0, dot.y + 4.0)], stroke);
-            ui.painter().line_segment([pos2(dot.x - 4.0, dot.y + 4.0), pos2(dot.x + 4.0, dot.y - 4.0)], stroke);
-        }
-        StageState::Skipped => {
-            ui.painter().line_segment([pos2(dot.x - 4.0, dot.y), pos2(dot.x + 4.0, dot.y)], Stroke::new(1.5, color));
-        }
-        StageState::Active | StageState::NeedsApproval => {
-            ui.painter().circle_stroke(dot, 4.0, Stroke::new(1.5, color));
-            ui.painter().circle_filled(dot, 1.6, color);
-        }
-        StageState::Waiting => {
-            ui.painter().circle_stroke(dot, 4.0, Stroke::new(1.0, color));
-        }
-    }
-    ui.painter().text(pos2(rect.left() + 20.0, rect.center().y), Align2::LEFT_CENTER, stage.label(), regular(12.5), s.text);
-    let status = state.stage_status(stage);
-    let status_w = shell::text_width(ui, status, semibold(10.5));
-    ui.painter().text(pos2(rect.right() - status_w - 2.0, rect.center().y), Align2::LEFT_CENTER, status, semibold(10.5), color);
+    shell::mark(ui, card, y, mark, color);
+    shell::row_text(ui, s, card, 44.0, y, stage.label());
+    shell::mono(ui, card.min + vec2(300.0, y + 1.0), state.stage_status(stage), 8.5, color);
 }
 
-fn attention_step(state: &State, ui: &mut Ui, s: &shell::Skin) -> Option<Action> {
+fn attention_step(state: &State, ui: &mut Ui, s: &shell::Skin, card: Rect) -> Option<Action> {
     let name = state.machine_name();
-    match &state.attention {
-        Some(Attention::HerdrMissing) => {
-            shell::title(ui, s, &format!("Herdr is missing on {name}"));
-            shell::body(ui, s, "Agents need Herdr. Install it now, or finish the setup and add it later.");
-            ui.add_space(18.0);
-            shell::note(ui, s, "Installing Herdr runs the machine's own package manager. Mindmap asks again before it does.");
-            let clicked = shell::footer(ui, s, &[("Cancel", false, true), ("Install Herdr", true, true)]);
-            match clicked {
-                Some(0) => Some(Action::Close),
-                Some(1) => Some(Action::Install),
-                _ => None,
-            }
-        }
-        Some(Attention::Update(reason)) => {
-            shell::title(ui, s, &format!("Update {name} first"));
-            shell::body(ui, s, "The machine runs another Mindmap node build. Select the host in the strip and approve Update node, then try again.");
-            ui.add_space(16.0);
-            shell::error_note(ui, s, reason);
-            let clicked = shell::footer(ui, s, &[("Cancel", false, true), ("Back", true, true)]);
-            match clicked {
-                Some(0) => Some(Action::Close),
-                Some(1) => Some(Action::Back),
-                _ => None,
-            }
-        }
-        Some(Attention::Error(error)) => {
-            shell::title(ui, s, &format!("Could not set up {name}"));
-            shell::body(ui, s, "The machine did not answer as the setup expected. Check its SSH access and try again.");
-            ui.add_space(16.0);
-            shell::error_note(ui, s, error);
-            let clicked = shell::footer(ui, s, &[("Cancel", false, true), ("Retry", true, true)]);
-            match clicked {
-                Some(0) => Some(Action::Close),
-                Some(1) => Some(Action::Retry),
-                _ => None,
-            }
-        }
-        None => {
-            shell::title(ui, s, &format!("Could not set up {name}"));
-            shell::body(ui, s, "The setup stopped. Close this and try again from the host strip.");
-            Some(Action::Close)
-        }
-    }
-}
-
-fn connected_step(state: &State, ui: &mut Ui, s: &shell::Skin) -> Option<Action> {
-    let name = state.machine_name();
-    shell::title(ui, s, &format!("{name} is ready"));
-    let line = match state.workspaces {
-        Some(count) => format!("{count} workspace{} · one SSH tunnel · saved as a machine in Herdr.", if count == 1 { "" } else { "s" }),
-        None => "One SSH tunnel · saved as a machine in Herdr.".to_string(),
+    shell::eyebrow(ui, card, 22.0, "NEEDS ATTENTION", s.accent);
+    let (title, body, warning, buttons) = match &state.attention {
+        Some(Attention::HerdrMissing) => (
+            format!("Herdr is missing on {name}"),
+            "Agents need Herdr. Install it now, or finish the setup and add it later.".to_string(),
+            "herdr server is not running · install it to reach this machine's agents".to_string(),
+            (("Cancel", 80.0), ("Install Herdr", 136.0), Action::Install),
+        ),
+        Some(Attention::Update(reason)) => (
+            format!("Update {name} first"),
+            "The machine runs another Mindmap node build. Select it in the sidebar and approve Update node, then try again.".to_string(),
+            reason.clone(),
+            (("Cancel", 80.0), ("Back", 100.0), Action::Back),
+        ),
+        Some(Attention::Error(error)) => (
+            format!("Could not reach {name}"),
+            "The setup stopped before the machine was ready. Check that SSH reaches it without a prompt, then retry.".to_string(),
+            error.clone(),
+            (("Cancel", 80.0), ("Retry", 100.0), Action::Retry),
+        ),
+        None => (
+            format!("Could not set up {name}"),
+            "The setup stopped. Close this and try again.".to_string(),
+            String::new(),
+            (("Cancel", 80.0), ("Back", 100.0), Action::Back),
+        ),
     };
-    shell::body(ui, s, &line);
-    ui.add_space(20.0);
-    machine_row(state, ui, s, &name);
-    if let Some(error) = &state.warning {
-        ui.add_space(12.0);
-        shell::error_note(ui, s, error);
+    shell::title(ui, s, card, 40.0, &title, 20.0);
+    shell::body(ui, s, card, 80.0, WIDTH - 48.0, &body);
+    if !warning.is_empty() {
+        shell::note_box(ui, s, shell::at(card, 24.0, 144.0, WIDTH - 48.0, 50.0), &warning, true);
     }
-    // This build has no helper that can hand a saved machine to a local Herdr, so the design's
-    // optional "Open in Herdr" button is hidden rather than faked.
-    let mut buttons = vec![("Done", true, true)];
-    if HAS_HERDR_OPENER {
-        buttons.insert(0, ("Open in Herdr", false, true));
-    }
-    let clicked = shell::footer(ui, s, &buttons);
-    match clicked {
-        Some(0) if HAS_HERDR_OPENER => Some(Action::Close),
-        Some(0) => Some(Action::Done),
-        Some(1) => Some(Action::Done),
+    let ((left, left_w), (right, right_w), then) = buttons;
+    match footer(ui, s, card, 300.0, Some((left, left_w)), Some((right, right_w, true))) {
+        (true, _) => Some(Action::Close),
+        (_, true) => Some(then),
         _ => None,
     }
 }
 
-/// Whether this build has a helper that opens a machine in a local Herdr window. It does not
-/// today; the Connected state hides the optional action instead of pretending it worked.
-const HAS_HERDR_OPENER: bool = false;
-
-fn machine_row(state: &State, ui: &mut Ui, s: &shell::Skin, name: &str) {
-    let mut address = format!("ssh:{}", state.target.trim());
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(host) = &state.host {
-        address = host.address.clone();
+fn connected_step(state: &State, ui: &mut Ui, s: &shell::Skin, card: Rect, extra: &Context) -> Option<Action> {
+    let name = state.machine_name();
+    shell::eyebrow(ui, card, 22.0, "CONNECTED", s.teal);
+    shell::title(ui, s, card, 40.0, &format!("{name} is ready"), 22.0);
+    let mut parts = Vec::new();
+    if let Some(count) = state.workspaces {
+        parts.push(format!("{count} workspace{}", if count == 1 { "" } else { "s" }));
     }
-    egui::Frame::NONE
-        .fill(s.field)
-        .stroke(Stroke::new(1.0, s.border))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(Margin::symmetric(14, 12))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(vec2(16.0, 22.0), Sense::hover());
-                ui.painter().circle_filled(pos2(rect.left() + 4.0, rect.center().y), 4.0, s.success);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(name).font(semibold(13.0)).color(s.text));
-                    ui.label(RichText::new(&address).font(FontId::monospace(10.5)).color(s.muted));
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("CONNECTED").font(FontId::monospace(9.5)).color(s.success));
-                });
-            });
-        });
+    parts.push("one SSH tunnel".to_string());
+    parts.push("saved as a machine in Herdr.".to_string());
+    shell::body(ui, s, card, 76.0, WIDTH - 48.0, &parts.join("  ·  "));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let address = state.host.as_ref().map_or_else(|| format!("ssh:{}", state.target.trim()), |host| host.address.clone());
+    #[cfg(target_arch = "wasm32")]
+    let address = format!("ssh:{}", state.target.trim());
+    let mut detail = vec![address];
+    detail.extend(extra.node.as_deref().map(|v| format!("node {}", short_version(v))));
+    let box_rect = shell::at(card, 24.0, 132.0, WIDTH - 48.0, 54.0);
+    ui.painter().rect_filled(box_rect, egui::CornerRadius::same(8), s.soft);
+    shell::text(ui, box_rect.min + vec2(12.0, 8.0), &name, crate::theme::semibold(12.0), s.text);
+    shell::mono(ui, box_rect.min + vec2(12.0, 28.0), &detail.join("  ·  "), 8.5, s.faint);
+    let toggle = shell::at(card, 396.0, 151.0, 30.0, 16.0);
+    let mut action = None;
+    if shell::toggle(ui, s, Id::new("machine_modal_listed"), toggle, extra.listed, "List its workspaces in the sidebar") {
+        action = Some(Action::Toggle);
+    }
+    if let Some(error) = &state.warning {
+        shell::mono_wrapped(ui, card, 24.0, 200.0, WIDTH - 48.0, error, 8.5, s.accent);
+    }
+    // This build has no helper that opens a machine in a local Herdr window, so the design's
+    // "Open Herdr" stays out rather than doing nothing.
+    match footer(ui, s, card, 300.0, None, Some(("Done", 100.0, true))) {
+        (_, true) => Some(Action::Done),
+        _ => action,
+    }
 }
 
-/// The modal's shared drawing pieces. The New workspace modal uses the same surface and controls.
-pub(crate) mod shell {
-    use super::*;
+/// `0.1.0` reads `0.1` on the cards.
+fn short_version(version: &str) -> String {
+    let parts: Vec<&str> = version.trim().split('.').collect();
+    match parts.as_slice() {
+        [major, minor, ..] => format!("{major}.{minor}"),
+        _ => version.trim().to_string(),
+    }
+}
 
-    /// The modal's colours, all from [`Tokens`].
+/// The hosts `~/.ssh/config` names: each `Host` alias without wildcards, with its user and address.
+pub mod ssh_config {
+    /// One host the config names.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct SshHost {
+        pub alias: String,
+        pub user: Option<String>,
+        pub hostname: Option<String>,
+    }
+
+    impl SshHost {
+        /// `root@100.104.9.15  ·  ~/.ssh/config`
+        pub fn detail(&self) -> String {
+            let host = self.hostname.clone().unwrap_or_else(|| self.alias.clone());
+            let target = match &self.user {
+                Some(user) => format!("{user}@{host}"),
+                None => host,
+            };
+            format!("{target}  ·  ~/.ssh/config")
+        }
+    }
+
+    /// The most hosts the list shows.
+    const MAX_HOSTS: usize = 64;
+
+    /// Read `~/.ssh/config` and the files its `Include` lines name (one level, `*` allowed).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read() -> Vec<SshHost> {
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else { return Vec::new() };
+        let dir = home.join(".ssh");
+        let Ok(text) = std::fs::read_to_string(dir.join("config")) else { return Vec::new() };
+        let mut text = text;
+        for include in includes(&text) {
+            for path in expand(&dir, &home, &include).into_iter().take(32) {
+                if let Ok(more) = std::fs::read_to_string(path) {
+                    text.push('\n');
+                    text.push_str(&more);
+                }
+            }
+        }
+        parse(&text)
+    }
+
+    /// The `Include` patterns in `text`.
+    pub fn includes(text: &str) -> Vec<String> {
+        text.lines()
+            .filter_map(|line| {
+                let (key, value) = split(line)?;
+                key.eq_ignore_ascii_case("include").then(|| value.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+            })
+            .flatten()
+            .take(16)
+            .collect()
+    }
+
+    /// The files an `Include` pattern names: relative to `~/.ssh`, `~` expanded, one `*` matched.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn expand(dir: &std::path::Path, home: &std::path::Path, pattern: &str) -> Vec<std::path::PathBuf> {
+        let path = if let Some(rest) = pattern.strip_prefix("~/") {
+            home.join(rest)
+        } else if pattern.starts_with('/') {
+            std::path::PathBuf::from(pattern)
+        } else {
+            dir.join(pattern)
+        };
+        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else { return Vec::new() };
+        let Some((prefix, suffix)) = name.split_once('*') else { return vec![path] };
+        let Some(parent) = path.parent() else { return Vec::new() };
+        let Ok(entries) = std::fs::read_dir(parent) else { return Vec::new() };
+        let mut found: Vec<_> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(prefix) && n.ends_with(suffix)) && p.is_file())
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// `Key value` or `Key=value`, comments and blanks skipped.
+    fn split(line: &str) -> Option<(&str, &str)> {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let at = line.find(|c: char| c.is_whitespace() || c == '=')?;
+        let (key, rest) = line.split_at(at);
+        let value = rest.trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim();
+        Some((key, value.trim_matches('"')))
+    }
+
+    /// The concrete hosts in a config's text, in order, without duplicates.
+    pub fn parse(text: &str) -> Vec<SshHost> {
+        let mut hosts: Vec<SshHost> = Vec::new();
+        // The hosts the current `Host` block applies to (indexes into `hosts`).
+        let mut block: Vec<usize> = Vec::new();
+        for line in text.lines() {
+            let Some((key, value)) = split(line) else { continue };
+            if key.eq_ignore_ascii_case("host") {
+                block.clear();
+                for alias in value.split_whitespace() {
+                    let concrete = !alias.contains(['*', '?', '!']) && alias.chars().all(|c| c.is_ascii_alphanumeric() || "._-@".contains(c));
+                    if !concrete {
+                        continue;
+                    }
+                    match hosts.iter().position(|h| h.alias == alias) {
+                        Some(index) => block.push(index),
+                        None if hosts.len() < MAX_HOSTS => {
+                            hosts.push(SshHost { alias: alias.to_string(), ..SshHost::default() });
+                            block.push(hosts.len() - 1);
+                        }
+                        None => {}
+                    }
+                }
+            } else if key.eq_ignore_ascii_case("match") {
+                block.clear();
+            } else if key.eq_ignore_ascii_case("hostname") || key.eq_ignore_ascii_case("user") {
+                let hostname = key.eq_ignore_ascii_case("hostname");
+                for &index in &block {
+                    if let Some(host) = hosts.get_mut(index) {
+                        // ssh uses the first value it sees for each option.
+                        let slot = if hostname { &mut host.hostname } else { &mut host.user };
+                        if slot.is_none() && !value.is_empty() {
+                            *slot = Some(value.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        hosts
+    }
+}
+
+/// The cards' shared drawing pieces: the New workspace sheet uses the same surface and controls.
+/// Everything is placed at the design's offsets from the card's top-left corner.
+pub(crate) mod shell {
+    use egui::text::{LayoutJob, TextFormat};
+    use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Id, Margin, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+
+    use crate::a11y;
+    use crate::theme::{Tokens, regular, semibold};
+
+    /// The cards' colours: the map design's inks on light, the theme's surfaces on dark.
     pub(crate) struct Skin {
         pub(crate) panel: Color32,
         pub(crate) text: Color32,
         pub(crate) muted: Color32,
         pub(crate) faint: Color32,
         pub(crate) border: Color32,
-        pub(crate) border_strong: Color32,
-        pub(crate) accent: Color32,
-        pub(crate) accent_hover: Color32,
+        /// The selected row, the notes and the machine card.
+        pub(crate) soft: Color32,
+        /// Hover on a quiet row or button.
         pub(crate) hover: Color32,
-        pub(crate) field: Color32,
-        pub(crate) danger: Color32,
-        pub(crate) success: Color32,
+        pub(crate) accent: Color32,
+        pub(crate) teal: Color32,
+        /// The dark primary button and its label.
+        pub(crate) ink: Color32,
+        pub(crate) ink_hover: Color32,
+        pub(crate) on_ink: Color32,
+        pub(crate) warn_fill: Color32,
+        pub(crate) warn_stroke: Color32,
         pub(crate) shadow: Color32,
         pub(crate) focus: Color32,
     }
 
     impl Skin {
         pub(crate) fn of(t: &Tokens) -> Self {
-            Self {
-                panel: t.panel,
-                text: t.text,
-                muted: t.text_secondary,
-                faint: t.text_tertiary,
-                border: t.border,
-                border_strong: t.border_strong,
-                accent: t.accent,
-                accent_hover: t.accent_hover,
-                hover: t.hover,
-                field: t.field,
-                danger: t.danger,
-                success: t.success,
-                shadow: t.shadow,
-                focus: t.focus,
+            if t.dark {
+                let accent = Color32::from_rgb(0xD9, 0x7A, 0x5F);
+                Self {
+                    panel: t.panel,
+                    text: t.text,
+                    muted: t.text_secondary,
+                    faint: t.text_tertiary,
+                    border: t.border,
+                    soft: t.hover,
+                    hover: t.hover,
+                    accent,
+                    teal: Color32::from_rgb(0x7F, 0xBD, 0xB5),
+                    ink: Color32::from_rgb(0xEC, 0xEA, 0xE6),
+                    ink_hover: Color32::WHITE,
+                    on_ink: Color32::from_rgb(0x1A, 0x1A, 0x1A),
+                    warn_fill: with_alpha(accent, 24),
+                    warn_stroke: with_alpha(accent, 90),
+                    shadow: t.shadow,
+                    focus: t.focus,
+                }
+            } else {
+                Self {
+                    panel: Color32::WHITE,
+                    text: Color32::from_rgb(0x1A, 0x1A, 0x1A),
+                    muted: Color32::from_rgb(0x6E, 0x6C, 0x68),
+                    faint: Color32::from_rgb(0x9A, 0x96, 0x8F),
+                    border: Color32::from_rgb(0xE3, 0xE2, 0xDF),
+                    soft: Color32::from_rgb(0xF1, 0xF0, 0xED),
+                    hover: Color32::from_rgb(0xF7, 0xF6, 0xF3),
+                    accent: Color32::from_rgb(0xB5, 0x45, 0x2F),
+                    teal: Color32::from_rgb(0x2F, 0x6F, 0x6A),
+                    ink: Color32::from_rgb(0x1A, 0x1A, 0x1A),
+                    ink_hover: Color32::from_rgb(0x33, 0x33, 0x33),
+                    on_ink: Color32::WHITE,
+                    warn_fill: Color32::from_rgb(0xFB, 0xF4, 0xF1),
+                    warn_stroke: Color32::from_rgb(0xE8, 0xD5, 0xCE),
+                    shadow: t.shadow,
+                    focus: t.focus,
+                }
             }
         }
     }
 
-    /// The dimmed backdrop behind the modal.
+    /// The dimmed backdrop behind the card.
     pub(crate) fn scrim(t: &Tokens) -> Color32 {
-        Color32::from_black_alpha(if t.dark { 130 } else { 80 })
+        Color32::from_black_alpha(if t.dark { 130 } else { 70 })
     }
 
-    /// The white (or dark) modal surface: the theme's panel colour, rounded, lifted.
+    /// The card: white, a hairline border, 12 pt corners, lifted off the scrim. No padding: the
+    /// content is placed at the design's offsets.
     pub(crate) fn surface(s: &Skin) -> egui::Frame {
         egui::Frame::NONE
             .fill(s.panel)
             .stroke(Stroke::new(1.0, s.border))
-            .corner_radius(CornerRadius::same(14))
-            .shadow(egui::epaint::Shadow { offset: [0, 18], blur: 48, spread: 0, color: s.shadow })
-            .inner_margin(Margin::same(28))
+            .corner_radius(CornerRadius::same(12))
+            .shadow(egui::epaint::Shadow { offset: [0, 16], blur: 40, spread: 0, color: s.shadow })
+            .inner_margin(Margin::ZERO)
     }
 
-    /// The eyebrow line and the close button. True when the close button was clicked.
-    pub(crate) fn header(ui: &mut Ui, s: &Skin, eyebrow: &str, note: &str) -> bool {
-        let mut close = false;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(eyebrow).font(FontId::monospace(9.5)).color(s.accent));
-            ui.add_space(10.0);
-            ui.label(RichText::new(note).font(FontId::monospace(9.0)).color(s.faint));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let response = ui.add(egui::Button::new(RichText::new("×").font(regular(17.0)).color(s.muted)).frame(false));
-                a11y::button(&response, "Close");
-                if response.clicked() {
-                    close = true;
-                }
-            });
-        });
-        close
+    /// Claim the card's area (shrunk to fit a small window) and return it.
+    pub(crate) fn card(ui: &mut Ui, width: f32, height: f32) -> Rect {
+        let room = ui.ctx().content_rect().size() - vec2(24.0, 24.0);
+        let size = vec2(width.min(room.x.max(240.0)), height.min(room.y.max(200.0)));
+        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        rect
     }
 
-    pub(crate) fn title(ui: &mut Ui, s: &Skin, text: &str) {
-        ui.add(egui::Label::new(RichText::new(text).font(semibold(27.0)).color(s.text)).wrap());
+    /// The rect at `(x, y)` from the card's corner.
+    pub(crate) fn at(card: Rect, x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect::from_min_size(card.min + vec2(x, y), vec2(width, height))
     }
 
-    pub(crate) fn body(ui: &mut Ui, s: &Skin, text: &str) {
-        ui.add_space(8.0);
-        ui.add(egui::Label::new(RichText::new(text).font(regular(13.0)).color(s.muted)).wrap());
+    pub(crate) fn text(ui: &Ui, pos: Pos2, text: &str, font: FontId, color: Color32) {
+        ui.painter().text(pos, Align2::LEFT_TOP, text, font, color);
     }
 
-    /// A bordered aside for the "never" promises and other quiet notes.
-    pub(crate) fn note(ui: &mut Ui, s: &Skin, text: &str) {
-        egui::Frame::NONE.fill(s.hover).corner_radius(CornerRadius::same(6)).inner_margin(Margin::symmetric(12, 10)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.add(egui::Label::new(RichText::new(text).font(regular(11.5)).color(s.muted)).wrap());
-        });
+    pub(crate) fn mono(ui: &Ui, pos: Pos2, text: &str, size: f32, color: Color32) {
+        ui.painter().text(pos, Align2::LEFT_TOP, text, FontId::monospace(size), color);
     }
 
-    /// An error the person can read, not infer.
-    pub(crate) fn error_note(ui: &mut Ui, s: &Skin, text: &str) {
-        egui::Frame::NONE
-            .fill(with_alpha(s.danger, 18))
-            .stroke(Stroke::new(1.0, with_alpha(s.danger, 90)))
-            .corner_radius(CornerRadius::same(6))
-            .inner_margin(Margin::symmetric(12, 10))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(text).font(regular(12.0)).color(s.danger)).wrap());
-            });
+    /// Mono text wrapped to `width`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mono_wrapped(ui: &Ui, card: Rect, x: f32, y: f32, width: f32, text: &str, size: f32, color: Color32) {
+        let galley = ui.painter().layout(text.to_string(), FontId::monospace(size), color, width);
+        ui.painter().galley(card.min + vec2(x, y), galley, color);
     }
 
-    /// A labelled single-line field; true when the text changed.
-    pub(crate) fn field(ui: &mut Ui, s: &Skin, label: &str, hint: &str, value: &mut String) -> bool {
-        ui.label(RichText::new(label).font(regular(11.0)).color(s.muted));
-        ui.add_space(5.0);
-        let response = ui.add(
-            egui::TextEdit::singleline(value)
-                .font(regular(13.0))
-                .hint_text(RichText::new(hint).color(s.faint))
-                .desired_width(ui.available_width())
-                .frame(egui::Frame::NONE.fill(s.field).stroke(Stroke::new(1.0, s.border)).corner_radius(CornerRadius::same(6)))
-                .margin(Margin::symmetric(10, 8)),
-        );
-        response.changed()
+    /// The red mono eyebrow over the title.
+    pub(crate) fn eyebrow(ui: &Ui, card: Rect, y: f32, text: &str, color: Color32) {
+        mono(ui, card.min + vec2(24.0, y), text, 9.0, color);
     }
 
-    /// The footer's buttons, right aligned. Returns the index of the button clicked.
-    pub(crate) fn footer(ui: &mut Ui, s: &Skin, buttons: &[(&str, bool, bool)]) -> Option<usize> {
-        divider(ui, s);
-        ui.add_space(16.0);
-        let mut clicked = None;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            for (index, (label, primary, enabled)) in buttons.iter().enumerate().rev() {
-                if button(ui, s, label, *primary, *enabled) {
-                    clicked = Some(index);
-                }
-                ui.add_space(8.0);
+    /// A field's or a list's mono label (HOSTS, MACHINE, FOLDER…).
+    pub(crate) fn label(ui: &Ui, s: &Skin, card: Rect, y: f32, text: &str) {
+        mono(ui, card.min + vec2(24.0, y), text, 8.5, s.muted);
+    }
+
+    /// The serif title. The design's box tops sit a few points above the glyphs.
+    pub(crate) fn title(ui: &Ui, s: &Skin, card: Rect, y: f32, text: &str, size: f32) {
+        let font = serif(ui.ctx(), size);
+        let galley = ui.painter().layout(text.to_string(), font, s.text, card.width() - 48.0);
+        ui.painter().galley(card.min + vec2(24.0, y - 4.0), galley, s.text);
+    }
+
+    /// Body copy: Inter 11 on a 16 pt line, wrapped to `width`.
+    pub(crate) fn body(ui: &Ui, s: &Skin, card: Rect, y: f32, width: f32, text: &str) {
+        let mut job = LayoutJob::default();
+        job.wrap.max_width = width;
+        job.append(text, 0.0, TextFormat { font_id: regular(11.0), color: s.muted, line_height: Some(16.0), ..TextFormat::default() });
+        let galley = ui.painter().layout_job(job);
+        ui.painter().galley(card.min + vec2(24.0, y), galley, s.muted);
+    }
+
+    /// A step or check row's text.
+    pub(crate) fn row_text(ui: &Ui, s: &Skin, card: Rect, x: f32, y: f32, text: &str) {
+        let room = card.width() - x - 24.0;
+        let galley = ui.painter().layout(text.to_string(), regular(10.5), s.text, room);
+        ui.painter().galley(card.min + vec2(x, y), galley, s.text);
+    }
+
+    /// The mark at the start of a check or step row.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Mark {
+        Check,
+        Dot,
+        Small,
+        Dash,
+        Cross,
+    }
+
+    /// Draw `mark` in the 14 pt column at x = 24; drawn, so it never depends on a font's glyphs.
+    pub(crate) fn mark(ui: &Ui, card: Rect, y: f32, mark: Mark, color: Color32) {
+        let c = card.min + vec2(28.0, y + 6.5);
+        let painter = ui.painter();
+        match mark {
+            Mark::Check => {
+                let stroke = Stroke::new(1.4, color);
+                painter.line_segment([pos2(c.x - 3.5, c.y), pos2(c.x - 1.0, c.y + 3.0)], stroke);
+                painter.line_segment([pos2(c.x - 1.0, c.y + 3.0), pos2(c.x + 4.0, c.y - 3.5)], stroke);
             }
-        });
-        clicked
-    }
-
-    fn button(ui: &mut Ui, s: &Skin, label: &str, primary: bool, enabled: bool) -> bool {
-        let font = semibold(12.0);
-        let width = text_width(ui, label, font.clone()) + 30.0;
-        let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), if enabled { Sense::click() } else { Sense::hover() });
-        a11y::button(&response, label);
-        let hot = enabled && (response.hovered() || response.has_focus());
-        if primary {
-            let fill = if !enabled {
-                s.hover
-            } else if hot {
-                s.accent_hover
-            } else {
-                s.accent
-            };
-            ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-        } else {
-            if hot {
-                ui.painter().rect_filled(rect, CornerRadius::same(6), s.hover);
+            Mark::Dot => {
+                painter.circle_filled(c, 2.5, color);
             }
-            let border = if !enabled {
-                s.border
-            } else if hot {
-                s.accent
-            } else {
-                s.border_strong
-            };
-            ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, border), StrokeKind::Inside);
+            Mark::Small => {
+                painter.circle_filled(c, 1.2, color);
+            }
+            Mark::Dash => {
+                painter.line_segment([pos2(c.x - 3.0, c.y), pos2(c.x + 3.0, c.y)], Stroke::new(1.3, color));
+            }
+            Mark::Cross => {
+                let stroke = Stroke::new(1.4, color);
+                painter.line_segment([pos2(c.x - 3.0, c.y - 3.0), pos2(c.x + 3.0, c.y + 3.0)], stroke);
+                painter.line_segment([pos2(c.x - 3.0, c.y + 3.0), pos2(c.x + 3.0, c.y - 3.0)], stroke);
+            }
         }
-        let ink = if !enabled {
-            s.faint
-        } else if primary {
-            Color32::WHITE
-        } else if hot {
-            s.accent
-        } else {
-            s.text
+    }
+
+    /// A rounded note: soft and muted, or (`warn`) the pale red box with accent text.
+    pub(crate) fn note_box(ui: &Ui, s: &Skin, rect: Rect, text: &str, warn: bool) {
+        let (fill, ink) = if warn { (s.warn_fill, s.accent) } else { (s.soft, s.muted) };
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+        if warn {
+            ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, s.warn_stroke), StrokeKind::Inside);
+        }
+        let galley = ui.painter().layout(text.to_string(), FontId::monospace(8.5), ink, rect.width() - 24.0);
+        ui.painter().with_clip_rect(rect).galley(rect.min + vec2(12.0, if warn { 10.0 } else { 8.0 }), galley, ink);
+    }
+
+    /// One host in a pick list: name over its address, the picked one shaded with a check.
+    pub(crate) fn host_row(ui: &mut Ui, s: &Skin, name: &str, detail: &str, selected: bool) -> bool {
+        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+        a11y::button(&response, name);
+        let hot = response.hovered() || response.has_focus();
+        if selected || hot {
+            ui.painter().rect_filled(rect, CornerRadius::same(6), if selected { s.soft } else { s.hover });
+        }
+        text(ui, rect.min + vec2(10.0, 2.0), name, semibold(11.0), s.text);
+        mono(ui, rect.min + vec2(10.0, 16.0), detail, 8.0, s.faint);
+        if selected {
+            let c = pos2(rect.max.x - 22.0, rect.center().y);
+            let stroke = Stroke::new(1.4, s.teal);
+            ui.painter().line_segment([pos2(c.x - 3.5, c.y), pos2(c.x - 1.0, c.y + 3.0)], stroke);
+            ui.painter().line_segment([pos2(c.x - 1.0, c.y + 3.0), pos2(c.x + 4.0, c.y - 3.5)], stroke);
+        }
+        response.clicked()
+    }
+
+    /// What a field's text is set in.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) enum FieldFont {
+        Mono(f32),
+        Inter(f32),
+    }
+
+    /// A bordered single-line field at `rect`; true when the text changed.
+    pub(crate) fn field(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, value: &mut String, hint: &str, font: FieldFont) -> bool {
+        field_response(ui, s, id, rect, value, hint, font, false).changed()
+    }
+
+    /// [`field`] returning the whole response; `invalid` draws the border in the accent.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn field_response(
+        ui: &mut Ui,
+        s: &Skin,
+        id: Id,
+        rect: Rect,
+        value: &mut String,
+        hint: &str,
+        font: FieldFont,
+        invalid: bool,
+    ) -> Response {
+        let font = match font {
+            FieldFont::Mono(size) => FontId::monospace(size),
+            FieldFont::Inter(size) => regular(size),
         };
-        ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, ink);
+        ui.painter().rect_filled(rect, CornerRadius::same(6), s.panel);
+        let inner = rect.shrink2(vec2(12.0, 0.0));
+        let response = ui.put(
+            inner,
+            egui::TextEdit::singleline(value)
+                .id(id)
+                .font(font.clone())
+                .text_color(s.text)
+                .hint_text(egui::RichText::new(hint).font(font).color(s.faint))
+                .frame(egui::Frame::NONE)
+                .margin(Margin::ZERO)
+                .vertical_align(egui::Align::Center)
+                .desired_width(inner.width()),
+        );
+        let border = if invalid {
+            s.accent
+        } else if response.has_focus() {
+            s.muted
+        } else {
+            s.border
+        };
+        ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, border), StrokeKind::Inside);
+        response
+    }
+
+    /// A quiet text button (Cancel, Back): the label 10 pt in, a soft fill on hover.
+    pub(crate) fn quiet_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str) -> bool {
+        let response = ui.interact(rect, id, Sense::click());
+        a11y::button(&response, label);
+        if response.hovered() {
+            ui.painter().rect_filled(rect, CornerRadius::same(6), s.hover);
+        }
+        text(ui, rect.min + vec2(10.0, 8.0), label, semibold(10.5), s.text);
+        focus(ui, s, rect, &response);
+        response.clicked()
+    }
+
+    /// The dark primary button's width: the design's, or wider for a longer label.
+    pub(crate) fn primary_width(ui: &Ui, label: &str, design: f32) -> f32 {
+        design.max(text_width(ui, label, semibold(10.5)) + 24.0)
+    }
+
+    /// The dark primary button: the label 10 pt in, white on near-black.
+    pub(crate) fn primary_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
+        let response = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
+        a11y::button(&response, label);
+        let fill = if !enabled {
+            s.soft
+        } else if response.hovered() {
+            s.ink_hover
+        } else {
+            s.ink
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+        text(ui, rect.min + vec2(10.0, 8.0), label, semibold(10.5), if enabled { s.on_ink } else { s.faint });
+        focus(ui, s, rect, &response);
+        enabled && response.clicked()
+    }
+
+    /// The small on/off switch of the Connected card.
+    pub(crate) fn toggle(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, on: bool, label: &str) -> bool {
+        let response = ui.interact(rect, id, Sense::click());
+        a11y::button(&response, label);
+        let response = response.on_hover_text(label);
+        ui.painter().rect_filled(rect, CornerRadius::same(8), if on { s.teal } else { s.border });
+        let knob = if on { rect.right_center() - vec2(8.0, 0.0) } else { rect.left_center() + vec2(8.0, 0.0) };
+        ui.painter().circle_filled(knob, 6.0, Color32::WHITE);
+        focus(ui, s, rect, &response);
+        response.clicked()
+    }
+
+    fn focus(ui: &Ui, s: &Skin, rect: Rect, response: &Response) {
         if response.has_focus() {
             ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(2.0, s.focus), StrokeKind::Outside);
         }
-        response.clicked() && enabled
-    }
-
-    pub(crate) fn divider(ui: &mut Ui, s: &Skin) {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-        ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, s.border));
     }
 
     pub(crate) fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
@@ -992,6 +1325,45 @@ pub(crate) mod shell {
 
     pub(crate) fn with_alpha(color: Color32, alpha: u8) -> Color32 {
         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+    }
+
+    /// The family name the serif title face is registered under.
+    const SERIF: &str = "mindmap-serif";
+
+    /// The titles' serif (Charter, as designed, or the nearest serif the system has). Until the
+    /// face is registered, and where none exists, the title falls back to Inter.
+    pub(crate) fn serif(ctx: &egui::Context, size: f32) -> FontId {
+        let family = FontFamily::Name(SERIF.into());
+        if ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family)) {
+            return FontId::new(size, family);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(data) = serif_face() {
+            ctx.add_font(egui::epaint::text::FontInsert::new(
+                SERIF,
+                data.clone(),
+                vec![egui::epaint::text::InsertFontFamily { family, priority: egui::epaint::text::FontPriority::Highest }],
+            ));
+        }
+        regular(size)
+    }
+
+    /// The first serif family the system has, read once.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serif_face() -> Option<&'static egui::FontData> {
+        static FACE: std::sync::OnceLock<Option<egui::FontData>> = std::sync::OnceLock::new();
+        FACE.get_or_init(|| {
+            const FAMILIES: [&str; 8] =
+                ["Charter", "Iowan Old Style", "Georgia", "New York", "Source Serif 4", "Noto Serif", "DejaVu Serif", "Liberation Serif"];
+            FAMILIES.iter().find_map(|family| {
+                if !figcraft_text::has_family(family) {
+                    return None;
+                }
+                let face = figcraft_text::find_face(family, "Regular")?;
+                face.family.eq_ignore_ascii_case(family).then(|| crate::theme::font_data(&face))
+            })
+        })
+        .as_ref()
     }
 }
 
@@ -1135,7 +1507,47 @@ mod tests {
         state.begin();
         assert!(state.open);
         assert_eq!(state.step, Step::Add);
-        assert!(state.target.is_empty());
+        // The first host in ~/.ssh/config is picked, as the design shows; none, nothing.
+        assert_eq!(state.target, state.hosts.first().map(|host| host.alias.clone()).unwrap_or_default());
+        assert!(state.manual.is_empty());
         assert!(state.attention.is_none());
+    }
+
+    #[test]
+    fn picking_a_host_and_typing_one_set_the_target() {
+        let mut state = State::default();
+        state.begin();
+        state.pick("studio");
+        assert_eq!(state.target, "studio");
+        assert_eq!(state.machine_name(), "studio");
+        state.manual = "alice@work.example".into();
+        state.typed();
+        assert_eq!(state.target, "alice@work.example");
+        assert_eq!(state.machine_name(), "alice@work.example");
+        state.manual.clear();
+        state.typed();
+        assert_eq!(state.target, "studio");
+    }
+
+    #[test]
+    fn ssh_config_lists_concrete_hosts_with_their_user_and_address() {
+        let text = "# work\nHost befree box\n  HostName 100.104.9.15\n  User root\n  User ignored\nHost *.internal !bad\n  User nobody\nHost=studio\n\tHostname=studio.local\nMatch host x\n  User skipped\nInclude config.d/*\nHost befree\n  HostName later.example\n";
+        let hosts = ssh_config::parse(text);
+        let aliases: Vec<&str> = hosts.iter().map(|h| h.alias.as_str()).collect();
+        assert_eq!(aliases, ["befree", "box", "studio"]);
+        assert_eq!(hosts[0].user.as_deref(), Some("root"));
+        assert_eq!(hosts[0].hostname.as_deref(), Some("100.104.9.15"));
+        assert_eq!(hosts[0].detail(), "root@100.104.9.15  ·  ~/.ssh/config");
+        assert_eq!(hosts[2].hostname.as_deref(), Some("studio.local"));
+        assert_eq!(hosts[2].user, None);
+        assert_eq!(hosts[2].detail(), "studio.local  ·  ~/.ssh/config");
+        assert_eq!(ssh_config::includes(text), ["config.d/*"]);
+        assert!(ssh_config::parse("Host *\n User x\n").is_empty());
+    }
+
+    #[test]
+    fn versions_read_major_and_minor() {
+        assert_eq!(short_version("0.1.0"), "0.1");
+        assert_eq!(short_version("2"), "2");
     }
 }

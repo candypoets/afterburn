@@ -1624,7 +1624,10 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     }
     if run {
         app.ws.picker_open = false;
-        app.ws.act(&ctx, &w.id, init);
+        // An agent Herdr reports as working gets no second prompt: the busy card asks instead.
+        if !(init && crate::new_workspace::guard_init(app, &w.id)) {
+            app.ws.act(&ctx, &w.id, init);
+        }
     } else if init
         && app.ws.picker_open
         && let Some(anchor) = anchor
