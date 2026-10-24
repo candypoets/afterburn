@@ -25,8 +25,6 @@ const DEFAULT_SERVICE: &str = "127.0.0.1:47822";
 
 /// The list's width (the detail gets the rest of the window).
 const SIDEBAR: f32 = 340.0;
-/// The thin bar at the top of the window.
-const HEADER_H: f32 = 52.0;
 /// One workspace row.
 const ROW_H: f32 = 76.0;
 /// The Init split button's height and the chevron segment's width.
@@ -367,6 +365,8 @@ pub struct State {
     events_at: f64,
     /// The selected workspace id (its detail shows on the right).
     pub selected: Option<String>,
+    /// The selected machine's workspaces are folded away under its row.
+    pub collapsed: bool,
     /// The last error, shown in muted red with a Retry.
     pub error: Option<String>,
     /// The request in flight, if any.
@@ -697,9 +697,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(skin.bg)).show(ui, |ui| {
         let rect = ui.max_rect();
-        let head = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER_H.min(rect.height())));
-        let body = Rect::from_min_max(pos2(rect.min.x, head.max.y), rect.max);
-        header(app, ui, &skin, head);
+        let body = rect;
         // The list keeps its width; the detail takes the rest, but never less than 320 px.
         let side = SIDEBAR.min((body.width() - 320.0).max(240.0));
         let list = Rect::from_min_size(body.min, vec2(side, body.height()));
@@ -730,17 +728,9 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     }
     let skin = Skin::of(&Tokens::get(&ctx));
     ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, skin.panel);
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        ui.add_space(8.0);
-        machines(app, ui, &skin);
-    }
-    let active = app.active_workspace.clone();
     let rows = app.ws.rows.clone();
     let groups = grouped(&rows);
-    let busy = app.ws.busy.is_some();
     let error = app.ws.error.clone();
-    let current = active.as_deref();
 
     ui.add_space(12.0);
     ui.horizontal(|ui| {
@@ -759,38 +749,11 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
         .line_segment([ui.max_rect().left_top() + vec2(0.0, 34.0), ui.max_rect().right_top() + vec2(0.0, 34.0)], Stroke::new(1.0, skin.border));
 
     egui::ScrollArea::vertical().id_salt("workspace_pane_scroll").show(ui, |ui| {
-        if new_workspace_row(ui, &skin) {
-            crate::new_workspace::open(app);
-        }
-        let mut chosen = None;
-        for (base, branches) in &groups {
-            let is_active = current.is_some_and(|id| branches.iter().any(|b| b.id == id));
-            let is_busy = busy && app.ws.selected.as_deref() == Some(base.id.as_str());
-            if let Some(choice) = row(ui, &skin, base, is_active, is_busy) {
-                chosen = Some(choice);
-            }
-        }
-        if let Some(choice) = chosen {
-            match choice {
-                Chosen::Select(id) => {
-                    let kind = rows.iter().find(|w| w.id == id).map(|w| w.map_state());
-                    if kind == Some(MapState::Map) {
-                        app.ws.act(&ctx, &id, false);
-                    } else {
-                        app.ws.select(&id);
-                        app.ui.home = true;
-                    }
-                }
-                Chosen::Act { workspace, init } => {
-                    if init {
-                        app.ws.select(&workspace);
-                        app.ui.home = true;
-                    } else {
-                        app.ws.act(&ctx, &workspace, false);
-                    }
-                }
-            }
-        }
+        ui.spacing_mut().item_spacing.y = 0.0;
+        #[cfg(not(target_arch = "wasm32"))]
+        machine_list(app, ui, &skin, &ctx);
+        #[cfg(target_arch = "wasm32")]
+        flat_list(app, ui, &skin, &ctx);
     });
 
     let foot = egui::Rect::from_min_size(pos2(ui.max_rect().left(), ui.max_rect().bottom() - 56.0), vec2(ui.max_rect().width(), 56.0));
@@ -936,47 +899,6 @@ pub fn poll_node_events(app: &mut FigApp, ctx: &egui::Context) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// The machines block at the top of the Workspaces sidebar: the saved machines, what setup is
-/// doing, and the way to add or manage one. Adding a machine lives in the machine modal; the
-/// SSH target is never typed into a page header.
-#[cfg(not(target_arch = "wasm32"))]
-fn machines(app: &mut FigApp, ui: &mut Ui, s: &Skin) {
-    if app.ws.pending_live.is_some() {
-        ui.label("Joining the workspace\u{2026}");
-        return;
-    }
-    ui.horizontal(|ui| {
-        ui.add_space(12.0);
-        eyebrow(ui, s, "MACHINES");
-    });
-    let ready = crate::node_hosts::poll(&mut app.ws.hosts);
-    ui.horizontal(|ui| {
-        ui.add_space(12.0);
-        ui.vertical(|ui| crate::node_hosts::chips(ui, &mut app.ws.hosts));
-    });
-    ui.horizontal(|ui| {
-        ui.add_space(12.0);
-        let manage = ui.add(egui::Button::new(egui::RichText::new("Manage machines\u{2026}").font(regular(10.0)).color(s.muted)).frame(false));
-        a11y::link(&manage, "Manage machines");
-        if manage.clicked() {
-            crate::machine_modal::open(app);
-        }
-        ui.add_space(8.0);
-        let add = ui.add(egui::Button::new(egui::RichText::new("+ Add machine").font(semibold(10.0)).color(s.accent)).frame(false));
-        a11y::link(&add, "Add machine");
-        if add.clicked() {
-            crate::machine_modal::open(app);
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.add_space(12.0);
-        ui.vertical(|ui| crate::node_hosts::status(ui, &mut app.ws.hosts));
-    });
-    if let Some(host) = ready {
-        use_host(app, ui.ctx(), &host);
-    }
-}
-
 /// Use `host` on the Workspaces screen: drop the old host's answers and list its workspaces.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn use_host(app: &mut FigApp, ctx: &egui::Context, host: &crate::node_hosts::Host) {
@@ -992,44 +914,6 @@ pub(crate) fn use_host(app: &mut FigApp, ctx: &egui::Context, host: &crate::node
     app.ws.join_workspace = None;
     app.ws.hosts.selected = Some(host.clone());
     app.ws.refresh(ctx);
-}
-
-fn header(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
-    let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::ZERO, s.panel);
-    p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, s.border));
-    let y = rect.center().y;
-    let x = rect.min.x + 24.0;
-    p.text(pos2(x, y), Align2::LEFT_CENTER, "Mindmap", semibold(13.0), s.text);
-    let word = text_width(ui, "Mindmap", semibold(13.0));
-    p.text(pos2(x + word + 8.0, y), Align2::LEFT_CENTER, "·", regular(13.0), s.faint);
-    let dot = text_width(ui, "·", regular(13.0));
-    p.text(pos2(x + word + 8.0 + dot + 8.0, y), Align2::LEFT_CENTER, "Workspaces", regular(13.0), s.text);
-
-    // Right: the service address (quiet), Refresh, and a way back to an open map.
-    let mut right = rect.max.x - 20.0;
-    let address = service_addr();
-    let address_w = text_width(ui, &address, mono(10.5));
-    ui.painter().text(pos2(right, y), Align2::RIGHT_CENTER, &address, mono(10.5), s.faint);
-    right -= address_w + 16.0;
-
-    let list_busy = matches!(app.ws.busy, Some(Busy::List));
-    let refresh = if list_busy { "Refreshing…" } else { "Refresh" };
-    let refresh_w = text_width(ui, refresh, semibold(11.0)) + 20.0;
-    let refresh_rect = Rect::from_min_size(pos2(right - refresh_w, y - 13.0), vec2(refresh_w, 26.0));
-    if secondary_button(ui, s, Id::new("workspaces_refresh"), refresh_rect, refresh, !list_busy) {
-        app.ws.refresh(ui.ctx());
-    }
-    right = refresh_rect.min.x - 8.0;
-
-    if app.has_files() {
-        let back = "Back to map";
-        let back_w = text_width(ui, back, semibold(11.0)) + 20.0;
-        let back_rect = Rect::from_min_size(pos2(right - back_w, y - 13.0), vec2(back_w, 26.0));
-        if secondary_button(ui, s, Id::new("workspaces_back"), back_rect, back, true) {
-            app.ui.home = false;
-        }
-    }
 }
 
 /// The repository a workspace belongs to; linked worktrees share their base repo's key.
@@ -1081,20 +965,9 @@ fn new_workspace_row(ui: &mut Ui, s: &Skin) -> bool {
 
 fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
     ui.painter().rect_filled(rect, CornerRadius::ZERO, s.panel);
-    let mut top = rect.min.y;
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let area = Rect::from_min_size(rect.min, vec2(rect.width(), 150.0));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
-            ui.add_space(8.0);
-            machines(app, ui, s);
-            top = ui.min_rect().max.y + 8.0;
-        });
-    }
-    let head = Rect::from_min_size(pos2(rect.min.x, top), vec2(rect.width(), 42.0));
+    let head = Rect::from_min_size(rect.min, vec2(rect.width(), 42.0));
     ui.painter().text(pos2(head.min.x + 16.0, head.center().y), Align2::LEFT_CENTER, "WORKSPACES", mono(9.5), s.faint);
-    let groups = grouped(&app.ws.rows);
-    let count = groups.len().to_string();
+    let count = grouped(&app.ws.rows).len().to_string();
     ui.painter().text(pos2(head.max.x - 16.0, head.center().y), Align2::RIGHT_CENTER, count, mono(10.0), s.faint);
     ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, s.border));
 
@@ -1104,28 +977,129 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
         ui.set_clip_rect(list);
         egui::ScrollArea::vertical().id_salt("workspaces_list").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            if new_workspace_row(ui, s) {
-                crate::new_workspace::open(app);
+            #[cfg(not(target_arch = "wasm32"))]
+            machine_list(app, ui, s, &ctx);
+            #[cfg(target_arch = "wasm32")]
+            flat_list(app, ui, s, &ctx);
+            // The way to add a machine sits under the machines, never in a page header.
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
+            a11y::button(&resp, "Add machine");
+            if resp.hovered() {
+                ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
             }
-            let (error, busy, started) = (app.ws.error.clone(), app.ws.busy.is_some(), app.ws.started);
-            if app.ws.rows.is_empty() {
-                empty_list(app, ui, s, &ctx, error.as_deref(), busy, started);
-            } else {
-                let mut chosen = None;
-                for (base, branches) in &groups {
-                    let selected = app.ws.selected.as_deref().is_some_and(|id| branches.iter().any(|b| b.id == id));
-                    if let Some(c) = row(ui, s, base, selected, busy) {
-                        chosen = Some(c);
-                    }
-                }
-                match chosen {
-                    Some(Chosen::Select(id)) => app.ws.select(&id),
-                    Some(Chosen::Act { workspace, init }) => app.ws.act(&ctx, &workspace, init),
-                    None => {}
-                }
+            ui.painter().text(pos2(rect.min.x + 16.0, rect.center().y), Align2::LEFT_CENTER, "+  Add machine", semibold(11.0), s.accent);
+            if resp.clicked() {
+                crate::machine_modal::open(app);
             }
         });
     });
+}
+
+/// The machines, each a toggle over its own workspaces: the selected one is open, the rest fold.
+#[cfg(not(target_arch = "wasm32"))]
+fn machine_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
+    let ready = crate::node_hosts::poll(&mut app.ws.hosts);
+    let hosts = crate::node_hosts::hosts(&app.ws.hosts).to_vec();
+    let selected_addr = app.ws.hosts.selected.as_ref().map(|host| host.address.clone());
+    let workspaces = app.ws.rows.len();
+    let mut activate: Option<crate::node_hosts::Host> = None;
+    let mut fold = false;
+    for host in &hosts {
+        // Nothing selected yet means the local node is the one the list belongs to.
+        let is_selected = selected_addr.as_deref() == Some(host.address.as_str()) || (selected_addr.is_none() && host.ssh.is_none());
+        let expanded = is_selected && !app.ws.collapsed;
+        if machine_row(ui, s, host, is_selected, expanded, workspaces) {
+            if is_selected {
+                fold = true;
+            } else {
+                activate = Some(host.clone());
+            }
+        }
+        if expanded {
+            let rows = app.ws.rows.clone();
+            let groups = grouped(&rows);
+            let busy = app.ws.busy.is_some();
+            let mut chosen = None;
+            for (base, branches) in &groups {
+                let selected = app.ws.selected.as_deref().is_some_and(|id| branches.iter().any(|b| b.id == id));
+                if let Some(c) = row(ui, s, base, selected, busy) {
+                    chosen = Some(c);
+                }
+            }
+            match chosen {
+                Some(Chosen::Select(id)) => app.ws.select(&id),
+                Some(Chosen::Act { workspace, init }) => app.ws.act(ctx, &workspace, init),
+                None => {}
+            }
+            let (error, busy, started) = (app.ws.error.clone(), app.ws.busy.is_some(), app.ws.started);
+            if app.ws.rows.is_empty() {
+                empty_list(app, ui, s, ctx, error.as_deref(), busy, started);
+            }
+            if new_workspace_row(ui, s) {
+                crate::new_workspace::open(app);
+            }
+        }
+    }
+    crate::node_hosts::status(ui, &mut app.ws.hosts);
+    if fold {
+        app.ws.collapsed = !app.ws.collapsed;
+    }
+    if let Some(host) = ready {
+        use_host(app, ui.ctx(), &host);
+    }
+    if let Some(host) = activate {
+        crate::node_hosts::activate(&mut app.ws.hosts, &host);
+    }
+}
+
+/// The browser build has no machines: one flat workspace list.
+#[cfg(target_arch = "wasm32")]
+fn flat_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
+    if new_workspace_row(ui, s) {
+        crate::new_workspace::open(app);
+    }
+    let (error, busy, started) = (app.ws.error.clone(), app.ws.busy.is_some(), app.ws.started);
+    if app.ws.rows.is_empty() {
+        empty_list(app, ui, s, ctx, error.as_deref(), busy, started);
+    } else {
+        let rows = app.ws.rows.clone();
+        let groups = grouped(&rows);
+        let mut chosen = None;
+        for (base, branches) in &groups {
+            let selected = app.ws.selected.as_deref().is_some_and(|id| branches.iter().any(|b| b.id == id));
+            if let Some(c) = row(ui, s, base, selected, busy) {
+                chosen = Some(c);
+            }
+        }
+        match chosen {
+            Some(Chosen::Select(id)) => app.ws.select(&id),
+            Some(Chosen::Act { workspace, init }) => app.ws.act(ctx, &workspace, init),
+            None => {}
+        }
+    }
+}
+
+/// One machine: its name and state, with the arrow that folds its workspaces away.
+#[cfg(not(target_arch = "wasm32"))]
+fn machine_row(ui: &mut Ui, s: &Skin, host: &crate::node_hosts::Host, selected: bool, expanded: bool, workspaces: usize) -> bool {
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 40.0), Sense::click());
+    a11y::button(&resp, &format!("{} machine · {}", host.name, if expanded { "open" } else { "folded" }));
+    if resp.hovered() || selected {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
+    }
+    let arrow = if expanded { "\u{25b4}" } else { "\u{25be}" };
+    ui.painter().text(pos2(rect.max.x - 16.0, rect.center().y), Align2::RIGHT_CENTER, arrow, regular(10.0), s.muted);
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.center().y - 8.0), Align2::LEFT_CENTER, &host.name, semibold(12.0), s.text);
+    let state = if selected {
+        format!("local · {workspaces} workspaces")
+    } else if let Some(ssh) = &host.ssh {
+        format!("ssh · {ssh}")
+    } else {
+        "local".to_string()
+    };
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.center().y + 8.0), Align2::LEFT_CENTER, state, mono(9.0), s.faint);
+    resp.clicked()
 }
 
 /// A row asks for one thing: select its workspace, or open / initialise it.

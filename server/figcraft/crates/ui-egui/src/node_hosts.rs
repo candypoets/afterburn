@@ -159,8 +159,6 @@ pub(crate) fn begin(host: Host, install: bool) -> Result<Job, String> {
 pub struct State {
     pub selected: Option<Host>,
     hosts: Vec<Host>,
-    target: String,
-    name: String,
     pending: Option<mpsc::Receiver<Outcome>>,
     approval: Option<Host>,
     update: Option<(Host, String)>,
@@ -262,6 +260,18 @@ pub fn status(ui: &mut egui::Ui, state: &mut State) {
     }
     if let Some(error) = &state.error {
         ui.label(error);
+    }
+}
+
+/// The saved machines, in order: the local one first, then the saved SSH hosts.
+pub fn hosts(state: &State) -> &[Host] {
+    &state.hosts
+}
+
+/// Select and set up `host`: its node, its Herdr session, then its workspaces.
+pub fn activate(state: &mut State, host: &Host) {
+    if state.pending.is_none() && state.approval.is_none() && state.update.is_none() {
+        start(state, host.clone(), false, false);
     }
 }
 

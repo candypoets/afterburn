@@ -66,6 +66,20 @@ fn active_row<'a>(active: Option<&SessionRef>, rows: &'a [Workspace]) -> Option<
     })
 }
 
+/// The chip for a row the browser has selected but no design is open on yet.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn selected_chip(rows: &[Workspace], selected: Option<&str>) -> Option<String> {
+    let row = rows.iter().find(|row| Some(row.id.as_str()) == selected)?;
+    let repo = row.repo.clone().filter(|repo| !repo.is_empty()).unwrap_or_else(|| "worktree".to_string());
+    Some(format!("{repo} / {}", branch_of(row)))
+}
+
+/// The session a selected workspace stands in for, so the switcher can key it by repository.
+#[cfg(not(target_arch = "wasm32"))]
+fn selected_session(selected: Option<&str>) -> Option<SessionRef> {
+    selected.filter(|id| !id.is_empty()).map(|id| SessionRef { workspace: id.to_string(), ..SessionRef::default() })
+}
+
 /// The chip's text: `repo / branch`, or `branch`, or a hint when no design is open.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn label(active: Option<&SessionRef>, rows: &[Workspace]) -> String {
@@ -129,9 +143,13 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     #[cfg(not(target_arch = "wasm32"))]
     let active = crate::workspaces::active_node(app).ok();
     #[cfg(not(target_arch = "wasm32"))]
-    let rows = switcher_rows(active.as_ref(), &app.ws.rows);
+    let selected = selected_session(app.ws.selected.as_deref());
     #[cfg(not(target_arch = "wasm32"))]
-    let chip = label(active.as_ref(), &app.ws.rows);
+    let key = active.clone().or(selected);
+    #[cfg(not(target_arch = "wasm32"))]
+    let rows = switcher_rows(key.as_ref(), &app.ws.rows);
+    #[cfg(not(target_arch = "wasm32"))]
+    let chip = selected_chip(&app.ws.rows, app.ws.selected.as_deref()).unwrap_or_else(|| label(key.as_ref(), &app.ws.rows));
     #[cfg(target_arch = "wasm32")]
     let chip = "no design open".to_string();
 
@@ -258,6 +276,14 @@ mod tests {
         assert_eq!(listed[0].branch, "main");
         assert_eq!(listed[1].branch, "feature/branchy");
         assert_eq!(listed[1].map, "empty");
+    }
+
+    #[test]
+    fn a_selected_workspace_names_the_chip_before_any_map_is_open() {
+        let rows = vec![ws("w2", "branchy", "mindmap", "/wt/branchy", Some("feature/x"), "empty")];
+        assert_eq!(selected_chip(&rows, Some("w2")).as_deref(), Some("mindmap / feature/x"));
+        assert_eq!(selected_chip(&rows, None), None);
+        assert_eq!(selected_chip(&rows, Some("missing")), None);
     }
 
     #[test]

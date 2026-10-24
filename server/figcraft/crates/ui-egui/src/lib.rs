@@ -1607,6 +1607,11 @@ impl FigApp {
             windows::requests(self, &ctx);
             return;
         }
+        if map_mode {
+            egui::Panel::bottom("map_status").exact_size(status_bar::HEIGHT).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+                status_bar::show(self, ui);
+            });
+        }
         if !self.has_files() || self.ui.home {
             // Map mode browses the projects themselves: Herdr workspaces, with or without a map.
             // The design app keeps its FigCraft home.
@@ -1798,11 +1803,6 @@ impl FigApp {
                     });
                 });
             }
-        }
-        if map_mode {
-            egui::Panel::bottom("map_status").exact_size(status_bar::HEIGHT).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
-                status_bar::show(self, ui);
-            });
         }
         if map_mode && self.ws.pane_open {
             egui::Panel::left("workspace_pane")
