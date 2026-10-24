@@ -13,6 +13,8 @@ use figcraft_doc::{Document, NodeId};
 use crate::FigApp;
 
 pub const PARENT_KEY: &str = "mindmap.parent_page";
+/// Pages nest at most this deep (the root counts as the first level).
+pub const MAX_LEVELS: usize = 5;
 pub const SOURCE_KEY: &str = "mindmap.source_node";
 
 const PANEL: Color32 = Color32::WHITE;
@@ -206,6 +208,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let current = app.session.page().ok();
     let current_root = current.and_then(|page| app.session.doc().ok().map(|doc| root(doc, page)));
     let subpages = pages.len().saturating_sub(roots.len());
+    let levels = app.session.doc().map(|doc| pages.iter().map(|page| depth(doc, *page) + 1).max().unwrap_or(1)).unwrap_or(1);
     let mut close = false;
     let mut pick = None;
     let mut remove = None;
@@ -216,24 +219,43 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                 .fill(PANEL)
                 .stroke(Stroke::new(1.0, BORDER))
                 .corner_radius(CornerRadius::same(10))
-                .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(46) })
-                .inner_margin(Margin::symmetric(18, 14))
+                .shadow(egui::epaint::Shadow { offset: [0, 12], blur: 30, spread: 0, color: Color32::from_black_alpha(36) })
+                .inner_margin(Margin { left: 12, right: 12, top: 18, bottom: 13 })
                 .show(ui, |ui| {
-                    ui.set_width(420.0);
+                    ui.set_width(436.0);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    // PAGES, then `8 subpages · 5 levels` under it; the × at the top right.
+                    let head = ui.max_rect();
+                    let close_rect = egui::Rect::from_min_size(egui::pos2(head.right() - 22.0, head.top() - 8.0), vec2(22.0, 22.0));
+                    let close_resp = ui.interact(close_rect, Id::new("page_tree_close"), egui::Sense::click());
+                    ui.painter().text(
+                        close_rect.center(),
+                        Align2::CENTER_CENTER,
+                        "×",
+                        crate::theme::regular(15.0),
+                        if close_resp.hovered() { INK } else { MUTED },
+                    );
+                    if close_resp.clicked() {
+                        close = true;
+                    }
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("PAGES").font(FontId::monospace(9.5)).color(ACCENT));
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("PAGES").font(FontId::monospace(9.0)).color(ACCENT));
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
                         let plural = if subpages == 1 { "" } else { "s" };
+                        let level_plural = if levels == 1 { "" } else { "s" };
                         ui.label(
-                            RichText::new(format!("{subpages} subpage{plural} · {} roots", roots.len())).font(FontId::monospace(8.8)).color(MUTED),
+                            RichText::new(format!("{subpages} subpage{plural} · {levels} level{level_plural}"))
+                                .font(FontId::monospace(8.5))
+                                .color(MUTED),
                         );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(RichText::new("×").size(16.0).color(MUTED)).frame(false)).clicked() {
-                                close = true;
-                            }
-                        });
                     });
                     ui.add_space(8.0);
                     egui::ScrollArea::vertical().id_salt("page_tree_scroll").max_height(430.0).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
                         for root in &roots {
                             row(app, ui, *root, 0, current, current_root, &mut pick, &mut remove);
                             let mut stack: Vec<(NodeId, usize)> = match app.session.doc() {
@@ -251,12 +273,14 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                             }
                         }
                     });
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new("Right-click a main tab, click the focused main tab, or ⌘⇧P / Ctrl+Shift+P. Subpages are created from a card.")
-                            .font(FontId::monospace(8.2))
-                            .color(FAINT),
-                    );
+                    ui.add_space(14.0);
+                    let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
+                    ui.painter().line_segment([line.left_center() + vec2(8.0, 0.0), line.right_center() - vec2(4.0, 0.0)], Stroke::new(1.0, BORDER));
+                    ui.add_space(9.0);
+                    let (foot, _) = ui.allocate_exact_size(vec2(ui.available_width(), 11.0), egui::Sense::hover());
+                    let font = FontId::monospace(8.5);
+                    ui.painter().text(foot.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, "Subpages come from a card", font.clone(), FAINT);
+                    ui.painter().text(foot.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, format!("{MAX_LEVELS} levels max"), font, FAINT);
                 });
         });
 
@@ -295,35 +319,39 @@ fn row(
     let name = page_name(doc, page);
     let kids = children(doc, page).len();
     let is_current = current == Some(page);
-    let is_root = current_root == Some(page);
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), egui::Sense::click());
-    let bg = if is_current || response.hovered() { SOFT } else { PANEL };
-    ui.painter().rect_filled(rect, CornerRadius::same(5), bg);
+    let _ = current_root;
+    // 24 pt rows on a 26 pt pitch; 14 pt of indent per level; the chevron marks a page with children.
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), egui::Sense::click());
     if is_current {
+        ui.painter().rect_filled(rect, CornerRadius::same(5), Color32::from_rgb(0xF1, 0xF0, 0xED));
         ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, vec2(2.0, rect.height())), CornerRadius::ZERO, ACCENT);
+    } else if response.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(5), SOFT);
     }
-    let x = rect.left() + 10.0 + level as f32 * 16.0;
+    let x = rect.left() + 8.0 + level as f32 * 14.0;
     if kids > 0 {
-        ui.painter().text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, "⌄", FontId::monospace(9.0), FAINT);
+        ui.painter().text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, "⌄", crate::theme::regular(11.0), MUTED);
     }
-    let label_x = x + if kids > 0 { 14.0 } else { 4.0 };
-    ui.painter().text(
-        egui::pos2(label_x, rect.center().y),
-        Align2::LEFT_CENTER,
-        &name,
-        FontId::proportional(11.5),
-        if is_current || is_root { INK } else { MUTED },
-    );
-    if is_root && level == 0 {
-        ui.painter().text(egui::pos2(rect.right() - 34.0, rect.center().y), Align2::RIGHT_CENTER, "main", FontId::monospace(8.0), FAINT);
-    }
+    ui.painter().text(egui::pos2(x + 13.0, rect.center().y), Align2::LEFT_CENTER, &name, FontId::monospace(10.5), INK);
+    // The right column: how many children, or the depth cap on a page at the last level.
+    let trail = if kids > 0 {
+        kids.to_string()
+    } else if level + 1 >= MAX_LEVELS {
+        format!("L{}", level + 1)
+    } else {
+        String::new()
+    };
     let close = ui.interact(
-        egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), vec2(18.0, 22.0)),
+        egui::Rect::from_center_size(egui::pos2(rect.right() - 10.0, rect.center().y), vec2(16.0, 20.0)),
         ui.id().with(("page_tree_delete", page.0)),
         egui::Sense::click(),
     );
-    if response.hovered() || close.hovered() || is_current {
-        ui.painter().text(close.rect.center(), Align2::CENTER_CENTER, "×", FontId::proportional(11.0), if close.hovered() { DANGER } else { FAINT });
+    let hot = response.hovered() || close.hovered();
+    if !trail.is_empty() {
+        ui.painter().text(egui::pos2(rect.left() + 398.0, rect.center().y), Align2::LEFT_CENTER, trail, FontId::monospace(9.0), FAINT);
+    }
+    if hot {
+        ui.painter().text(close.rect.center(), Align2::CENTER_CENTER, "×", crate::theme::regular(11.0), if close.hovered() { DANGER } else { FAINT });
     }
     if close.clicked() {
         *remove = Some(page);

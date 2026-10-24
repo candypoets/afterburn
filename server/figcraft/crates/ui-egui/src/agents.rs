@@ -3,6 +3,7 @@
 use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Stroke, vec2};
 
 use crate::FigApp;
+use crate::a11y;
 use crate::compose::TargetInfo;
 use crate::theme::{regular, semibold};
 use crate::workspaces::Target;
@@ -47,27 +48,6 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-fn harness(kind: &str) -> &'static str {
-    match kind {
-        "dsh-tui" | "dsh" => "DSH",
-        "claude" => "CLAUDE",
-        "codex" => "CODEX",
-        "kimi" => "KIMI",
-        _ => "AGENT",
-    }
-}
-
-fn state(status: &str) -> &str {
-    match status.trim() {
-        "working" => "running",
-        "error" | "errored" | "failed" => "failed",
-        "idle" => "idle",
-        "done" => "done",
-        "blocked" => "blocked",
-        other => other,
-    }
-}
-
 fn status_color(status: &str) -> Color32 {
     match status.trim() {
         "working" => ACCENT,
@@ -75,6 +55,41 @@ fn status_color(status: &str) -> Color32 {
         "idle" | "done" => TEAL,
         _ => FAINT,
     }
+}
+
+/// One agent, as the agent status widget draws it: a bordered 31 pt row with the state dot, the
+/// agent's kind and its Herdr state. The prompt target wears the accent border; the pane id and
+/// whether Herdr has it focused sit quietly at the right.
+fn agent_row(ui: &mut egui::Ui, info: &TargetInfo, chosen: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 31.0), egui::Sense::click());
+    let hot = resp.hovered();
+    ui.painter().rect_filled(rect, CornerRadius::same(8), if hot { SOFT } else { PANEL });
+    ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, if chosen { ACCENT } else { BORDER }), egui::StrokeKind::Inside);
+    let (kind, pane) = match &info.target {
+        Target::Existing { pane, kind, .. } => (kind.as_str(), pane.clone()),
+        Target::New { kind } => (kind.as_str(), "new agent".to_string()),
+    };
+    let status = info.status.trim();
+    let status = if status.is_empty() { "unknown" } else { status };
+    ui.painter().circle_filled(egui::pos2(rect.left() + 17.0, rect.center().y), 4.0, status_color(status));
+    let kind_w = ui.painter().layout_no_wrap(kind.to_string(), semibold(11.5), INK).size().x;
+    ui.painter().text(egui::pos2(rect.left() + 31.0, rect.center().y), Align2::LEFT_CENTER, kind, semibold(11.5), INK);
+    ui.painter().text(egui::pos2(rect.left() + 41.0 + kind_w, rect.center().y), Align2::LEFT_CENTER, status, FontId::monospace(9.5), MUTED);
+    let trail = match (info.focused, chosen) {
+        (true, true) => format!("{pane} · focused · target"),
+        (true, false) => format!("{pane} · focused"),
+        (false, true) => format!("{pane} · target"),
+        (false, false) => pane,
+    };
+    ui.painter().text(
+        egui::pos2(rect.right() - 12.0, rect.center().y),
+        Align2::RIGHT_CENTER,
+        trail,
+        FontId::monospace(8.5),
+        if chosen { ACCENT } else { FAINT },
+    );
+    a11y::button(&resp, &format!("{kind} · {status}"));
+    resp.clicked()
 }
 
 /// Draw the breakdown when open.
@@ -131,53 +146,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                         }
                         for info in &agents {
                             let chosen = selected.as_ref() == Some(&info.target);
-                            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), egui::Sense::click());
-                            let hot = resp.hovered();
-                            let bg = if chosen || hot { SOFT } else { PANEL };
-                            ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
-                            if chosen {
-                                ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
-                            }
-                            let (kind, pane) = match &info.target {
-                                Target::Existing { pane, kind, .. } => (harness(kind), pane.clone()),
-                                Target::New { kind } => (harness(kind), "new agent".to_string()),
-                            };
-                            let color = status_color(&info.status);
-                            ui.painter().circle_filled(egui::pos2(rect.left() + 14.0, rect.center().y), 4.0, color);
-                            ui.painter().text(egui::pos2(rect.left() + 26.0, rect.top() + 17.0), Align2::LEFT_CENTER, pane, semibold(12.0), INK);
-                            ui.painter().text(
-                                egui::pos2(rect.left() + 108.0, rect.top() + 17.0),
-                                Align2::LEFT_CENTER,
-                                kind,
-                                FontId::monospace(9.5),
-                                MUTED,
-                            );
-                            let status = state(&info.status);
-                            ui.painter().text(
-                                egui::pos2(rect.right() - 12.0, rect.top() + 17.0),
-                                Align2::RIGHT_CENTER,
-                                status,
-                                FontId::monospace(9.5),
-                                color,
-                            );
-                            let sub = match (info.focused, chosen) {
-                                (true, true) => "focused · prompt target".to_string(),
-                                (true, false) => "focused".to_string(),
-                                (false, true) => "prompt target".to_string(),
-                                (false, false) => String::new(),
-                            };
-                            if !sub.is_empty() {
-                                ui.painter().text(
-                                    egui::pos2(rect.left() + 26.0, rect.top() + 35.0),
-                                    Align2::LEFT_CENTER,
-                                    sub,
-                                    FontId::monospace(8.5),
-                                    ACCENT,
-                                );
-                            }
-                            if resp.clicked() {
+                            if agent_row(ui, info, chosen) {
                                 pick = Some(info.target.clone());
                             }
+                            ui.add_space(6.0);
                         }
                     });
                     ui.add_space(10.0);
