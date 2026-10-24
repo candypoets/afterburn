@@ -462,6 +462,12 @@ pub enum TitleBar {
     Inset,
 }
 
+/// The map client's macOS toolbar band: an empty unified toolbar puts the window buttons where
+/// native apps have them (20 pt in, centred in this band), so the content leaves room for it.
+pub const MAC_BAND: f32 = 52.0;
+/// Where content may start right of the window buttons inside that band.
+pub const MAC_BUTTONS_W: f32 = 86.0;
+
 /// How often open documents get an autosave checkpoint (seconds).
 pub const AUTOSAVE_SECS: f64 = 30.0 * 60.0;
 
@@ -1703,12 +1709,17 @@ impl FigApp {
                 (live.peers.len() + 1, matches!(live.status, figcraft_engine::live::Status::Live))
             };
             let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
-            egui::Panel::top("map_header").exact_size(44.0).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
+            // On macOS the header is the toolbar band the window buttons sit centred in.
+            let inset = self.ui.title_bar == TitleBar::Inset;
+            let header_h = if inset { MAC_BAND } else { 44.0 };
+            egui::Panel::top("map_header").exact_size(header_h).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
                 let rect = ui.max_rect();
                 ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
+                if self.ui.title_bar != TitleBar::Native {
+                    titlebar_drag(ui, rect);
+                }
                 ui.horizontal_centered(|ui| {
-                    // macOS draws the traffic lights over the content view at the top left.
-                    ui.add_space(if cfg!(target_os = "macos") { 78.0 } else { 8.0 });
+                    ui.add_space(if inset { MAC_BUTTONS_W } else { 8.0 });
                     if sidebar_toggle(ui, self.ws.pane_open).clicked() {
                         self.ws.pane_open = !self.ws.pane_open;
                         if self.ws.pane_open {
@@ -2042,3 +2053,16 @@ mod selection_spacing_tests;
 
 #[cfg(test)]
 mod typography_scrub_tests;
+
+/// Empty title-bar space moves the window and a double click zooms it. Call it before the widgets
+/// on top, so they keep their clicks.
+pub(crate) fn titlebar_drag(ui: &mut egui::Ui, rect: egui::Rect) {
+    let drag = ui.interact(rect, ui.id().with("titlebar_drag"), egui::Sense::click_and_drag());
+    if drag.drag_started() {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+    if drag.double_clicked() {
+        let max = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+    }
+}

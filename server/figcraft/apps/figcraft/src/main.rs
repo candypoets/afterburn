@@ -25,6 +25,8 @@ mod gamepad;
 mod graphics;
 #[cfg(target_os = "linux")]
 mod linux_window;
+#[cfg(target_os = "macos")]
+mod mac_chrome;
 mod recovery;
 mod services;
 mod startup;
@@ -78,6 +80,10 @@ impl eframe::App for App {
             figcraft_ui_egui::control::drain_hidden(fig, ctx);
             #[cfg(target_os = "macos")]
             apple_events::poll(&self.apple_events, fig, ctx);
+            #[cfg(target_os = "macos")]
+            if figcraft_ui_egui::map_mode() {
+                mac_chrome::unify_toolbars();
+            }
             // Closing the window asks about unsaved changes (and keeps the app running while other
             // windows are open).
             figcraft_ui_egui::windows::on_close_request(fig, ctx);

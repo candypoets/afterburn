@@ -389,8 +389,15 @@ pub struct State {
     events_at: f64,
     /// The selected workspace id (its detail shows on the right).
     pub selected: Option<String>,
-    /// The selected machine's workspaces are folded away under its row.
-    pub collapsed: bool,
+    /// The machines unfolded in the sidebar, by address; several can be open at once.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub open: std::collections::BTreeSet<String>,
+    /// The machine in use opens on the first draw; after that the human decides.
+    #[cfg(not(target_arch = "wasm32"))]
+    open_seeded: bool,
+    /// The workspaces of open machines other than the one in use, by address.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lists: BTreeMap<String, HostList>,
     /// The last error, shown in muted red with a Retry.
     pub error: Option<String>,
     /// The request in flight, if any.
@@ -418,7 +425,72 @@ pub struct State {
     pub pane_open: bool,
 }
 
+/// One open machine's workspaces, listed beside the machine in use.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub struct HostList {
+    pub rows: Vec<Workspace>,
+    pub clis: Vec<String>,
+    pub node: Option<String>,
+    pub error: Option<String>,
+    /// A listing has answered at least once.
+    pub loaded: bool,
+    rx: Option<Receiver<Result<ServiceReply, String>>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl HostList {
+    pub fn loading(&self) -> bool {
+        self.rx.is_some()
+    }
+}
+
 impl State {
+    /// List `address`'s workspaces on a thread of its own, without leaving the machine in use.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn list_host(&mut self, ctx: &egui::Context, address: &str) {
+        let list = self.lists.entry(address.to_string()).or_default();
+        if list.rx.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        list.rx = Some(rx);
+        let (address, context) = (address.to_string(), ctx.clone());
+        let spawned = std::thread::Builder::new().name("figcraft-machine-list".into()).spawn(move || {
+            let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list_reply(&address)))
+                .unwrap_or_else(|_| Err("The workspace request failed unexpectedly.".to_string()));
+            let _ = tx.send(reply);
+            context.request_repaint();
+        });
+        if let Err(e) = spawned {
+            list.rx = None;
+            list.error = Some(format!("Could not start the workspace request: {e}"));
+        }
+    }
+
+    /// Take in the other machines' finished listings.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_lists(&mut self) {
+        for list in self.lists.values_mut() {
+            let received = match list.rx.as_ref().map(Receiver::try_recv) {
+                None | Some(Err(mpsc::TryRecvError::Empty)) => continue,
+                Some(Ok(reply)) => reply,
+                Some(Err(mpsc::TryRecvError::Disconnected)) => Err("The workspace request ended without an answer.".to_string()),
+            };
+            list.rx = None;
+            list.loaded = true;
+            match received {
+                Ok(reply) => {
+                    list.rows = reply.workspaces.unwrap_or_default();
+                    list.clis = reply.clis;
+                    list.node = reply.node.filter(|v| !v.trim().is_empty());
+                    list.error = None;
+                }
+                Err(e) => list.error = Some(e),
+            }
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn queue_branch_reopen(&mut self, selected: &str, address: &str, event: &serde_json::Value, active: Option<&crate::node::SessionRef>) {
         if selected != address || event["metadata"]["active"].as_bool() != Some(false) {
@@ -639,6 +711,17 @@ fn exchange(address: &str, request: &Request) -> Result<ServiceReply, String> {
     serde_json::from_value(value).map_err(|e| format!("The node sent an answer this app can't read: {e}"))
 }
 
+/// One machine's workspace list through its pooled connection; a node that needs an update says so.
+#[cfg(not(target_arch = "wasm32"))]
+fn list_reply(address: &str) -> Result<ServiceReply, String> {
+    if let Some(reason) = crate::node::update_required(address)? {
+        return Err(reason);
+    }
+    let value = crate::node::rpc(address, serde_json::json!({"id": 1, "method": "workspaces"}), LIST_TIMEOUT)?;
+    let reply: ServiceReply = serde_json::from_value(value).map_err(|e| format!("The node sent an answer this app can't read: {e}"))?;
+    if reply.ok { Ok(reply) } else { Err(reply.error.unwrap_or_else(|| "The node refused the request.".to_string())) }
+}
+
 /// A compact monitor-ish palette over the app's tokens: warm paper for the map client, the same
 /// accent as the map bar. Dark mode keeps the tokens' surfaces and lightens the inks.
 struct Skin {
@@ -731,15 +814,20 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         app.ws.refresh(&ctx);
     }
     let skin = Skin::of(&Tokens::get(&ctx));
+    // On macOS the window buttons sit in a toolbar band at the top left; the screen starts below.
+    let band = if app.ui.title_bar == crate::TitleBar::Inset { crate::MAC_BAND } else { 0.0 };
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(skin.bg)).show(ui, |ui| {
         let rect = ui.max_rect();
+        if band > 0.0 {
+            crate::titlebar_drag(ui, Rect::from_min_size(rect.min, vec2(rect.width(), band)));
+        }
         let body = rect;
         // The list keeps its width; the detail takes the rest, but never less than 320 px.
         let side = SIDEBAR.min((body.width() - 320.0).max(240.0));
         let list = Rect::from_min_size(body.min, vec2(side, body.height()));
         let detail_rect = Rect::from_min_max(pos2(list.max.x, body.min.y), body.max);
-        sidebar(app, ui, &skin, list);
-        detail(app, ui, &skin, detail_rect);
+        sidebar(app, ui, &skin, list, band);
+        detail(app, ui, &skin, detail_rect, band);
         ui.painter().line_segment([pos2(list.max.x, body.min.y), pos2(list.max.x, body.max.y)], Stroke::new(1.0, skin.border));
     });
     // The New workspace modal first, so the Add machine modal it opens draws above it.
@@ -952,6 +1040,9 @@ pub fn poll_node_events(app: &mut FigApp, ctx: &egui::Context) {
             Some("herdr") => {
                 if address == selected {
                     app.ws.events_refresh = true;
+                } else if app.ws.open.contains(&address) && app.ws.lists.contains_key(&address) {
+                    // Another open machine changed: list it again.
+                    app.ws.list_host(ctx, &address);
                 }
                 if active.as_ref().is_some_and(|node| node.address == address) {
                     app.compose.targets_at = -10.0;
@@ -991,6 +1082,9 @@ pub fn poll_node_events(app: &mut FigApp, ctx: &egui::Context) {
 /// Use `host` on the Workspaces screen: drop the old host's answers and list its workspaces.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn use_host(app: &mut FigApp, ctx: &egui::Context, host: &crate::node_hosts::Host) {
+    stash_rows(app);
+    app.ws.open.insert(host.address.clone());
+    app.ws.lists.remove(&host.address);
     set_service(&host.address);
     // Discard old-host responses before requesting the new host's workspaces.
     app.ws.rx = None;
@@ -1003,6 +1097,54 @@ pub(crate) fn use_host(app: &mut FigApp, ctx: &egui::Context, host: &crate::node
     app.ws.join_workspace = None;
     app.ws.hosts.selected = Some(host.clone());
     app.ws.refresh(ctx);
+}
+
+/// The sidebar row the machine in use is drawn under: its SSH address, or this computer's.
+#[cfg(not(target_arch = "wasm32"))]
+fn in_use_key(app: &FigApp) -> Option<String> {
+    match app.ws.hosts.selected.as_ref() {
+        Some(host) if host.ssh.is_some() => Some(host.address.clone()),
+        _ => crate::node_hosts::hosts(&app.ws.hosts).first().map(|host| host.address.clone()),
+    }
+}
+
+/// Keep the machine in use's workspaces listed under its row while another machine takes over.
+#[cfg(not(target_arch = "wasm32"))]
+fn stash_rows(app: &mut FigApp) {
+    if let Some(key) = in_use_key(app) {
+        let list = HostList {
+            rows: std::mem::take(&mut app.ws.rows),
+            clis: std::mem::take(&mut app.ws.clis),
+            node: app.ws.node_version.take(),
+            loaded: true,
+            ..HostList::default()
+        };
+        app.ws.lists.insert(key, list);
+    }
+}
+
+/// Make `host` the machine in use with the workspaces already listed for it, then select `id`.
+/// Its node answered that listing, so no setup runs; Open and Init now go to it.
+#[cfg(not(target_arch = "wasm32"))]
+fn switch_to(app: &mut FigApp, host: &crate::node_hosts::Host, id: Option<&str>) {
+    if app.ws.busy.is_some() {
+        return;
+    }
+    let Some(list) = app.ws.lists.remove(&host.address) else { return };
+    stash_rows(app);
+    set_service(&host.address);
+    app.ws.rx = None;
+    app.ws.hosts.selected = Some(host.clone());
+    app.ws.rows = list.rows;
+    app.ws.clis = list.clis;
+    app.ws.node_version = list.node;
+    app.ws.error = None;
+    app.ws.selected = None;
+    app.ws.target = None;
+    app.ws.picker_open = false;
+    if let Some(id) = id {
+        app.ws.select(id);
+    }
 }
 
 /// The repository a workspace belongs to; linked worktrees share their base repo's key.
@@ -1055,14 +1197,16 @@ fn plus_row_at(ui: &mut Ui, s: &Skin, id: Id, outer: Rect, label: &str) -> bool 
 }
 
 /// The machines and their workspaces, with Add machine pinned under them.
-fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
+fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect, band: f32) {
     ui.painter().rect_filled(rect, CornerRadius::ZERO, s.panel);
-    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 16.0), Align2::LEFT_TOP, "WORKSPACES", mono(9.0), s.muted);
+    // Below the window buttons' band when there is one.
+    let top = rect.min.y + band.max(16.0);
+    ui.painter().text(pos2(rect.min.x + 16.0, top), Align2::LEFT_TOP, "WORKSPACES", mono(9.0), s.muted);
 
     // Add machine sits at the foot, under a divider, whatever the list's length.
     let add = Rect::from_min_size(pos2(rect.min.x, rect.max.y - 16.0 - PLUS_H), vec2(rect.width(), PLUS_H));
     let rule = add.min.y - 8.0;
-    let list = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 36.0), pos2(rect.max.x, rule - 8.0));
+    let list = Rect::from_min_max(pos2(rect.min.x, top + 20.0), pos2(rect.max.x, rule - 8.0));
     let ctx = ui.ctx().clone();
     ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
         ui.set_clip_rect(list.intersect(ui.clip_rect()));
@@ -1080,11 +1224,13 @@ fn sidebar(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
     }
 }
 
-/// The machines, each a toggle over its own workspaces: the one in use opens under its row; the
-/// others stay folded until clicked, which connects to them.
+/// The machines, each a toggle over its own workspaces. Any number can be open at once: the one
+/// in use lists through the screen's state, the others through their own listing. Choosing a
+/// workspace under another machine makes that machine the one in use.
 #[cfg(not(target_arch = "wasm32"))]
 fn machine_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
     let ready = crate::node_hosts::poll(&mut app.ws.hosts);
+    app.ws.poll_lists();
     // This computer once, first; then the SSH machines.
     let hosts: Vec<_> = crate::node_hosts::hosts(&app.ws.hosts)
         .iter()
@@ -1092,38 +1238,45 @@ fn machine_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
         .filter(|(i, host)| *i == 0 || host.ssh.is_some())
         .map(|(_, host)| host.clone())
         .collect();
-    // A local node on another port (`--node`) is still this computer.
-    let selected_addr = app
-        .ws
-        .hosts
-        .selected
-        .as_ref()
-        .map(|host| host.address.clone())
-        .filter(|_| app.ws.hosts.selected.as_ref().is_some_and(|host| host.ssh.is_some()));
+    let in_use = in_use_key(app);
+    if !app.ws.open_seeded {
+        app.ws.open_seeded = true;
+        app.ws.open.extend(in_use.clone());
+    }
     let preparing = crate::node_hosts::preparing(&app.ws.hosts);
-    let mut activate: Option<crate::node_hosts::Host> = None;
-    let mut fold = false;
+    let mut toggled: Option<(crate::node_hosts::Host, bool)> = None;
+    let mut setup: Option<crate::node_hosts::Host> = None;
+    let mut switch: Option<(crate::node_hosts::Host, Option<String>, Option<Chosen>)> = None;
     for (index, host) in hosts.iter().enumerate() {
         if index > 0 {
             ui.add_space(16.0);
         }
-        // Nothing selected yet means the local node is the one the list belongs to.
-        let is_selected = selected_addr.as_deref() == Some(host.address.as_str()) || (selected_addr.is_none() && host.ssh.is_none());
-        let expanded = is_selected && !app.ws.collapsed;
-        let state = machine_state(host, is_selected, preparing, app.ws.rows.len(), app.ws.node_version.as_deref());
-        if machine_row(ui, s, host, &state, expanded) {
-            if is_selected {
-                fold = true;
-            } else {
-                activate = Some(host.clone());
+        let is_in_use = in_use.as_deref() == Some(host.address.as_str());
+        let expanded = app.ws.open.contains(&host.address);
+        let state = if is_in_use {
+            machine_state(host, true, preparing, app.ws.rows.len(), app.ws.node_version.as_deref())
+        } else {
+            match app.ws.lists.get(&host.address) {
+                Some(list) if list.loading() => machine_state(host, true, true, 0, None),
+                Some(list) if list.loaded && list.error.is_none() => machine_state(host, true, false, list.rows.len(), list.node.as_deref()),
+                _ => machine_state(host, false, false, 0, None),
             }
+        };
+        if machine_row(ui, s, host, &state, expanded) {
+            toggled = Some((host.clone(), is_in_use));
         }
         ui.add_space(8.0);
-        if expanded {
+        if !expanded {
+            if !is_in_use && !app.ws.lists.get(&host.address).is_some_and(|list| list.loaded) {
+                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 11.0), Sense::hover());
+                ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y), Align2::LEFT_TOP, "Connect to list its workspaces", mono(8.5), s.faint);
+            }
+            continue;
+        }
+        if is_in_use {
             let rows = app.ws.rows.clone();
-            let groups = grouped(&rows);
             let mut chosen = None;
-            for (base, branches) in &groups {
+            for (base, branches) in &grouped(&rows) {
                 let selected = app.ws.selected.as_deref().is_some_and(|id| branches.iter().any(|b| b.id == id));
                 if let Some(c) = row(ui, s, base, selected) {
                     chosen = Some(c);
@@ -1142,20 +1295,64 @@ fn machine_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context) {
             if plus_row(ui, s, Id::new(("workspaces_new", &host.address)), "New workspace") {
                 crate::new_workspace::open(app);
             }
-        } else if !is_selected {
+            continue;
+        }
+        // Another open machine: its own listing, or why there is none.
+        let (rows, error, loading) = match app.ws.lists.get(&host.address) {
+            Some(list) => (list.rows.clone(), list.error.clone(), list.loading()),
+            None => (Vec::new(), None, true),
+        };
+        for (base, _) in &grouped(&rows) {
+            if let Some(chosen) = row(ui, s, base, false) {
+                let id = match &chosen {
+                    Chosen::Select(id) | Chosen::Act { workspace: id, .. } => id.clone(),
+                };
+                switch = Some((host.clone(), Some(id), Some(chosen)));
+            }
+        }
+        if let Some(error) = error {
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 2, bottom: 6 }).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.add(egui::Label::new(egui::RichText::new(error).font(mono(8.5)).color(s.danger)).wrap());
+                if link(ui, s, Id::new(("workspaces_setup", &host.address)), "Set up this machine…", s.muted) {
+                    setup = Some(host.clone());
+                }
+            });
+        } else if loading && rows.is_empty() {
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 11.0), Sense::hover());
-            ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y), Align2::LEFT_TOP, "Connect to list its workspaces", mono(8.5), s.faint);
+            ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y), Align2::LEFT_TOP, "Listing its workspaces…", mono(8.5), s.faint);
+        } else if rows.is_empty() {
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 11.0), Sense::hover());
+            ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y), Align2::LEFT_TOP, "No workspaces yet", mono(8.5), s.faint);
+        }
+        ui.add_space(4.0);
+        if plus_row(ui, s, Id::new(("workspaces_new", &host.address)), "New workspace") && !loading {
+            switch = Some((host.clone(), None, None));
+            crate::new_workspace::open(app);
         }
     }
     host_notice(ui, s, &mut app.ws.hosts);
-    if fold {
-        app.ws.collapsed = !app.ws.collapsed;
+    if let Some((host, is_in_use)) = toggled {
+        if !app.ws.open.remove(&host.address) {
+            app.ws.open.insert(host.address.clone());
+            if !is_in_use {
+                app.ws.list_host(ctx, &host.address);
+            }
+        }
+    }
+    if let Some((host, id, chosen)) = switch {
+        switch_to(app, &host, id.as_deref());
+        if let Some(Chosen::Act { workspace, init }) = chosen
+            && in_use_key(app).as_deref() == Some(host.address.as_str())
+        {
+            app.ws.act(ctx, &workspace, init);
+        }
     }
     if let Some(host) = ready {
-        app.ws.collapsed = false;
         use_host(app, ui.ctx(), &host);
     }
-    if let Some(host) = activate {
+    if let Some(host) = setup {
         crate::node_hosts::activate(&mut app.ws.hosts, &host);
     }
 }
@@ -1331,10 +1528,11 @@ fn empty_list(app: &mut FigApp, ui: &mut Ui, s: &Skin, ctx: &egui::Context, erro
     });
 }
 
-fn detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect) {
+fn detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, rect: Rect, band: f32) {
     ui.painter().rect_filled(rect, CornerRadius::ZERO, s.bg);
     let selected = app.ws.selected.as_deref().and_then(|id| app.ws.rows.iter().find(|w| w.id == id)).cloned();
-    let inner = Rect::from_min_max(rect.min + vec2(32.0, 32.0), rect.max - vec2(32.0, 0.0));
+    // The detail keeps the design's 16 pt lead over the sidebar label.
+    let inner = Rect::from_min_max(rect.min + vec2(32.0, band.max(16.0) + 16.0), rect.max - vec2(32.0, 0.0));
     ui.scope_builder(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
         ui.set_clip_rect(rect.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical().id_salt("workspaces_detail").auto_shrink([false, false]).show(ui, |ui| {
