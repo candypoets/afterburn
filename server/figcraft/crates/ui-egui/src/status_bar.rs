@@ -8,9 +8,9 @@
 //! [`crate::node::SessionRef`] says which worktree is open, and `workspaces::State::rows` lists
 //! its siblings. The browser build has no node session, so it shows the bar without a switcher.
 
-use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, Ui, pos2, vec2};
 #[cfg(not(target_arch = "wasm32"))]
 use egui::StrokeKind;
+use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::FigApp;
 use crate::theme::{Tokens, regular, semibold};
