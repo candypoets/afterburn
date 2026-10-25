@@ -2,7 +2,7 @@
 //! the inherited drawing-editor keymap is never a fallback in map mode.
 
 use egui::{Context, Event, Key, Modifiers};
-use figcraft_engine::keymap::{self, Platform};
+use figcraft_engine::keymap::Platform;
 use serde_json::json;
 
 use crate::{
@@ -18,10 +18,7 @@ pub fn lookup(platform: Platform, key: Key, physical: Option<Key>, modifiers: Mo
     {
         mods.shift = false;
     }
-    ACTIONS.iter().find(|a| {
-        let binding = if platform == Platform::Mac { a.mac } else { a.other };
-        !binding.is_empty() && keymap::matches(binding, platform, key.name(), mods)
-    })
+    ACTIONS.iter().find(|a| a.bound_to(platform, key.name(), mods))
 }
 
 /// Text-field actions are handled by the field, never replayed as document commands.

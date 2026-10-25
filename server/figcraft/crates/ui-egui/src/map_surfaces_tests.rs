@@ -82,8 +82,11 @@ fn map_help_and_palette_have_exact_registry_parity_and_no_editor_actions() {
         for row in help.iter().filter(|row| row.id.is_some()) {
             let action = catalog::find(row.id.unwrap()).unwrap();
             assert_eq!((row.label, row.scope), (action.label, action.scope));
-            let expected = if action.keys(platform).is_empty() { "Actions palette".into() } else { keymap::display(action.keys(platform), platform) };
-            assert_eq!(row.keys, expected);
+            let mut expected: Vec<_> = action.bindings(platform).map(|keys| keymap::display(keys, platform)).collect();
+            if expected.is_empty() {
+                expected.push("Actions palette".into());
+            }
+            assert_eq!(row.keys, expected.join(" or "));
         }
     }
     for query in ["rectangle", "prototype", "plugin:", "edit.delete", "object.group", "shape."] {
@@ -98,8 +101,10 @@ fn palette_only_actions_and_platform_help_are_explicit() {
     assert_eq!(palette_only, BTreeSet::from(["map.switchWorktree", "map.focusComposer", "map.syncReview"]));
     let mac = crate::shortcuts_panel::map_help_rows("map.actions", Platform::Mac);
     let other = crate::shortcuts_panel::map_help_rows("map.actions", Platform::Other);
-    assert_eq!(mac[0].keys, keymap::display("Cmd+K", Platform::Mac));
-    assert_eq!(other[0].keys, "Ctrl+K");
+    assert_eq!(mac[0].keys, format!("{} or {}", keymap::display("Shift+Cmd+P", Platform::Mac), keymap::display("Cmd+K", Platform::Mac)));
+    assert_eq!(other[0].keys, "Ctrl+Shift+P or Ctrl+K");
+    let tree = crate::shortcuts_panel::map_help_rows("map.pageTree", Platform::Other);
+    assert_eq!(tree[0].keys, "Ctrl+P");
     assert_eq!(catalog::find("map.fullscreen").unwrap().other, "F11");
     assert_eq!(catalog::find("map.contextMenu").unwrap().mac, "Shift+F10");
     assert_eq!(catalog::find("map.selectArea").unwrap().mac, "F8");
@@ -228,4 +233,139 @@ fn keyboard_context_menu_opens_and_escape_preserves_selection_and_prompt() {
     assert!(app.ui.context_menu.is_none());
     assert_eq!(app.session.selection(), selection);
     assert_eq!(app.compose.input, "Keep draft");
+}
+
+fn map_app() -> crate::FigApp {
+    let mut app = crate::FigApp::new(figcraft_engine::Session::new(), Box::new(crate::NoServices));
+    app.ui.home = false;
+    app
+}
+
+fn ids(rows: &[&catalog::Action]) -> Vec<&'static str> {
+    rows.iter().map(|action| action.id).collect()
+}
+
+#[test]
+fn shift_cmd_p_opens_the_palette_cmd_k_still_does_and_cmd_p_opens_the_page_tree() {
+    let mac = Modifiers { command: true, mac_cmd: true, ..Modifiers::NONE };
+    let other = Modifiers { command: true, ctrl: true, ..Modifiers::NONE };
+    for (platform, cmd) in [(Platform::Mac, mac), (Platform::Other, other)] {
+        let shift = Modifiers { shift: true, ..cmd };
+        let lookup = |key, modifiers| crate::map_actions::lookup(platform, key, Some(key), modifiers).map(|action| action.id);
+        assert_eq!(lookup(Key::P, shift), Some("map.actions"));
+        assert_eq!(lookup(Key::K, cmd), Some("map.actions"), "⌘K stays an alias");
+        assert_eq!(lookup(Key::P, cmd), Some("map.pageTree"));
+        let palette = catalog::find("map.actions").unwrap();
+        assert_eq!(palette.bindings(platform).count(), 2);
+        assert_eq!(catalog::find("map.pageTree").unwrap().bindings(platform).count(), 1);
+    }
+    // No other action shares a binding with the palette's alias.
+    for action in ACTIONS.iter().filter(|action| action.id != "map.actions") {
+        for platform in [Platform::Mac, Platform::Other] {
+            assert!(
+                !action
+                    .bindings(platform)
+                    .any(|keys| keymap::parse(keys) == keymap::parse(if platform == Platform::Mac { "Cmd+K" } else { "Ctrl+K" }))
+            );
+        }
+    }
+}
+
+#[test]
+fn recently_used_actions_come_first_once_and_the_palette_records_runs() {
+    let mut app = map_app();
+    let ctx = egui::Context::default();
+    let all = crate::map_palette::sections(&app, "");
+    assert_ne!(all[0].0, Some(crate::map_palette::RECENTLY_USED), "nothing used yet");
+    app.session.prefs.recent_actions = vec!["command:map.zoomFit".into(), "command:edit.copy".into(), "command:map.pageTree".into()];
+    let sections = crate::map_palette::sections(&app, "");
+    assert_eq!(sections[0].0, Some(crate::map_palette::RECENTLY_USED));
+    assert_eq!(ids(&sections[0].1), ["map.zoomFit", "map.pageTree"], "editor commands never show in the map palette");
+    let rows: Vec<_> = sections.iter().flat_map(|(_, rows)| rows.iter().map(|action| action.id)).collect();
+    assert_eq!(rows.len(), ACTIONS.len(), "every action exactly once");
+    assert_eq!(rows.iter().collect::<BTreeSet<_>>().len(), ACTIONS.len());
+    let navigation = sections.iter().find(|(group, _)| *group == Some("Pages + navigation")).unwrap();
+    assert!(!ids(&navigation.1).contains(&"map.pageTree"), "a recent action leaves its group");
+    assert!(crate::menus::activate_map_action(&mut app, &ctx, "map.workspacePane"));
+    assert_eq!(app.session.prefs.recent_actions[0], "command:map.workspacePane");
+    assert_eq!(crate::map_palette::sections(&app, "")[0].1[0].id, "map.workspacePane");
+    assert!(crate::map_palette::sections(&app, "fit").iter().all(|(group, _)| group.is_none()), "a search is one ranked list");
+}
+
+#[test]
+fn search_ranks_label_matches_first_and_counts_against_the_catalog() {
+    let hits = catalog::ranked("work", Platform::Mac);
+    assert_eq!(hits[0].id, "map.workspacePane");
+    assert!(hits.iter().any(|action| action.id == "map.switchWorktree"));
+    assert_eq!(hits.iter().map(|a| a.id).collect::<BTreeSet<_>>(), catalog::search("work", Platform::Mac).iter().map(|a| a.id).collect());
+    assert_eq!(catalog::ranked("navigation", Platform::Mac).len(), ACTIONS.iter().filter(|a| a.group == "Pages + navigation").count());
+    assert_eq!(crate::map_palette::count_label("", 0), format!("{} actions", ACTIONS.len()));
+    assert_eq!(crate::map_palette::count_label("work", 5), format!("5 of {}", ACTIONS.len()));
+}
+
+#[test]
+fn unavailable_actions_stay_listed_with_a_reason_and_cannot_run() {
+    let mut app = map_app();
+    let ctx = egui::Context::default();
+    let find = |id| catalog::find(id).unwrap();
+    assert_eq!(catalog::disabled_reason(&app, find("map.zoomSelection")), Some("Select a card first"));
+    assert_eq!(catalog::disabled_reason(&app, find("map.copyImage")), Some("Select a card first"));
+    assert_eq!(catalog::disabled_reason(&app, find("map.zoomFit")), None);
+    assert_eq!(catalog::disabled_reason(&app, find("map.send")), Some("Only in the composer"));
+    assert_eq!(catalog::disabled_reason(&app, find("map.undoTyping")), Some("Only in a text field"));
+    assert_eq!(catalog::disabled_reason(&app, find("map.workspacePane")), None);
+    for action in ACTIONS {
+        assert_eq!(catalog::enabled(&app, action), catalog::disabled_reason(&app, action).is_none(), "{}", action.id);
+    }
+    assert!(ids(&crate::map_palette::sections(&app, "fit selection")[0].1).contains(&"map.zoomSelection"), "still listed");
+    crate::menus::set_palette(&mut app.ui, true);
+    app.ui.palette = Some("fit selection".into());
+    palette_frame(&mut app, &ctx, vec![]);
+    palette_frame(&mut app, &ctx, key(Key::Enter));
+    assert_eq!(app.ui.palette.as_deref(), Some("fit selection"), "Enter on a dimmed row does nothing");
+    assert!(app.session.prefs.recent_actions.is_empty());
+    app.ui.home = true;
+    assert_eq!(catalog::disabled_reason(&app, find("map.zoomFit")), Some("Open a map first"));
+    assert_eq!(catalog::disabled_reason(&app, find("map.copy")), Some("Open a map first"));
+    assert_eq!(catalog::disabled_reason(&app, find("map.help")), None);
+}
+
+#[test]
+fn toggles_show_their_current_state() {
+    let mut app = map_app();
+    let find = |id| catalog::find(id).unwrap();
+    app.ws.pane_open = true;
+    assert_eq!(catalog::toggle_state(&app, find("map.workspacePane")), Some("Shown"));
+    app.ws.pane_open = false;
+    assert_eq!(catalog::toggle_state(&app, find("map.workspacePane")), Some("Hidden"));
+    app.session.ds_mut().unwrap().view.comments = true;
+    app.session.ds_mut().unwrap().view.multiplayer_cursors = false;
+    assert_eq!(catalog::toggle_state(&app, find("map.comments")), Some("Shown"));
+    assert_eq!(catalog::toggle_state(&app, find("map.cursors")), Some("Hidden"));
+    assert_eq!(catalog::toggle_state(&app, find("map.focusMode")), Some("Off"));
+    assert_eq!(catalog::toggle_state(&app, find("map.fullscreen")), Some("Off"));
+    assert_eq!(catalog::toggle_state(&app, find("map.zoomFit")), None);
+    app.ui.home = true;
+    assert_eq!(catalog::toggle_state(&app, find("map.comments")), None, "map state needs an open map");
+}
+
+#[test]
+fn no_match_offers_to_search_the_map_with_the_query() {
+    let mut app = map_app();
+    let ctx = egui::Context::default();
+    assert!(crate::map_palette::sections(&app, "retry button").is_empty());
+    assert_eq!(crate::map_palette::search_map_label(" retry button "), "Search this map for “retry button”");
+    assert_eq!(crate::map_palette::no_match_label("retry button"), "No action named “retry button”.   ↵ search the map");
+    assert_eq!(crate::map_palette::count_label("retry button", 0), format!("0 of {}", ACTIONS.len()));
+    crate::menus::set_palette(&mut app.ui, true);
+    app.ui.palette = Some("retry button".into());
+    palette_frame(&mut app, &ctx, vec![]);
+    palette_frame(&mut app, &ctx, key(Key::Enter));
+    assert!(app.ui.palette.is_none());
+    assert!(crate::map_navigation::search_open(&ctx), "map search opens with the query");
+    assert!(app.session.prefs.recent_actions.is_empty(), "searching is not a recent action");
+    crate::map_navigation::close_search(&ctx);
+    app.ui.home = true;
+    assert!(!crate::map_palette::search_map(&mut app, &ctx, "retry button"), "no map, no search");
+    assert!(!crate::map_navigation::search_open(&ctx));
 }

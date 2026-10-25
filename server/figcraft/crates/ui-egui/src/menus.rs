@@ -1,5 +1,5 @@
 //! The main menu (from the engine's menu catalog), the canvas/layer context menu and the
-//! Actions palette (⌘K / ⌘/).
+//! Actions palette (⌘K / ⌘/; Mindmap's is ⇧⌘P, see `map_palette`).
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_engine::catalog::{MENU, SEP};
@@ -1494,87 +1494,9 @@ pub(crate) fn activate_map_action(app: &mut FigApp, ctx: &egui::Context, id: &st
     ran
 }
 
+/// Mindmap's Actions palette ([`crate::map_palette`]).
 pub(crate) fn map_palette(app: &mut FigApp, ctx: &egui::Context) {
-    let Some(mut query) = app.ui.palette.clone() else { return };
-    let t = Tokens::get(ctx);
-    let (step, enter, escape) = ctx.input_mut(|i| {
-        (
-            i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as i64
-                - i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) as i64,
-            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
-            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
-        )
-    });
-    let pressed = ctx.input(|i| i.pointer.any_pressed());
-    let armed = std::mem::replace(&mut app.ui.palette_armed, false);
-    let mut picked = None;
-    let search_id = Id::new("map_action_search");
-    let area = egui::Area::new(Id::new("palette")).anchor(Align2::CENTER_TOP, vec2(0.0, 80.0)).order(egui::Order::Foreground).constrain(true).show(
-        ctx,
-        |ui| {
-            egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(12)).inner_margin(12).show(
-                ui,
-                |ui| {
-                    ui.set_width((ctx.content_rect().width() - 48.0).clamp(260.0, 650.0));
-                    let response =
-                        ui.add(egui::TextEdit::singleline(&mut query).id(search_id).hint_text("Search Mindmap actions").desired_width(f32::INFINITY));
-                    response.request_focus();
-                    if response.changed() {
-                        app.ui.palette_hi = 0;
-                    }
-                    let sections = map_command_sections(&query);
-                    let count: usize = sections.iter().map(|(_, rows)| rows.len()).sum();
-                    let hi = (app.ui.palette_hi as i64 + step).clamp(0, count.saturating_sub(1) as i64) as usize;
-                    app.ui.palette_hi = hi;
-                    if count == 0 {
-                        ui.label("No map actions match");
-                    }
-                    egui::ScrollArea::vertical()
-                        .max_height((ctx.content_rect().height() - 200.0).clamp(100.0, 460.0))
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let mut index = 0;
-                            for (group, rows) in &sections {
-                                ui.add_space(8.0);
-                                ui.label(egui::RichText::new(group).small().color(t.text_secondary));
-                                for row in rows {
-                                    let Some(action) = row.key.strip_prefix("command:").and_then(crate::map_action_catalog::find) else { continue };
-                                    let enabled = crate::map_action_catalog::enabled(app, action);
-                                    let hint = if action.keys(crate::shortcuts::platform()).is_empty() { "Actions palette" } else { &row.hint };
-                                    let text = format!("{}    {}\n{}", action.label, hint, action.scope);
-                                    let response = ui.add_enabled(
-                                        enabled,
-                                        egui::Button::new(text).selected(index == hi).wrap().min_size(vec2(ui.available_width(), 48.0)),
-                                    );
-                                    if response.clicked() || (enter && index == hi && enabled) {
-                                        picked = Some(action.id);
-                                    }
-                                    if step != 0 && index == hi {
-                                        response.scroll_to_me(None);
-                                    }
-                                    index += 1;
-                                }
-                            }
-                        });
-                    ui.label(
-                        egui::RichText::new("↑ ↓ Choose   Enter Run   Esc Close · Text actions require their own field")
-                            .small()
-                            .color(t.text_secondary),
-                    );
-                },
-            );
-        },
-    );
-    let on_toggle = app.ui.actions_rect.is_some_and(|rect| ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| rect.contains(p))));
-    let outside = pressed && !armed && !on_toggle && !area.response.contains_pointer();
-    if escape || outside {
-        app.ui.palette = None;
-        ctx.memory_mut(|m| m.surrender_focus(search_id));
-    } else if let Some(id) = picked {
-        activate_map_action(app, ctx, id);
-    } else {
-        app.ui.palette = Some(query);
-    }
+    crate::map_palette::show(app, ctx);
 }
 
 fn map_popups(app: &mut FigApp, ctx: &egui::Context) {
