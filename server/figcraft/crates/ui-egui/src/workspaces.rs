@@ -115,6 +115,9 @@ pub struct AgentDetail {
     /// The agent CLI kind (`codex`, `claude`, `kimi`, …).
     #[serde(default)]
     pub kind: String,
+    /// Herdr's display name for the agent, when it has one.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Its lifecycle state (`idle`, `working`, `blocked`, `done`, …).
     #[serde(default)]
     pub status: String,

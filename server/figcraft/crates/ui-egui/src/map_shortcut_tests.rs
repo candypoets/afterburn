@@ -413,3 +413,55 @@ fn map_middle_and_space_drag_pan_without_editing_cards() {
         }
     });
 }
+
+#[test]
+fn map_pointer_selection_focuses_the_composer_and_keyboard_selection_does_not() {
+    crate::with_map_mode(|| {
+        let (mut u, a, b) = setup();
+        map_view(&mut u);
+        let composer = |u: &Ui| u.ctx.memory(|m| m.has_focus(crate::compose::input_id()));
+        assert!(!composer(&u));
+        // A click on a card: the comment field takes the keyboard at once.
+        let card = u.app.to_screen(450.0, 160.0);
+        pointer(&mut u, card, true, Modifiers::NONE);
+        pointer(&mut u, card, false, Modifiers::NONE);
+        u.frame(vec![]);
+        assert_eq!(u.app.session.selection(), vec![b]);
+        assert!(composer(&u), "pointer selection focuses the composer");
+        u.frame(vec![Event::Text("About Beta".into())]);
+        assert_eq!(u.app.compose.input, "About Beta");
+        // The first Esc gives the keys back to the canvas and keeps the selection and the text.
+        press(&mut u, Key::Escape, Modifiers::NONE);
+        assert!(!composer(&u));
+        assert_eq!(u.app.ui.nav.region, crate::a11y::Region::Canvas);
+        assert_eq!(u.app.session.selection(), vec![b]);
+        // Keyboard selection leaves the keys on the canvas.
+        press(&mut u, Key::Tab, Modifiers::SHIFT);
+        u.frame(vec![]);
+        assert_eq!(u.app.session.selection(), vec![a]);
+        assert!(!composer(&u), "keyboard selection must not move focus");
+        // A click on empty canvas selects nothing and leaves focus alone.
+        let empty = u.app.to_screen(300.0, 400.0);
+        pointer(&mut u, empty, true, Modifiers::NONE);
+        pointer(&mut u, empty, false, Modifiers::NONE);
+        u.frame(vec![]);
+        assert!(u.app.session.selection().is_empty());
+        assert!(!composer(&u));
+    });
+}
+
+#[test]
+fn map_recipient_chip_opens_the_agent_menu_on_a_click() {
+    crate::with_map_mode(|| {
+        let (mut u, _, _) = setup();
+        u.frame(vec![]);
+        u.frame(vec![]);
+        let chip = u.ctx.read_response(egui::Id::new("map_composer_target_chip")).unwrap().rect.center();
+        u.frame(vec![Event::PointerMoved(chip)]);
+        pointer(&mut u, chip, true, Modifiers::NONE);
+        pointer(&mut u, chip, false, Modifiers::NONE);
+        assert!(u.app.compose.menu_open);
+        press(&mut u, Key::Escape, Modifiers::NONE);
+        assert!(!u.app.compose.menu_open);
+    });
+}
