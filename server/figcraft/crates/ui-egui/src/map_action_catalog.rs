@@ -211,12 +211,16 @@ pub fn search(query: &str, platform: figcraft_engine::keymap::Platform) -> Vec<&
     ACTIONS.iter().filter(|action| rank(action, &query, platform).is_some()).collect()
 }
 
-/// The palette's search: the same matches as [`search`], best first (labels starting with the
-/// query, then a label word starting with it, then labels containing it, then the ID, group,
-/// keys or scope), catalog order within each rank.
+/// The palette's search, best first (labels starting with the query, then a label word starting
+/// with it, then labels containing it), catalog order within each rank. The ID, group, keys and
+/// scope only answer a query that no label matches, so "work" lists the workspace actions, not
+/// every action in "Workspaces + app".
 pub fn ranked(query: &str, platform: figcraft_engine::keymap::Platform) -> Vec<&'static Action> {
     let query = query.trim().to_lowercase();
     let mut hits: Vec<_> = ACTIONS.iter().filter_map(|action| rank(action, &query, platform).map(|r| (r, action))).collect();
+    if hits.iter().any(|(r, _)| *r < 3) {
+        hits.retain(|(r, _)| *r < 3);
+    }
     hits.sort_by_key(|(r, _)| *r);
     hits.into_iter().map(|(_, action)| action).collect()
 }

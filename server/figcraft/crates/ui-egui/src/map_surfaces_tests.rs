@@ -297,7 +297,8 @@ fn search_ranks_label_matches_first_and_counts_against_the_catalog() {
     let hits = catalog::ranked("work", Platform::Mac);
     assert_eq!(hits[0].id, "map.workspacePane");
     assert!(hits.iter().any(|action| action.id == "map.switchWorktree"));
-    assert_eq!(hits.iter().map(|a| a.id).collect::<BTreeSet<_>>(), catalog::search("work", Platform::Mac).iter().map(|a| a.id).collect());
+    assert!(hits.iter().all(|action| action.label.to_lowercase().contains("work")), "labels answer before groups");
+    assert!(hits.len() < catalog::search("work", Platform::Mac).len());
     assert_eq!(catalog::ranked("navigation", Platform::Mac).len(), ACTIONS.iter().filter(|a| a.group == "Pages + navigation").count());
     assert_eq!(crate::map_palette::count_label("", 0), format!("{} actions", ACTIONS.len()));
     assert_eq!(crate::map_palette::count_label("work", 5), format!("5 of {}", ACTIONS.len()));
