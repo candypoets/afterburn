@@ -828,6 +828,12 @@ fn map_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response) -> bool {
         } else {
             app.canvas.dragging = false;
             app.session.tool.overlay.marquee = None;
+            // A click or marquee that leaves something selected hands the keyboard to the
+            // composer, so the human can type about it at once; Esc gives it back. Keyboard
+            // selection (Tab, F8, search) never comes through here.
+            if same_page && !app.session.selection().is_empty() {
+                app.compose.focus_input = true;
+            }
         }
     }
     true

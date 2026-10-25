@@ -1224,6 +1224,7 @@ mod tests {
                 pane: "w1:p2".into(),
                 kind: "codex".into(),
                 status: status.into(),
+                name: None,
                 focused: false,
                 title: title.map(str::to_owned),
             }],

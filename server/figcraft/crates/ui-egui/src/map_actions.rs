@@ -124,6 +124,7 @@ pub fn blocking_overlay(app: &FigApp, ctx: &Context) -> bool {
         || app.machine_modal.open
         || app.new_workspace.open
         || app.status.switcher_open
+        || app.compose.confirm.is_some()
         || crate::map_navigation::search_open(ctx)
         || egui::Popup::is_any_open(ctx)
 }
@@ -153,6 +154,7 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
         crate::menus::set_palette(&mut app.ui, false);
     } else if app.ui.context_menu.take().is_some()
         || std::mem::take(&mut app.ui.main_menu)
+        || app.compose.confirm.take().is_some()
         || std::mem::take(&mut app.compose.menu_open)
         || crate::map_navigation::close_search(ctx)
     {
