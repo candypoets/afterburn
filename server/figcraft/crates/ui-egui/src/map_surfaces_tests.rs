@@ -78,7 +78,7 @@ fn map_help_and_palette_have_exact_registry_parity_and_no_editor_actions() {
     for platform in [Platform::Mac, Platform::Other] {
         let help = crate::shortcuts_panel::map_help_rows("", platform);
         assert_eq!(help.iter().filter_map(|row| row.id).collect::<BTreeSet<_>>(), expected);
-        assert_eq!(help.iter().filter(|row| row.id.is_none()).count(), 2);
+        assert_eq!(help.iter().filter(|row| row.id.is_none()).count(), crate::map_action_catalog::GESTURES.len());
         for row in help.iter().filter(|row| row.id.is_some()) {
             let action = catalog::find(row.id.unwrap()).unwrap();
             assert_eq!((row.label, row.scope), (action.label, action.scope));

@@ -1,7 +1,7 @@
 # Mindmap keyboard shortcuts
 
 Mindmap's map-mode actions are defined in
-`crates/ui-egui/src/map_action_catalog.rs`: 39 bound actions, three palette-only actions and two
+`crates/ui-egui/src/map_action_catalog.rs`: 39 bound actions, three palette-only actions and four
 pointer gestures. `map_actions.rs`, `menus.rs` and `shortcuts_panel.rs` use that catalog for input,
 menus, the Actions palette and platform-specific Help. The full FigCraft editor keeps its own
 keymap. Map input never falls through to the drawing editor's tool, mutation or document-history
@@ -14,7 +14,10 @@ Text fields own their typing, selection, clipboard and local undo/redo. In the c
 inserts a newline, Shift+Enter saves a draft and Cmd/Ctrl+Enter sends only while the composer owns
 focus. External overlays disable the underlying composer. Escape closes the active overlay or
 cancels an interaction before a later Escape clears canvas selection. Map pointer gestures select
-cards, open their detail pages and pan; they never reach editor move/resize/text tools. F8 and
+cards, open their detail pages and pan; they never reach editor move/resize/text tools. A click
+selects a card, or, once a box inside a card is selected, the box beside it at the same depth.
+Double-click goes one box deeper (a card with a detail page opens it instead) and Cmd/Ctrl+click
+selects the innermost box under the pointer. F8 and
 pointer marquees include readable locked cards and cards inside sections. A cancelled pointer gesture
 waits for button release before another pan or selection can begin. Drafts remain attached to
 their recorded card/page.

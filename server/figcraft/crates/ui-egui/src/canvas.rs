@@ -754,8 +754,11 @@ fn map_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response) -> bool {
         return true;
     }
     let point = app.to_page(pos);
-    let target = app.session.ds().ok().and_then(|ds| {
-        crate::map_navigation::cards(&ds.doc, ds.page).into_iter().rev().find(|id| ds.doc.world_bounds(*id).is_some_and(|b| b.contains(point)))
+    let selection = app.session.selection();
+    let (chain, target) = app.session.ds().ok().map_or((Vec::new(), None), |ds| {
+        let chain = crate::map_navigation::boxes_at(&ds.doc, ds.page, point);
+        let target = crate::map_navigation::click_target(&ds.doc, &chain, &selection, mods.command);
+        (chain, target)
     });
     if let Ok(ds) = app.session.ds_mut() {
         ds.hover = if resp.hovered() { target } else { None };
@@ -768,9 +771,16 @@ fn map_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response) -> bool {
         app.canvas.map_drag = None;
         app.canvas.dragging = false;
         app.session.tool.overlay.marquee = None;
-        if let Some(card) = target {
+        // A card with a detail page opens it; otherwise the double-click goes one box deeper.
+        let card = chain.first().copied();
+        let linked = card.filter(|card| {
+            target == Some(*card) && app.session.ds().is_ok_and(|ds| crate::map_navigation::detail(&ds.doc, ds.page, &[*card]).is_some())
+        });
+        if let Some(card) = linked {
             app.session.set_selection(vec![card]);
             crate::map_navigation::run(app, ctx, "map.openDetail");
+        } else if let Some(inner) = target.and_then(|target| crate::map_navigation::inner(&chain, target)) {
+            app.session.set_selection(vec![inner]);
         }
         return true;
     }
@@ -841,8 +851,10 @@ fn send(app: &mut FigApp, kind: PointerKind, pos: Pos2, m: &egui::Modifiers) {
 pub fn open_context_menu(app: &mut FigApp, pos: Pos2, deep: bool) {
     let p = app.to_page(pos);
     if crate::map_mode() {
+        let selection = app.session.selection();
         let target = app.session.ds().ok().and_then(|ds| {
-            crate::map_navigation::cards(&ds.doc, ds.page).into_iter().rev().find(|id| ds.doc.world_bounds(*id).is_some_and(|b| b.contains(p)))
+            let chain = crate::map_navigation::boxes_at(&ds.doc, ds.page, p);
+            crate::map_navigation::click_target(&ds.doc, &chain, &selection, false)
         });
         if let Some(target) = target
             && !app.session.selection().contains(&target)

@@ -117,6 +117,45 @@ fn has_content(doc: &Document, id: NodeId) -> bool {
     })
 }
 
+fn container(node: &Node) -> bool {
+    matches!(node.kind, NodeKind::Frame | NodeKind::Group | NodeKind::Component { .. } | NodeKind::Instance { .. })
+}
+
+/// The boxes under `point`: the topmost card first, then each nested content box (container
+/// or text) down to the innermost. Clicks select along this chain; it never edits.
+pub(crate) fn boxes_at(doc: &Document, page: NodeId, point: figcraft_geom::Point) -> Vec<NodeId> {
+    let under = |id: NodeId| doc.world_bounds(id).is_some_and(|b| b.contains(point));
+    let Some(card) = cards(doc, page).into_iter().rev().find(|id| under(*id)) else { return Vec::new() };
+    let mut chain = vec![card];
+    while let Some(next) = chain.last().and_then(|id| doc.node(*id)).and_then(|node| {
+        node.children.iter().rev().copied().find(|id| {
+            doc.node(*id).is_some_and(|child| visible(child) && !decoration(child) && (container(child) || child.kind.text().is_some()))
+                && has_content(doc, *id)
+                && under(*id)
+        })
+    }) {
+        chain.push(next);
+    }
+    chain
+}
+
+/// The box a click on `chain` selects: the innermost when `deep` (Cmd/Ctrl), else the one beside
+/// the current selection (a sibling, so once inside a card its boxes stay one click away), else
+/// the card itself.
+pub(crate) fn click_target(doc: &Document, chain: &[NodeId], selection: &[NodeId], deep: bool) -> Option<NodeId> {
+    if deep {
+        return chain.last().copied();
+    }
+    let parent = |id: NodeId| doc.node(id).and_then(|node| node.parent);
+    chain.iter().rev().copied().find(|id| selection.iter().any(|selected| parent(*selected) == parent(*id))).or_else(|| chain.first().copied())
+}
+
+/// The box one level inside `current` along `chain`: what a double-click selects.
+pub(crate) fn inner(chain: &[NodeId], current: NodeId) -> Option<NodeId> {
+    let at = chain.iter().position(|id| *id == current)?;
+    chain.get(at + 1).copied()
+}
+
 /// Meaningful visible cards on a page, top-to-bottom then left-to-right. A content container
 /// is one card, not a separate stop for every label inside it. Sections are layout containers;
 /// bare text is a card except for conventional page headings/footers. Locked content is readable.
@@ -133,7 +172,7 @@ pub fn cards(doc: &Document, page: NodeId) -> Vec<NodeId> {
         if !visible(node) || decoration(node) {
             continue;
         }
-        let container = matches!(node.kind, NodeKind::Frame | NodeKind::Group | NodeKind::Component { .. } | NodeKind::Instance { .. });
+        let container = container(node);
         let page_label = matches!(node.name.trim().to_ascii_lowercase().as_str(), "title" | "page title" | "lede" | "foot" | "footer" | "eyebrow");
         let linked = node.plugin_data.contains_key(crate::new_page::DETAIL_PAGE_KEY);
         if (container || linked || (node.kind.text().is_some() && !page_label)) && has_content(doc, id) {
@@ -211,7 +250,7 @@ fn selected_cards(doc: &Document, page: NodeId, selection: &[NodeId]) -> Vec<Nod
     cards(doc, page).into_iter().filter(|card| selection.iter().any(|id| card == id || doc.is_ancestor(*card, *id))).collect()
 }
 
-fn detail(doc: &Document, page: NodeId, selection: &[NodeId]) -> Option<NodeId> {
+pub(crate) fn detail(doc: &Document, page: NodeId, selection: &[NodeId]) -> Option<NodeId> {
     let selected = selected_cards(doc, page, selection);
     // Enter is unambiguous only for one selected card.
     let [card] = selected.as_slice() else { return None };
@@ -601,6 +640,38 @@ mod tests {
         assert_eq!(app.compose.input, "Unsent comment");
         assert_eq!(app.session.doc().unwrap(), &before);
         assert!(!run(&mut app, &ctx, "map.unowned"));
+    }
+
+    #[test]
+    fn clicks_reach_boxes_inside_boxes_one_level_at_a_time() {
+        let mut app = app();
+        let page = app.session.page().unwrap();
+        let doc = app.session.doc_mut().unwrap();
+        let outer = doc.create(page, NodeKind::Frame, "Outer", 0.0, 0.0, 400.0, 300.0).unwrap();
+        doc.create(outer, NodeKind::Text(TextData::new("Outer title")), "title", 10.0, 10.0, 200.0, 20.0).unwrap();
+        let left = card(doc, outer, "Left", "Left body", 20.0, 60.0);
+        let right = card(doc, outer, "Right", "Right body", 210.0, 60.0);
+        let doc = app.session.doc().unwrap();
+        let in_left = figcraft_geom::Point::new(100.0, 140.0);
+        let chain = boxes_at(doc, page, in_left);
+        assert_eq!(chain[..2], [outer, left]);
+        let left_body = chain[2];
+        assert_eq!(doc.node(left_body).unwrap().name, "body");
+        // A first click selects the card; a double-click goes one box deeper each time.
+        assert_eq!(click_target(doc, &chain, &[], false), Some(outer));
+        assert_eq!(inner(&chain, outer), Some(left));
+        assert_eq!(inner(&chain, left), Some(left_body));
+        assert_eq!(inner(&chain, left_body), None);
+        // Once inside, a click selects the neighbouring box at the same depth.
+        let in_right = boxes_at(doc, page, figcraft_geom::Point::new(300.0, 140.0));
+        assert_eq!(click_target(doc, &in_right, &[left], false), Some(right));
+        // Cmd/Ctrl+click goes straight to the innermost box.
+        assert_eq!(click_target(doc, &chain, &[], true), Some(left_body));
+        // Clicking another card leaves the nested level.
+        let other = card(app.session.doc_mut().unwrap(), page, "Other", "Elsewhere", 600.0, 0.0);
+        let doc = app.session.doc().unwrap();
+        let elsewhere = boxes_at(doc, page, figcraft_geom::Point::new(650.0, 50.0));
+        assert_eq!(click_target(doc, &elsewhere, &[left], false), Some(other));
     }
 
     #[test]

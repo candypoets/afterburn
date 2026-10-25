@@ -219,4 +219,11 @@ pub const GESTURES: &[Gesture] = &[
         other: "Ctrl + scroll",
         scope: "Canvas: zoom around the pointer; trackpad pinch works here too.",
     },
+    Gesture {
+        label: "Select a box inside a card",
+        mac: "Double-click",
+        other: "Double-click",
+        scope: "Canvas: one box deeper each time; a card with a detail page opens it instead.",
+    },
+    Gesture { label: "Select the innermost box", mac: "Cmd + click", other: "Ctrl + click", scope: "Canvas: the deepest box under the pointer." },
 ];
