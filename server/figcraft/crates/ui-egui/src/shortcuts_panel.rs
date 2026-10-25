@@ -208,11 +208,7 @@ pub(crate) fn map_help_rows(query: &str, platform: Platform) -> Vec<MapHelpRow> 
             id: Some(action.id),
             group: action.group,
             label: action.label,
-            keys: if action.keys(platform).is_empty() {
-                "Actions palette".to_string()
-            } else {
-                figcraft_engine::keymap::display(action.keys(platform), platform)
-            },
+            keys: action.help_keys(platform),
             scope: action.scope,
         })
         .collect();

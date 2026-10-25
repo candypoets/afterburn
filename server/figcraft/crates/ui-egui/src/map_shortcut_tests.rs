@@ -156,6 +156,21 @@ fn map_composer_typing_owns_enter_and_draft_chord() {
 }
 
 #[test]
+fn shift_cmd_p_toggles_the_palette_and_cmd_p_opens_the_page_tree() {
+    crate::with_map_mode(|| {
+        let (mut u, _, _) = setup();
+        press(&mut u, Key::P, cmd() | Modifiers::SHIFT);
+        assert!(u.app.ui.palette.is_some());
+        assert!(!u.app.page_tree.open);
+        press(&mut u, Key::P, cmd() | Modifiers::SHIFT);
+        assert!(u.app.ui.palette.is_none(), "the same chord closes it");
+        press(&mut u, Key::P, cmd());
+        assert!(u.app.page_tree.open);
+        assert!(u.app.ui.palette.is_none());
+    });
+}
+
+#[test]
 fn map_palette_can_open_while_composer_owns_text_focus() {
     crate::with_map_mode(|| {
         let (mut u, _, _) = setup();

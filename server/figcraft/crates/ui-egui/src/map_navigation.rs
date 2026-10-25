@@ -345,6 +345,23 @@ fn open_result(app: &mut FigApp, result: &SearchResult) -> bool {
     true
 }
 
+/// Open map search with `query` already typed (the Actions palette's "Search this map for …").
+/// Like `map.search`, does nothing without an open map; returns whether search opened.
+pub fn open_search(app: &mut FigApp, ctx: &egui::Context, query: &str) -> bool {
+    if app.session.ds().is_err() {
+        return false;
+    }
+    run(app, ctx, "map.search");
+    let mut search = state(ctx);
+    if !search.open {
+        return false;
+    }
+    search.query = query.trim().to_string();
+    search.selected = None;
+    ctx.data_mut(|data| data.insert_temp(state_id(), search));
+    true
+}
+
 /// Dispatch the map navigation slice. `true` means the ID is owned, even if there is no
 /// available target (for example Parent page on a root). Focus policy belongs to the caller.
 pub fn run(app: &mut FigApp, ctx: &egui::Context, id: &str) -> bool {
@@ -714,6 +731,21 @@ mod tests {
         assert_eq!(app.session.doc().unwrap(), &before);
         app.session.doc_mut().unwrap().remove(card).unwrap();
         assert!(!open_result(&mut app, &result));
+    }
+
+    #[test]
+    fn open_search_prefills_the_query() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        run(&mut app, &ctx, "map.search");
+        let mut search = state(&ctx);
+        search.query = "older".into();
+        ctx.data_mut(|data| data.insert_temp(state_id(), search));
+        close_search(&ctx);
+        assert!(open_search(&mut app, &ctx, "  retry button "));
+        assert!(search_open(&ctx));
+        assert_eq!(state(&ctx).query, "retry button");
+        assert!(state(&ctx).focus);
     }
 
     #[test]

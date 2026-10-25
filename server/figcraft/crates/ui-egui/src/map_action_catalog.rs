@@ -18,7 +18,7 @@ macro_rules! action {
 }
 
 pub const ACTIONS: &[Action] = &[
-    action!("map.actions", "Actions palette", "Workspaces + app", "Cmd+K", "Ctrl+K", "App: search and run Mindmap actions."),
+    action!("map.actions", "Actions palette", "Workspaces + app", "Shift+Cmd+P", "Ctrl+Shift+P", "App: search and run Mindmap actions."),
     action!("map.help", "Keyboard shortcuts", "Workspaces + app", "Ctrl+Shift+?", "Ctrl+Shift+?", "App: show shortcuts and their scope."),
     action!("map.search", "Search this map", "Workspaces + app", "Cmd+F", "Ctrl+F", "Map: find card text and names; open a result."),
     action!(
@@ -35,7 +35,7 @@ pub const ACTIONS: &[Action] = &[
     action!("map.preferences", "Preferences", "Workspaces + app", "Cmd+,", "Ctrl+,", "App: open settings."),
     action!("map.focusMode", "Focus mode", "Workspaces + app", "Cmd+\\", "Ctrl+\\", "App: toggle workspace chrome around the canvas."),
     action!("map.fullscreen", "Full screen", "Workspaces + app", "Ctrl+Cmd+F", "F11", "App: toggle the native window's fullscreen state."),
-    action!("map.pageTree", "Page tree", "Pages + navigation", "Shift+Cmd+P", "Ctrl+Shift+P", "Map: open the tree; search and choose a page."),
+    action!("map.pageTree", "Page tree", "Pages + navigation", "Cmd+P", "Ctrl+P", "Map: open the tree; search and choose a page."),
     action!("map.previousPage", "Previous page", "Pages + navigation", "PageUp", "PageUp", "Canvas: previous page in visible tree order."),
     action!("map.nextPage", "Next page", "Pages + navigation", "PageDown", "PageDown", "Canvas: next page in visible tree order."),
     action!("map.workspacePane", "Workspace pane", "Pages + navigation", "Shift+Cmd+\\", "Ctrl+Shift+\\", "App: show or hide workspace navigation."),
@@ -160,6 +160,10 @@ pub const ACTIONS: &[Action] = &[
     action!("map.syncReview", "Open Sync review", "Workspaces + app", "", "", "Workspace: review Sync; opening this view never starts Sync."),
 ];
 
+/// Second bindings that run an action without being its primary shortcut: ⌘K, the palette's
+/// earlier key, keeps opening it. Help shows them after the primary binding.
+pub const ALIASES: &[(&str, &str, &str)] = &[("map.actions", "Cmd+K", "Ctrl+K")];
+
 pub fn find(id: &str) -> Option<&'static Action> {
     ACTIONS.iter().find(|action| action.id == id)
 }
@@ -167,6 +171,31 @@ pub fn find(id: &str) -> Option<&'static Action> {
 impl Action {
     pub fn keys(&self, platform: figcraft_engine::keymap::Platform) -> &'static str {
         if platform == figcraft_engine::keymap::Platform::Mac { self.mac } else { self.other }
+    }
+
+    /// This action's alias binding on `platform`, if it has one.
+    pub fn alias(&self, platform: figcraft_engine::keymap::Platform) -> Option<&'static str> {
+        ALIASES
+            .iter()
+            .find(|(id, ..)| *id == self.id)
+            .map(|(_, mac, other)| if platform == figcraft_engine::keymap::Platform::Mac { *mac } else { *other })
+            .filter(|keys| !keys.is_empty())
+    }
+
+    /// Every binding that runs this action on `platform`: the primary one first, then its alias.
+    pub fn bindings(&self, platform: figcraft_engine::keymap::Platform) -> impl Iterator<Item = &'static str> {
+        std::iter::once(self.keys(platform)).filter(|keys| !keys.is_empty()).chain(self.alias(platform))
+    }
+
+    /// Whether a key press runs this action (its primary binding or its alias).
+    pub fn bound_to(&self, platform: figcraft_engine::keymap::Platform, key: &str, mods: figcraft_engine::keymap::Mods) -> bool {
+        self.bindings(platform).any(|binding| figcraft_engine::keymap::matches(binding, platform, key, mods))
+    }
+
+    /// The bindings as Help writes them: "⇧⌘P or ⌘K"; "Actions palette" for palette-only actions.
+    pub fn help_keys(&self, platform: figcraft_engine::keymap::Platform) -> String {
+        let shown: Vec<String> = self.bindings(platform).map(|keys| figcraft_engine::keymap::display(keys, platform)).collect();
+        if shown.is_empty() { "Actions palette".to_string() } else { shown.join(" or ") }
     }
 
     /// Text operations must stay with their owning field. A palette search must never submit a
@@ -179,27 +208,79 @@ impl Action {
 /// Stable catalog order, searched by label, ID, group, binding and scope on the current platform.
 pub fn search(query: &str, platform: figcraft_engine::keymap::Platform) -> Vec<&'static Action> {
     let query = query.trim().to_lowercase();
-    ACTIONS
-        .iter()
-        .filter(|action| {
-            [action.id, action.label, action.group, action.scope, action.keys(platform)].iter().any(|text| text.to_lowercase().contains(&query))
-        })
-        .collect()
+    ACTIONS.iter().filter(|action| rank(action, &query, platform).is_some()).collect()
+}
+
+/// The palette's search: the same matches as [`search`], best first (labels starting with the
+/// query, then a label word starting with it, then labels containing it, then the ID, group,
+/// keys or scope), catalog order within each rank.
+pub fn ranked(query: &str, platform: figcraft_engine::keymap::Platform) -> Vec<&'static Action> {
+    let query = query.trim().to_lowercase();
+    let mut hits: Vec<_> = ACTIONS.iter().filter_map(|action| rank(action, &query, platform).map(|r| (r, action))).collect();
+    hits.sort_by_key(|(r, _)| *r);
+    hits.into_iter().map(|(_, action)| action).collect()
+}
+
+/// How well `action` matches a lower-cased, trimmed query (lower is better); `None` when it
+/// doesn't.
+fn rank(action: &Action, query: &str, platform: figcraft_engine::keymap::Platform) -> Option<u8> {
+    let label = action.label.to_lowercase();
+    if label.starts_with(query) {
+        return Some(0);
+    }
+    if label.split(|c: char| !c.is_alphanumeric()).any(|word| word.starts_with(query)) {
+        return Some(1);
+    }
+    if label.contains(query) {
+        return Some(2);
+    }
+    let alias = action.alias(platform).unwrap_or_default();
+    [action.id, action.group, action.scope, action.keys(platform), alias].iter().any(|text| text.to_lowercase().contains(query)).then_some(3)
 }
 
 /// Shared menu/palette availability. Field-owned actions remain in Help and in search results,
 /// but cannot be activated by a surface that has taken focus away from their field.
 pub fn enabled(app: &crate::FigApp, action: &Action) -> bool {
+    disabled_reason(app, action).is_none()
+}
+
+/// Why `action` cannot run now, as the palette says it beside the dimmed row; `None` when it can.
+pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static str> {
     if !action.palette_enabled() {
-        return false;
+        return Some(if action.scope.starts_with("Composer only:") { "Only in the composer" } else { "Only in a text field" });
     }
+    let no_map = app.ui.home || app.session.ds().is_err();
     match action.id {
         "map.actions" | "map.help" | "map.openWorkspace" | "map.newWorkspace" | "map.preferences" | "map.fullscreen" | "map.focusMode"
-        | "map.workspacePane" | "map.nextRegion" | "map.previousRegion" => true,
+        | "map.workspacePane" | "map.nextRegion" | "map.previousRegion" => None,
         // Navigation resolves links (including subpages linked through their source card),
         // and safely declines an absent or ambiguous detail page.
-        "map.copy" | "map.copyImage" | "map.zoomSelection" | "map.openDetail" => !app.ui.home && !app.session.selection().is_empty(),
-        _ => !app.ui.home && app.session.ds().is_ok(),
+        "map.copy" | "map.copyImage" | "map.zoomSelection" | "map.openDetail" => {
+            if no_map {
+                Some("Open a map first")
+            } else if app.session.selection().is_empty() {
+                Some("Select a card first")
+            } else {
+                None
+            }
+        }
+        _ => no_map.then_some("Open a map first"),
+    }
+}
+
+/// A toggle's current state as the palette shows it at the right of its row ("Shown"/"Hidden",
+/// "On"/"Off"); `None` for actions that aren't toggles, or whose state needs an open map.
+pub fn toggle_state(app: &crate::FigApp, action: &Action) -> Option<&'static str> {
+    let shown = |on: bool| if on { "Shown" } else { "Hidden" };
+    let on = |on: bool| if on { "On" } else { "Off" };
+    let view = app.session.ds().ok().filter(|_| !app.ui.home).map(|ds| &ds.view);
+    match action.id {
+        "map.workspacePane" => Some(shown(app.ws.pane_open)),
+        "map.fullscreen" => Some(on(app.ui.fullscreen)),
+        "map.focusMode" => view.map(|v| on(v.ui_hidden)),
+        "map.comments" => view.map(|v| shown(v.comments)),
+        "map.cursors" => view.map(|v| shown(v.multiplayer_cursors)),
+        _ => None,
     }
 }
 

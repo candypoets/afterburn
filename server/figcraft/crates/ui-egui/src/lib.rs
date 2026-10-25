@@ -44,6 +44,7 @@ pub mod live_text;
 pub mod map_action_catalog;
 pub mod map_actions;
 pub mod map_navigation;
+pub mod map_palette;
 pub mod map_shell;
 pub mod measure_overlay;
 /// The read-only map client: no layers panel, no design panels, no tools.

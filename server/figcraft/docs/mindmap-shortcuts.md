@@ -26,6 +26,20 @@ F6 moves between workspace navigation, page navigation, the canvas and the compo
 regions are skipped. Tab traverses content cards on the canvas and controls elsewhere. Focus
 mode hides the workspace pane and page header; the composer and status bar remain available.
 
+## Actions palette
+
+⇧⌘P (Ctrl+Shift+P) opens the Actions palette, like VS Code's command palette; ⌘K (Ctrl+K) stays an
+alias and Help lists both. ⌘P (Ctrl+P) opens the page tree. The palette (`map_palette.rs`) lists
+every catalog action once: with an empty query, recently used actions first (the same Recents the
+editor palette keeps, map actions only), then every action by group; typing filters by name, group,
+scope and keys, best match first (label prefix, then a label word, then the label, then the other
+fields). Each row shows its shortcut as a key cap; toggles show their current state (Workspace pane,
+Comments and Collaborator cursors Shown/Hidden; Focus mode and Full screen On/Off). Actions that
+cannot run now stay listed, dimmed, with the reason (Select a card first, Open a map first, Only in
+the composer, Only in a text field) and Enter or a click does nothing. When nothing matches, the one
+row is "Search this map for “query”", which opens map search with the query typed. The footer counts
+all actions, or the matches out of all.
+
 ## Navigation and copying
 
 `map_navigation.rs` implements read-only search over current-map card names/text, page-tree-order
@@ -55,6 +69,7 @@ existing review panel. Save and worktree switching require the desktop node conn
 ## Verification
 
 `map_shortcut_tests.rs` drives actual egui key events. `map_surfaces_tests.rs` checks catalog,
-menu, palette and Help consistency. Module tests in `map_navigation.rs`, `map_shell.rs` and
+menu, palette and Help consistency, the palette's bindings, recents, disabled reasons, toggle
+states and no-match search. Module tests in `map_navigation.rs`, `map_shell.rs` and
 `a11y.rs` cover navigation, save replies, parked composers and focus. Export tests cover explicit
 scope without selection mutation. Existing editor tests continue to run with map mode disabled.

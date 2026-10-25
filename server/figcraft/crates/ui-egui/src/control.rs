@@ -285,11 +285,7 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
                 }
                 let action = crate::map_action_catalog::ACTIONS
                     .iter()
-                    .find(|action| {
-                        !crate::map_actions::field_action(action.id)
-                            && !action.keys(platform).is_empty()
-                            && figcraft_engine::keymap::matches(action.keys(platform), platform, key, m)
-                    })
+                    .find(|action| !crate::map_actions::field_action(action.id) && action.bound_to(platform, key, m))
                     .ok_or_else(|| format!("no map shortcut `{key}`"))?;
                 crate::map_actions::run(app, ctx, action.id);
                 return Ok(json!({"command": action.id}));
