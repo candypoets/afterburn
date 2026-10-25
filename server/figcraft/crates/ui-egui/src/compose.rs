@@ -30,14 +30,8 @@ use crate::workspaces::Target;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-/// The composer spans the canvas with 24 pt either side, never wider than this.
-const PANEL_MAX_W: f32 = 1600.0;
 /// The least it shrinks to in a narrow window.
 const PANEL_MIN_W: f32 = 280.0;
-/// Room left at the sides of the canvas (24 pt each).
-const PANEL_SIDE: f32 = 48.0;
-/// The space between the bar and the status bar under it.
-const PANEL_GAP: f32 = 26.0;
 /// The height of the row under the field: the recipient chip and Send.
 const ROW_H: f32 = 32.0;
 /// Send's least width; `Review send` widens it.
@@ -369,32 +363,30 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
     // The workspace pane takes the left edge; the composer belongs to the canvas, not the pane.
     let pane = if app.ws.pane_open && app.session.ds().is_ok_and(|ds| !ds.view.ui_hidden) { 300.0 } else { 0.0 };
-    let width = (ctx.content_rect().width() - pane - PANEL_SIDE).clamp(PANEL_MIN_W, PANEL_MAX_W);
+    // Docked: the full canvas width, flush on the status bar, with no gap, rounding or shadow.
+    let width = (ctx.content_rect().width() - pane).max(PANEL_MIN_W);
 
     let mut send = false;
     let mut clear = false;
     let enabled = !crate::map_actions::blocking_overlay(app, ctx);
     let composer = egui::Area::new(Id::new("map_composer"))
-        .anchor(Align2::CENTER_BOTTOM, vec2(pane / 2.0, -(crate::status_bar::HEIGHT + PANEL_GAP)))
+        .anchor(Align2::LEFT_BOTTOM, vec2(pane, -crate::status_bar::HEIGHT))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER))
-                .corner_radius(CornerRadius::same(10))
-                .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(24) })
-                .inner_margin(Margin::symmetric(15, 12))
-                .show(ui, |ui| {
-                    if !enabled {
-                        ui.disable();
-                    }
-                    ui.set_width((width - 30.0).max(40.0));
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    let names = Names { node: node.as_deref(), page: page_name.as_deref(), node_id, page_id: page };
-                    let out = body(ui, &mut app.compose, &context, &names, has_selection, active, &included, comments);
-                    send = out.send;
-                    clear = out.clear;
-                });
+            let dock = egui::Frame::NONE.fill(PANEL).inner_margin(Margin::symmetric(16, 12)).show(ui, |ui| {
+                if !enabled {
+                    ui.disable();
+                }
+                ui.set_width((width - 32.0).max(40.0));
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let names = Names { node: node.as_deref(), page: page_name.as_deref(), node_id, page_id: page };
+                let out = body(ui, &mut app.compose, &context, &names, has_selection, active, &included, comments);
+                send = out.send;
+                clear = out.clear;
+            });
+            // The dock's only edge: one rule along its top.
+            let top = dock.response.rect;
+            ui.painter().hline(top.x_range(), top.top(), Stroke::new(1.0, BORDER));
         });
     crate::a11y::area(&mut app.ui.nav, crate::a11y::Region::Properties, composer.response.rect);
     if enabled && !has_selection && comments > 0 && page_comment_chip(ctx, composer.response.rect, comments) {

@@ -170,7 +170,7 @@ fn agent_row(ui: &mut egui::Ui, info: &TargetInfo, task: Option<&str>, chosen: b
     let tint = state.color();
     ui.painter().circle_filled(egui::pos2(rect.left() + 18.0, rect.top() + 20.0), 4.0, tint);
     let room = (rect.width() - 34.0 - 16.0).max(40.0);
-    let name = row_name(None, pane);
+    let name = row_name(Some(info.label.as_str()), pane);
     let shown = widgets::elide_font(ui, &name, room, semibold(14.0));
     ui.painter().text(egui::pos2(rect.left() + 34.0, rect.top() + 10.0), Align2::LEFT_TOP, shown, semibold(14.0), INK);
     let status = status_line(kind, pane, &info.status);
@@ -359,6 +359,8 @@ mod tests {
             .enumerate()
             .map(|(index, status)| TargetInfo {
                 target: Target::Existing { pane: format!("w1:p{index}"), kind: "codex".into(), status: status.to_string() },
+                label: format!("Pane {index}"),
+                title: None,
                 status: status.to_string(),
                 focused: false,
                 new_agent: false,
