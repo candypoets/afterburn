@@ -2212,7 +2212,7 @@ fn agent_row(ui: &mut Ui, s: &Skin, agent: &AgentDetail) {
 
 /// What an agent says it is doing, from its pane title: spinners and icons dropped, and for a
 /// `repo | Ready | task | branch` title just the task.
-fn agent_task(title: &str) -> String {
+pub(crate) fn agent_task(title: &str) -> String {
     let title = title.trim_start_matches(|c: char| !c.is_alphanumeric()).trim();
     let parts: Vec<&str> = title.split(" | ").map(str::trim).collect();
     let task = if parts.len() >= 3 { parts.get(2).copied().unwrap_or(title) } else { title };
