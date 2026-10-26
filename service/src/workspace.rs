@@ -14,6 +14,9 @@ pub struct AgentDetail {
     /// Herdr display name, when the payload has one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The name of the pane's tab, when someone named it (not just its number).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
     /// Lifecycle state (`idle`, `working`, `blocked`, `done`, `unknown`).
     pub status: String,
     /// Focused in the user's Herdr UI.

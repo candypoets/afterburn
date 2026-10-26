@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use crate::agent::{self, AgentOutcome, Target};
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::herdr::{Agent, Herdr, Pane, Workspace};
+use crate::herdr::{Agent, Herdr, Pane, Tab, Workspace};
 use crate::workspace::{AgentDetail, LastSync, WorkspaceView};
 
 #[path = "node_herdr_events.rs"]
@@ -182,7 +182,9 @@ impl NodeHerdr {
     pub fn workspaces(&self) -> Result<Vec<WorkspaceView>> {
         let snapshot = self.snapshot()?;
         let workspaces: Vec<Workspace> = serde_json::from_value(snapshot["workspaces"].clone())?;
-        let agents: Vec<Agent> = serde_json::from_value(snapshot["agents"].clone())?;
+        let mut agents: Vec<Agent> = serde_json::from_value(snapshot["agents"].clone())?;
+        let tabs: Vec<Tab> = serde_json::from_value(snapshot["tabs"].clone()).unwrap_or_default();
+        name_tabs(&mut agents, &tabs);
         let clis = agent::installed_kinds();
         let mut views = Vec::with_capacity(workspaces.len());
         for workspace in workspaces {
@@ -495,6 +497,17 @@ fn install() -> Result<()> {
     }
 }
 
+/// Give each agent its tab's name: Herdr names tabs, not panes, so the tab label is the pane's.
+fn name_tabs(agents: &mut [Agent], tabs: &[Tab]) {
+    for agent in agents {
+        agent.tab_label = agent
+            .tab_id
+            .as_deref()
+            .and_then(|id| tabs.iter().find(|tab| tab.tab_id == id))
+            .and_then(Tab::name);
+    }
+}
+
 fn workspace_view(
     workspace: Workspace,
     agents: &[Agent],
@@ -548,6 +561,7 @@ fn workspace_view(
                     pane: a.pane_id.clone()?,
                     kind: a.agent.clone(),
                     name: a.name.clone(),
+                    tab: a.tab_label.clone(),
                     status: a.agent_status.clone().unwrap_or_else(|| "unknown".into()),
                     focused: a.focused,
                     title: a

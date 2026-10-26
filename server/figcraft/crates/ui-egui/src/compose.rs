@@ -1435,7 +1435,7 @@ fn build_targets(agents: Vec<workspaces::AgentDetail>, clis: &[String]) -> Vec<T
         if agent.pane.trim().is_empty() {
             continue;
         }
-        let label = agent_label(agent.name.as_deref(), agent.title.as_deref(), &agent.pane);
+        let label = agent_label(agent.name.as_deref(), agent.tab.as_deref(), &agent.pane);
         let title = agent.title.map(|title| title.trim().to_string()).filter(|title| !title.is_empty());
         targets.push(TargetInfo {
             target: Target::Existing { pane: agent.pane, kind: agent.kind, status: agent.status.clone() },
@@ -1463,10 +1463,11 @@ fn build_targets(agents: Vec<workspaces::AgentDetail>, clis: &[String]) -> Vec<T
     targets
 }
 
-/// What the human calls a pane: Herdr's agent name, else its terminal title, else `Pane N`.
+/// What the human calls a pane: Herdr's agent name, else its tab's name, else `Pane N`. Never the
+/// terminal title: that is the session's task, not the pane's name.
 #[cfg(any(test, not(target_arch = "wasm32")))]
-pub(crate) fn agent_label(name: Option<&str>, title: Option<&str>, pane: &str) -> String {
-    [name, title]
+pub(crate) fn agent_label(name: Option<&str>, tab: Option<&str>, pane: &str) -> String {
+    [name, tab]
         .into_iter()
         .flatten()
         .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
@@ -2077,10 +2078,26 @@ mod tests {
         assert_eq!(state.input, "Keep me", "no outcome of the check empties the field");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn an_agent_is_named_by_herdr_then_its_title_then_its_pane() {
-        assert_eq!(agent_label(Some("Backend"), Some("fixing tests"), "w1:p1"), "Backend");
-        assert_eq!(agent_label(Some("  "), Some(" fixing\n tests "), "w1:p1"), "fixing tests");
+    fn a_pane_is_named_by_its_tab_not_by_its_session_title() {
+        let detail = |pane: &str, tab: Option<&str>| workspaces::AgentDetail {
+            pane: pane.into(),
+            kind: "codex".into(),
+            tab: tab.map(str::to_owned),
+            title: Some("mindmap | Ready | Sync backend mindmap | main".into()),
+            ..workspaces::AgentDetail::default()
+        };
+        let targets = build_targets(vec![detail("w1:p1", Some("small brain")), detail("w1:p4", None)], &[]);
+        let labels: Vec<_> = targets.iter().map(|info| info.label.as_str()).collect();
+        assert_eq!(labels, ["small brain", "Pane 4"]);
+        assert!(targets.iter().all(|info| info.title.is_some()), "the title stays as the task");
+    }
+
+    #[test]
+    fn an_agent_is_named_by_herdr_then_its_tab_then_its_pane() {
+        assert_eq!(agent_label(Some("Backend"), Some("small brain"), "w1:p1"), "Backend");
+        assert_eq!(agent_label(Some("  "), Some(" small\n brain "), "w1:p1"), "small brain");
         assert_eq!(agent_label(None, None, "w1:p4"), "Pane 4");
         assert_eq!(agent_label(None, None, "odd"), "Pane odd");
         let backend = agent("w1:p1", "codex", "idle", Some("Backend"));

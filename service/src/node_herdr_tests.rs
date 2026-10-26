@@ -384,3 +384,25 @@ fn live_shared_herdr_read_only() {
         }
     }
 }
+
+#[test]
+fn agents_take_their_tab_name_unless_the_tab_only_shows_its_number() {
+    let mut agents: Vec<Agent> = serde_json::from_value(json!([
+        {"workspace_id":"w1","pane_id":"w1:p1","tab_id":"w1:t1","agent":"codex","terminal_title_stripped":"repo | Ready | Fix tests | main"},
+        {"workspace_id":"w1","pane_id":"w1:p2","tab_id":"w1:t2","agent":"claude"},
+        {"workspace_id":"w1","pane_id":"w1:p3","agent":"kimi"}
+    ]))
+    .unwrap();
+    let tabs: Vec<Tab> = serde_json::from_value(json!([
+        {"tab_id":"w1:t1","number":1,"label":" Backend "},
+        {"tab_id":"w1:t2","number":2,"label":"2"}
+    ]))
+    .unwrap();
+    name_tabs(&mut agents, &tabs);
+    let labels: Vec<_> = agents.iter().map(|a| a.tab_label.as_deref()).collect();
+    assert_eq!(labels, [Some("Backend"), None, None]);
+    let view = workspace_view(workspace(), &agents, &[], &[]);
+    let detail = serde_json::to_value(&view.agents_detail).unwrap();
+    assert_eq!(detail[0]["tab"], "Backend");
+    assert!(detail[1].get("tab").is_none());
+}

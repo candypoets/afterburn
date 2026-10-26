@@ -76,6 +76,32 @@ pub struct Agent {
     /// The pane's terminal title without spinners or styling: what the agent is doing.
     #[serde(default)]
     pub terminal_title_stripped: Option<String>,
+    /// The hosting tab's name, when someone named it: the pane's name in Herdr. Filled from the
+    /// session snapshot's tabs, never from `agent.list`.
+    #[serde(skip)]
+    pub tab_label: Option<String>,
+}
+
+/// One tab from the session snapshot.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Tab {
+    /// Stable tab id (`wX:t2`).
+    pub tab_id: String,
+    /// The tab's position in its workspace; an unnamed tab shows it as its label.
+    #[serde(default)]
+    pub number: Option<u64>,
+    /// The tab's label.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+impl Tab {
+    /// The label when it names the tab, not just its number.
+    pub fn name(&self) -> Option<String> {
+        let label = self.label.as_deref()?.trim();
+        let number = self.number.map(|number| number.to_string());
+        (!label.is_empty() && Some(label) != number.as_deref()).then(|| label.to_owned())
+    }
 }
 
 /// One pane from `pane.list`.

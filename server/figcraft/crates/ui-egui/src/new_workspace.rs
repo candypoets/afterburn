@@ -1225,6 +1225,7 @@ mod tests {
                 kind: "codex".into(),
                 status: status.into(),
                 name: None,
+                tab: None,
                 focused: false,
                 title: title.map(str::to_owned),
             }],

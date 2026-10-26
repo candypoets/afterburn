@@ -557,6 +557,7 @@ mod tests {
             agent_status: Some(status.into()),
             focused,
             terminal_title_stripped: None,
+            tab_label: None,
         }
     }
 
@@ -581,6 +582,7 @@ mod tests {
             agent_status: Some("idle".into()),
             focused: false,
             terminal_title_stripped: None,
+            tab_label: None,
         }];
         assert_eq!(
             unique_agent_name(&agents, "mindmap").unwrap_or_default(),

@@ -118,6 +118,9 @@ pub struct AgentDetail {
     /// Herdr's display name for the agent, when it has one.
     #[serde(default)]
     pub name: Option<String>,
+    /// The name of the pane's tab, when someone named it: what Herdr calls the pane.
+    #[serde(default)]
+    pub tab: Option<String>,
     /// Its lifecycle state (`idle`, `working`, `blocked`, `done`, …).
     #[serde(default)]
     pub status: String,
