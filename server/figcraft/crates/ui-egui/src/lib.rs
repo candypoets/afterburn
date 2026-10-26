@@ -340,6 +340,8 @@ mod style_folder_rename_tests;
 #[cfg(test)]
 mod sync_scope_tests;
 #[cfg(test)]
+mod sync_record_tests;
+#[cfg(test)]
 mod text_enter_tests;
 #[cfg(test)]
 mod titlebar_tests;

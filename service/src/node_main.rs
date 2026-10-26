@@ -81,7 +81,26 @@ fn option(args: &[String], flag: &str) -> Option<String> {
     args.windows(2).find(|p| p[0] == flag).map(|p| p[1].clone())
 }
 
+/// A record belongs to the agent that makes it: Herdr gives every pane's processes its pane and
+/// workspace ids, so the node can cancel the record when that agent exits.
+fn record_owner(request: &mut Value, env: impl Fn(&str) -> Option<String>) {
+    if request["method"] != "record" {
+        return;
+    }
+    for (field, key) in [
+        ("pane", "HERDR_PANE_ID"),
+        ("workspace", "HERDR_WORKSPACE_ID"),
+    ] {
+        if request[field].as_str().is_none_or(|v| v.trim().is_empty()) {
+            if let Some(value) = env(key).filter(|v| !v.trim().is_empty()) {
+                request[field] = json!(value);
+            }
+        }
+    }
+}
+
 fn request(address: &str, mut request: Value) -> Result<Value> {
+    record_owner(&mut request, |key| std::env::var(key).ok());
     request["id"] = json!(1);
     request["version"] = json!(node::PROTOCOL);
     let mut stream = TcpStream::connect(address)?;
@@ -218,4 +237,30 @@ fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
         std::io::stdout().flush()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod record_owner_tests {
+    use super::*;
+
+    #[test]
+    fn a_record_carries_the_pane_and_workspace_of_the_agent_that_sends_it() {
+        let env = |key: &str| match key {
+            "HERDR_PANE_ID" => Some("wX:p2".to_owned()),
+            "HERDR_WORKSPACE_ID" => Some("wX".to_owned()),
+            _ => None,
+        };
+        let mut record = json!({"method":"record","request":"r"});
+        record_owner(&mut record, env);
+        assert_eq!(
+            (record["pane"].as_str(), record["workspace"].as_str()),
+            (Some("wX:p2"), Some("wX"))
+        );
+        let mut named = json!({"method":"record","pane":"w1:p1"});
+        record_owner(&mut named, env);
+        assert_eq!(named["pane"], "w1:p1", "an explicit pane wins");
+        let mut diff = json!({"method":"diff"});
+        record_owner(&mut diff, env);
+        assert!(diff.get("pane").is_none());
+    }
 }

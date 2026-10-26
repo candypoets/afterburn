@@ -329,6 +329,9 @@ pub struct DiffReply {
     pub map: MapDiff,
     #[serde(default)]
     pub code: CodeDiff,
+    /// The Sync or record already running for this session, if any: Sync waits for it.
+    #[serde(default)]
+    pub open: Option<Job>,
 }
 
 impl DiffReply {
@@ -352,9 +355,22 @@ pub struct Job {
     pub agent: Option<Value>,
     #[serde(default)]
     pub reason: Option<String>,
+    /// What the job records: `sync`, or `explain` / `fix` for an agent's own record.
+    #[serde(default, rename = "kind")]
+    pub work: String,
 }
 
 impl Job {
+    /// An agent's record of its own explanation or bug fix, not a Sync.
+    pub fn is_record(&self) -> bool {
+        matches!(self.work.trim(), "explain" | "fix")
+    }
+
+    /// The pane of the agent that opened the job, when it said.
+    fn pane(&self) -> Option<&str> {
+        self.agent.as_ref()?.get("pane")?.as_str().map(str::trim).filter(|pane| !pane.is_empty())
+    }
+
     fn in_flight(&self) -> bool {
         self.state.trim().eq_ignore_ascii_case("in_flight")
     }
@@ -460,6 +476,9 @@ pub struct State {
     all_pages: bool,
     /// The page the diff was read for (`None` when it covers every page).
     page: Option<u64>,
+    /// A cancel of an open record is on its thread.
+    cancelling: bool,
+    cancel_rx: Option<Receiver<Result<(), String>>>,
 }
 
 impl State {
@@ -470,7 +489,14 @@ impl State {
 
     /// Whether the action button must stay disabled.
     fn locked(&self) -> bool {
-        self.busy || self.starting || self.in_flight()
+        self.busy || self.starting || self.in_flight() || self.blocker().is_some()
+    }
+
+    /// A Sync or record running for this session that is not this widget's own flight: the node
+    /// refuses a new Sync until it finishes or is cancelled.
+    pub fn blocker(&self) -> Option<&Job> {
+        let own = self.job.as_ref().filter(|job| job.in_flight()).map(|job| job.id.as_str());
+        self.diff.as_ref()?.open.as_ref().filter(|job| job.in_flight() && Some(job.id.as_str()) != own)
     }
 
     /// The design changes the button badges, when a diff is loaded.
@@ -604,6 +630,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
 
     poll_diff(app);
     poll_job(app, ctx);
+    poll_cancel(app);
     #[cfg(not(target_arch = "wasm32"))]
     if !app.sync.starting {
         let address = app.sync.node.as_ref().map(|node| node.address.clone());
@@ -639,7 +666,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let max_h = (ctx.content_rect().height() - 140.0).max(220.0);
     // The flight (or failure) card stays above the scroll area so it is visible even when the
     // human had scrolled to the agent and note.
-    let job_card = app.sync.job.as_ref().is_some_and(|job| job.in_flight() || job.failed());
+    let job_card = app.sync.job.as_ref().is_some_and(|job| job.in_flight() || job.failed()) || app.sync.blocker().is_some();
     // A fixed, bounded viewport: an anchored Area that grows with its scrollable content would
     // chase its own height, and shrinking to measured content lets egui's clipping hide the rest.
     let widget_h = max_h.min(620.0);
@@ -697,6 +724,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             start_diff(app, ctx, snapshot, page, workspace.clone());
         }
     }
+    if let Some(job) = out.cancel {
+        start_cancel(app, ctx, job);
+    }
     if out.sync && app.sync.open {
         match snapshot_now(app) {
             Ok((snapshot, page)) => start_sync(app, ctx, workspace, snapshot, page),
@@ -724,6 +754,8 @@ struct WidgetOut {
     sync: bool,
     /// The scope the human picked: `Some(true)` for every page, `Some(false)` for this page.
     scope: Option<bool>,
+    /// Cancel this open record.
+    cancel: Option<String>,
 }
 
 /// The widget's frame contents: header, last sync, the diffs, agent, note and action.
@@ -772,6 +804,13 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
             failed_card(ui, &reason);
             carded = true;
         }
+    }
+    if let Some(open) = state.blocker() {
+        ui.add_space(7.0);
+        if open_card(ui, open, &compose.targets, state.cancelling, now_secs()) {
+            out.cancel = Some(open.id.clone());
+        }
+        carded = true;
     }
     ui.add_space(if carded { 9.0 } else { 7.0 });
     divider(ui);
@@ -843,7 +882,9 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
                     out.sync = true;
                 }
                 ui.add_space(7.0);
-                let hint = if target.is_none() {
+                let hint = if state.blocker().is_some() {
+                    "Sync waits until the open record is committed or cancelled."
+                } else if target.is_none() {
                     if compose.targets.is_empty() { "No agent is available in this workspace yet." } else { "Choose an agent to sync." }
                 } else if syncing {
                     "The map stays editable while the sync runs."
@@ -897,6 +938,159 @@ fn flight_card(ui: &mut Ui, job: &Job, compose: &crate::compose::State) {
             let line = if started.is_empty() { "started just now".to_string() } else { format!("started {started}") };
             ui.label(egui::RichText::new(line).font(mono(9.0)).color(MUTED));
         });
+}
+
+/// The open record (or another Sync) the node is waiting on: what it is, whose it is, how long it
+/// has waited, and a Cancel button for a record. Returns whether Cancel was clicked.
+fn open_card(ui: &mut Ui, job: &Job, targets: &[TargetInfo], cancelling: bool, now: Option<u64>) -> bool {
+    let mut clicked = false;
+    egui::Frame::NONE
+        .fill(SOFT)
+        .stroke(Stroke::new(1.0, ACCENT))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(egui::Margin { left: 13, right: 13, top: 10, bottom: 10 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.label(egui::RichText::new(open_title(job)).font(semibold(11.0)).color(ACCENT));
+            let line = format!("by {} · {}", job_owner(job, targets), waited(&job.started, now));
+            ui.label(egui::RichText::new(line).font(mono(9.0)).color(MUTED));
+            if let Some(reason) = job.reason.as_deref().map(str::trim).filter(|reason| !reason.is_empty()) {
+                ui.add(egui::Label::new(egui::RichText::new(reason).font(mono(9.0)).color(MUTED)).wrap());
+            }
+            if job.is_record() {
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+                    let label = if cancelling { "Cancelling…" } else { "Cancel record" };
+                    clicked = secondary_button(ui, label, !cancelling);
+                    ui.label(egui::RichText::new("commits nothing").font(mono(8.5)).color(FAINT));
+                });
+            }
+        });
+    clicked
+}
+
+/// `Explanation record open`, `Bug fix record open`, or another `Sync in flight`.
+pub(crate) fn open_title(job: &Job) -> &'static str {
+    match job.work.trim() {
+        "explain" => "Explanation record open",
+        "fix" => "Bug fix record open",
+        _ => "Sync in flight",
+    }
+}
+
+/// Whose job it is: the agent in its pane, by the name the agent menu uses.
+pub(crate) fn job_owner(job: &Job, targets: &[TargetInfo]) -> String {
+    let Some(pane) = job.pane() else { return "an agent outside Herdr".to_string() };
+    targets
+        .iter()
+        .find_map(|info| match &info.target {
+            Target::Existing { pane: p, kind, .. } if p == pane => Some(if info.label.trim().is_empty() {
+                kind_label(kind).to_string()
+            } else {
+                format!("{} · {}", info.label.trim(), kind_label(kind))
+            }),
+            _ => None,
+        })
+        .unwrap_or_else(|| format!("pane {pane}"))
+}
+
+/// `waited 12 min` from the job's start (Unix seconds) to now.
+pub(crate) fn waited(started: &str, now: Option<u64>) -> String {
+    let (Some(start), Some(now)) = (started.trim().parse::<u64>().ok(), now) else { return "open".to_string() };
+    let minutes = now.saturating_sub(start) / 60;
+    match minutes {
+        0 => "opened just now".to_string(),
+        1..=59 => format!("waited {minutes} min"),
+        _ => format!("waited {} h {} min", minutes / 60, minutes % 60),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn now_secs() -> Option<u64> {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now_secs() -> Option<u64> {
+    None
+}
+
+/// A quiet outlined button for an action beside the main one.
+fn secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> bool {
+    let width = text_width(ui, label, semibold(10.0)) + 22.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 22.0), if enabled { Sense::click() } else { Sense::hover() });
+    let response = response.on_hover_cursor(if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default });
+    a11y::button(&response, label);
+    let fill = if enabled && response.hovered() { PANEL } else { SOFT };
+    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
+    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, if enabled { ACCENT } else { BORDER }), StrokeKind::Inside);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(10.0), if enabled { ACCENT } else { FAINT });
+    response.clicked() && enabled
+}
+
+/// Cancel an open record on a thread; the diff is read again once the node answers.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_cancel(app: &mut FigApp, ctx: &egui::Context, job: String) {
+    if app.sync.cancelling {
+        return;
+    }
+    let node = match workspaces::active_node(app) {
+        Ok(node) => node,
+        Err(error) => {
+            app.sync.error = Some(error);
+            return;
+        }
+    };
+    let request = json!({"id": 1, "method": "sync.cancel", "job": job}).to_string();
+    let (tx, rx) = mpsc::channel();
+    app.sync.cancel_rx = Some(rx);
+    app.sync.cancelling = true;
+    let context = ctx.clone();
+    let spawned = std::thread::Builder::new().name("figcraft-sync-cancel".into()).spawn(move || {
+        let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ask(&node.address, &request, STATUS_TIMEOUT)))
+            .unwrap_or_else(|_| Err("The cancel request failed unexpectedly.".to_string()))
+            .and_then(|text| {
+                let value: Value = serde_json::from_str(&text).map_err(|e| format!("The node sent an unreadable answer: {e}"))?;
+                if value["ok"] == true {
+                    Ok(())
+                } else {
+                    Err(value["error"].as_str().unwrap_or("The node refused the cancel.").to_string())
+                }
+            });
+        let _ = tx.send(reply);
+        context.request_repaint();
+    });
+    if let Err(e) = spawned {
+        app.sync.cancel_rx = None;
+        app.sync.cancelling = false;
+        app.sync.error = Some(format!("Could not cancel the record: {e}"));
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start_cancel(app: &mut FigApp, _ctx: &egui::Context, _job: String) {
+    app.toast("The node is only available in the desktop app.");
+}
+
+/// Take in the cancel thread's answer.
+fn poll_cancel(app: &mut FigApp) {
+    let received = match app.sync.cancel_rx.as_ref().map(Receiver::try_recv) {
+        None | Some(Err(mpsc::TryRecvError::Empty)) => return,
+        Some(Ok(reply)) => reply,
+        Some(Err(mpsc::TryRecvError::Disconnected)) => Err("The cancel request ended without an answer.".to_string()),
+    };
+    app.sync.cancel_rx = None;
+    app.sync.cancelling = false;
+    match received {
+        Ok(()) => {
+            app.sync.error = None;
+            app.sync.refresh = true;
+            app.toast("Record cancelled: nothing was committed.");
+        }
+        Err(e) => app.sync.error = Some(e),
+    }
 }
 
 /// A failed job's reason, kept in the widget so the next sync can be set up.
@@ -1290,6 +1484,10 @@ fn start_diff(app: &mut FigApp, ctx: &egui::Context, snapshot: Snapshot, page: O
         }
     };
     let request = json!({"id": 1, "method": "diff", "workspace": workspace, "session": node.session, "page": page}).to_string();
+    // Job events (a record opening or ending) arrive for the node the diff came from.
+    if !app.sync.starting && !app.sync.in_flight() {
+        app.sync.node = Some(node.clone());
+    }
     let (tx, rx) = mpsc::channel();
     app.sync.rx = Some(rx);
     app.sync.busy = true;
@@ -1492,6 +1690,13 @@ pub fn node_event(app: &mut FigApp, ctx: &egui::Context, address: &str, mut even
         return;
     }
     if app.sync.job.as_ref().is_none_or(|job| event["job"]["id"].as_str() != Some(job.id.as_str()) || !job.in_flight()) {
+        // Another job: a record opened or ended, or the one blocking Sync changed. Re-read.
+        let blocking = app.sync.blocker().is_some_and(|open| event["job"]["id"].as_str() == Some(open.id.as_str()));
+        let record = matches!(event["job"]["kind"].as_str(), Some("explain" | "fix"));
+        if blocking || record {
+            app.sync.refresh = true;
+            ctx.request_repaint();
+        }
         return;
     }
     event["ok"] = Value::Bool(true);
@@ -1520,6 +1725,8 @@ fn apply_job(app: &mut FigApp, ctx: &egui::Context, received: JobMsg) {
                 },
                 Ok(reply) => {
                     app.sync.error = Some(reply.error.unwrap_or_else(|| "The node refused the sync.".to_string()));
+                    // A refusal is often a record or Sync already running: show it.
+                    app.sync.refresh = true;
                 }
                 Err(e) => app.sync.error = Some(e),
             }

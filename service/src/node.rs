@@ -491,13 +491,20 @@ impl Node {
                 let metadata = docs.metadata(&session)?;
                 let document = docs.document(&session)?;
                 drop(docs);
-                node_git::diff_paginated(
+                let mut diff = node_git::diff_paginated(
                     &metadata.worktree,
                     &document,
                     page(req)?,
                     req["offset"].as_u64().unwrap_or(0) as usize,
                     req["limit"].as_u64().unwrap_or(200).min(1000) as usize,
-                )
+                )?;
+                // The Sync panel shows a running Sync or open record instead of only refusing.
+                diff["open"] = lock(&self.jobs)?
+                    .values()
+                    .find(|j| j.session == session && j.state == "in_flight")
+                    .map(job_view)
+                    .unwrap_or(Value::Null);
+                Ok(diff)
             }
             "init" | "send" => self.send(req),
             "sync" => self.start_sync(req),
@@ -520,7 +527,9 @@ impl Node {
             "sync.cancel" => {
                 let picks: Vec<crate::node_documents::MergePick> =
                     serde_json::from_value(req.get("picks").cloned().unwrap_or_else(|| json!([])))?;
-                self.cancel_sync(required(req, "job")?, &picks)
+                let result = self.cancel_sync(required(req, "job")?, &picks)?;
+                self.broadcast(json!({"version":PROTOCOL,"event":"job","job":result["job"]}));
+                Ok(result)
             }
             "workspace.create" => Ok(json!({"workspace": self.herdr.create_workspace(
                 required(req, "path")?,
@@ -853,7 +862,9 @@ impl Node {
             frozen,
             session,
             workspace: req["workspace"].as_str().unwrap_or("").into(),
-            agent: json!({"kind":"external","state":"existing","prompted":false}),
+            // The agent's pane (sent by `mindmap-node` from Herdr's environment) lets the agent
+            // watcher cancel the record when that agent exits.
+            agent: json!({"kind":"external","state":"existing","prompted":false,"pane":req["pane"].as_str().unwrap_or("")}),
             state: "in_flight".into(),
             seen_active: true,
             prepared: false,
@@ -872,6 +883,9 @@ impl Node {
                 return Err(error);
             }
         };
+        if let Some(job) = lock(&self.jobs)?.get(&id) {
+            self.broadcast(json!({"version":PROTOCOL,"event":"job","job":job_view(job)}));
+        }
         let commit = if kind == "fix" {
             "Commit your code together with the staged .mindmap/map.figcraft"
         } else {
@@ -1184,6 +1198,7 @@ impl Node {
             };
             if !statuses.is_empty() || matches!(event, HerdrEvent::Resync { .. }) {
                 let mut jobs = lock(&self.jobs)?;
+                let mut ended = Vec::new();
                 for job in jobs.values_mut().filter(|j| j.state == "in_flight") {
                     let pane = job.agent["pane"].as_str().unwrap_or("");
                     if let Some(status) = statuses
@@ -1227,6 +1242,14 @@ impl Node {
                         }
                         self.persist_job(job)?;
                     }
+                    if job.state != "in_flight" {
+                        ended.push(job_view(job));
+                    }
+                }
+                drop(jobs);
+                // Clients show open records too: tell them one ended with its agent.
+                for job in ended {
+                    self.broadcast(json!({"version":PROTOCOL,"event":"job","job":job}));
                 }
             }
             let ids = lock(&self.jobs)?

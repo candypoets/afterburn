@@ -949,4 +949,28 @@ fn a_recorded_explanation_commits_only_its_own_edits_and_sync_then_sees_only_the
     assert_eq!(added, ["retry button"], "{diff}");
     assert_eq!(diff["last"]["kind"], "explain");
     assert_eq!(diff["last_sync"]["kind"], "sync");
+    assert!(diff["open"].is_null());
+
+    // An open record belongs to its agent's pane, shows in the diff the Sync panel reads, and
+    // a cancel releases it.
+    let request = wire.ok(json!({"method":"record.start","session":session}))["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    wire.create(&session, "second note");
+    let open = wire.ok(json!({"method":"record","session":session,"request":request,"kind":"explain","pane":"w1:p2","workspace":"w1"}));
+    let job = open["job"].as_str().unwrap().to_owned();
+    let diff = wire.ok(json!({"method":"diff","session":session}));
+    assert_eq!(diff["open"]["id"], job.as_str());
+    assert_eq!(diff["open"]["kind"], "explain");
+    assert_eq!(diff["open"]["agent"]["pane"], "w1:p2");
+    let refused = wire.request_version(
+        json!({"method":"sync.capture","session":session}),
+        Some(json!(1)),
+    );
+    assert_eq!(refused["ok"], false);
+    let cancelled = wire.ok(json!({"method":"sync.cancel","job":job}));
+    assert_eq!(cancelled["job"]["state"], "failed");
+    let diff = wire.ok(json!({"method":"diff","session":session}));
+    assert!(diff["open"].is_null(), "{diff}");
 }

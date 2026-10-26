@@ -76,6 +76,8 @@ the reply lists those cards (`kept_waiting`). Without an earlier record for the 
 as the request found it is recorded too, which declares it current. Init is one big
 explanation and ends with a `record` of the whole map. `record.start` keeps a starting point for
 work that did not come from a comment. An open record blocks Sync; `sync.cancel` releases it.
+`mindmap-node` adds your Herdr pane to `record`, so the node cancels the record if you exit, and
+the Sync panel shows it (kind, agent, age) with a Cancel button.
 
 ## Sync implements the design
 
