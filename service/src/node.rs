@@ -42,6 +42,13 @@ struct Job {
     prepared: bool,
     reason: Option<String>,
     commit: Option<String>,
+    /// `sync`, or `explain` / `fix` for a record an agent made of its own request.
+    #[serde(default = "sync_kind")]
+    kind: String,
+}
+
+fn sync_kind() -> String {
+    "sync".into()
 }
 
 pub struct Node {
@@ -499,6 +506,16 @@ impl Node {
             "sync.capture" => self.capture_sync(req),
             "sync_status" => self.sync_status(required(req, "job")?),
             "sync.prepare" => self.prepare_sync(required(req, "job")?),
+            "record" => self.record(req),
+            // A request started outside a comment (an agent's own task) keeps its start here.
+            "record.start" => {
+                let session = self.session(req)?;
+                let docs = lock(&self.docs)?;
+                let metadata = docs.metadata(&session)?;
+                let document = docs.document(&session)?;
+                drop(docs);
+                Ok(json!({"request":node_git::save_request(&metadata.worktree, &document)?}))
+            }
             "sync.finish" => self.finish_sync(required(req, "job")?, req["commit"].as_str()),
             "sync.cancel" => {
                 let picks: Vec<crate::node_documents::MergePick> =
@@ -618,13 +635,34 @@ impl Node {
             }
         }
         let context = self.context(&session, &context_req, &commented)?;
+        // Keep the map as it is now: the request's starting point, which its record compares to.
+        let scope = match page(&context_req)? {
+            Some(page) => Some(page),
+            None => context_req["page_id"].as_u64().filter(|id| *id > 0),
+        };
+        let docs = lock(&self.docs)?;
+        let metadata = docs.metadata(&session)?;
+        let document = docs.document(&session)?;
+        drop(docs);
+        let request = node_git::save_request(&metadata.worktree, &document)?;
+        // A page created with this prompt is not in any record yet; that is not an error.
+        let drift = node_git::design_drift(&metadata.worktree, &document, scope).ok();
+        let state = crate::node_brief::request_section(&crate::node_brief::State {
+            request: &request,
+            page: scope,
+            drift: drift.as_ref(),
+        });
         let prompt = crate::comments::format_prompt(
             &workspace.label,
             workspace.path.as_deref(),
             &comments,
             prompt,
-            Some(&context),
+            Some(&format!("{context}\n{state}")),
         )?;
+        let prompt = format!(
+            "{prompt}\n\n{}",
+            crate::node_brief::comment_brief(&request, scope, initial)
+        );
         let agent = self.herdr.prompt(&workspace, &target, &prompt)?;
         if !agent.prompted || matches!(agent.state, crate::agent::AgentState::Error) {
             return Err(Error::new(
@@ -637,6 +675,7 @@ impl Node {
         let mut result = self.open(&json!({"workspace":workspace.id}))?;
         result["agent"] = serde_json::to_value(agent)?;
         result["sent"] = json!(comments.len());
+        result["request"] = json!(request);
         Ok(result)
     }
 
@@ -655,16 +694,35 @@ impl Node {
             .values()
             .any(|j| j.session == session && j.state == "in_flight")
         {
-            return Err(Error::new("a sync is already running for this session"));
+            return Err(Error::new(
+                "a Sync or a record is already running for this session",
+            ));
         }
-        let frozen = node_git::freeze(&metadata.worktree, &document, page(req)?)?;
+        let scope = page(req)?;
+        let frozen = node_git::freeze(&metadata.worktree, &document, scope)?;
         let id = frozen.id.clone();
-        let since = frozen
-            .baseline
-            .as_ref()
-            .map(|b| b.commit.as_str())
-            .unwrap_or("first sync");
-        let prompt=format!("Sync {} ({}) since {}.\nLarge work: plan it and split it across sub-agents in your own harness; finish all authorized work.\n{}\nJob: {}\nRead complete design drift with node diff and code drift with git. At completion call node sync.prepare with job {}, then commit code and .mindmap/map.figcraft together with this exact trailer:\n{}\nCall sync.finish with job {} and commit SHA after committing. Agent idle alone cannot finish this sync. Changes made after its start remain drift. Do not commit node cache or private links.\nNOTE: {}",workspace.label,metadata.worktree.display(),since,self.context(&session,req,&[])?,id,id,frozen.trailer,id,req["prompt"].as_str().unwrap_or(""));
+        // What to build is the design waiting since the last record of any kind; the code since
+        // the last Sync is context. Both go in the prompt so the agent starts without searching.
+        let drift = node_git::design_drift(&metadata.worktree, &document, scope)?;
+        let last_sync = node_git::sync_baseline(&metadata.worktree, scope)?;
+        let code = node_git::code_since_sync(&metadata.worktree, scope)?;
+        let page_name = scope.and_then(|p| {
+            document
+                .node(figcraft_doc::NodeId(p))
+                .map(|n| n.name.clone())
+        });
+        let prompt = crate::node_brief::sync_prompt(&crate::node_brief::SyncPrompt {
+            workspace: &workspace.label,
+            job: &id,
+            page: scope,
+            page_name: page_name.as_deref(),
+            context: &self.context(&session, req, &[])?,
+            drift: &drift,
+            last_sync: last_sync.as_ref(),
+            code: &code,
+            trailer: &frozen.trailer,
+            note: req["prompt"].as_str().unwrap_or(""),
+        });
         let job = Job {
             frozen,
             session: session.clone(),
@@ -675,6 +733,7 @@ impl Node {
             prepared: false,
             reason: None,
             commit: None,
+            kind: "sync".into(),
         };
         self.persist_job(&job)?;
         jobs.insert(id.clone(), job);
@@ -726,7 +785,9 @@ impl Node {
             .values()
             .any(|j| j.session == session && j.state == "in_flight")
         {
-            return Err(Error::new("a sync is already running for this session"));
+            return Err(Error::new(
+                "a Sync or a record is already running for this session",
+            ));
         }
         let frozen = node_git::freeze(&metadata.worktree, &document, page(req)?)?;
         let job = Job {
@@ -739,11 +800,93 @@ impl Node {
             prepared: false,
             reason: None,
             commit: None,
+            kind: "sync".into(),
         };
         self.persist_job(&job)?;
         let result = json!({"job":job_view(&job),"trailer":job.frozen.trailer});
         jobs.insert(job.frozen.id.clone(), job);
         Ok(result)
+    }
+
+    /// Commit the map for an agent's own explanation or bug fix: the last recorded map plus only
+    /// that request's edits (see `node_git::record_document`). The record is a job like a Sync:
+    /// staged here, committed by the agent with the returned trailer, verified by `sync.finish`.
+    fn record(&self, req: &Value) -> Result<Value> {
+        let session = self.session(req)?;
+        let kind = required(req, "kind")?;
+        if !matches!(kind, "explain" | "fix") {
+            return Err(Error::new(
+                "record kind must be explain or fix; a design edit is not recorded",
+            ));
+        }
+        let request = required(req, "request")?;
+        let scope = page(req)?;
+        let docs = lock(&self.docs)?;
+        let metadata = docs.metadata(&session)?;
+        if !metadata.active {
+            return Err(Error::new(
+                "branch changed; reopen the worktree before recording",
+            ));
+        }
+        let document = docs.document(&session)?;
+        drop(docs);
+        let start = node_git::load_request(&metadata.worktree, request)?;
+        let mut jobs = lock(&self.jobs)?;
+        if let Some(open) = jobs
+            .values()
+            .find(|j| j.session == session && j.state == "in_flight")
+        {
+            return Err(Error::new(format!(
+                "a {} is running for this session (job {}); record after it finishes",
+                if open.kind == "sync" {
+                    "Sync"
+                } else {
+                    "record"
+                },
+                open.frozen.id
+            )));
+        }
+        let recorded = node_git::record_document(&metadata.worktree, &start, &document, scope)?;
+        let frozen = node_git::freeze_as(&metadata.worktree, &recorded.document, scope, kind)?;
+        let id = frozen.id.clone();
+        let job = Job {
+            frozen,
+            session,
+            workspace: req["workspace"].as_str().unwrap_or("").into(),
+            agent: json!({"kind":"external","state":"existing","prompted":false}),
+            state: "in_flight".into(),
+            seen_active: true,
+            prepared: false,
+            reason: None,
+            commit: None,
+            kind: kind.into(),
+        };
+        self.persist_job(&job)?;
+        jobs.insert(id.clone(), job);
+        drop(jobs);
+        let staged = match self.prepare_sync(&id) {
+            Ok(staged) => staged,
+            Err(error) => {
+                let _order = lock(&self.document_order)?;
+                let _ = self.cancel_sync(&id, &[]);
+                return Err(error);
+            }
+        };
+        let commit = if kind == "fix" {
+            "Commit your code together with the staged .mindmap/map.figcraft"
+        } else {
+            "Commit only the staged .mindmap/map.figcraft"
+        };
+        Ok(json!({
+            "job": id,
+            "kind": kind,
+            "trailer": staged["trailer"],
+            "path": staged["path"],
+            "recorded_edits": recorded.edits,
+            "kept_waiting": recorded.waiting,
+            "first_record": !recorded.had_record,
+            "next": format!("{commit}, with the trailer as the last line of the message. Then call sync.finish with job {id} and the commit SHA; sync.cancel releases it instead."),
+        }))
     }
 
     fn prepare_sync(&self, id: &str) -> Result<Value> {
@@ -1143,5 +1286,5 @@ fn page(value: &Value) -> Result<Option<u64>> {
     }
 }
 fn job_view(job: &Job) -> Value {
-    json!({"id":job.frozen.id,"state":job.state,"started":job.frozen.started.to_string(),"agent":job.agent,"reason":job.reason,"commit":job.commit,"prepared":job.prepared})
+    json!({"id":job.frozen.id,"kind":job.kind,"state":job.state,"started":job.frozen.started.to_string(),"agent":job.agent,"reason":job.reason,"commit":job.commit,"prepared":job.prepared})
 }

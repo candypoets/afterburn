@@ -525,3 +525,108 @@ fn real_merge_gate_preserves_live_edits_before_and_during_commit_or_abort() {
         assert_eq!(node.height, 80.0);
     }
 }
+
+fn names(doc: &Document) -> BTreeSet<String> {
+    doc.nodes().map(|n| n.name.clone()).collect()
+}
+
+#[test]
+fn explanations_and_fixes_move_the_design_baseline_but_only_syncs_move_the_code_one() {
+    let repo = Repo::new();
+    let (doc, page, _, _) = design();
+    let scope = format!("page={}", page.0);
+    let sync = repo.marker(&doc, &format!("{scope} job=a"));
+    let explain = repo.marker(&doc, &format!("{scope} job=b explain"));
+    let design = baseline(&repo.0, Some(page.0)).unwrap().unwrap();
+    assert_eq!(
+        (design.commit.as_str(), design.kind.as_str()),
+        (explain.as_str(), "explain")
+    );
+    let code = sync_baseline(&repo.0, Some(page.0)).unwrap().unwrap();
+    assert_eq!(
+        (code.commit.as_str(), code.kind.as_str()),
+        (sync.as_str(), "sync")
+    );
+    assert_eq!(marker_kind("all job=c fix"), "fix");
+    assert_eq!(marker_kind("page=3 job=c"), "sync");
+    let frozen = freeze_as(&repo.0, &doc, Some(page.0), "explain").unwrap();
+    assert!(frozen.trailer.ends_with(" explain"), "{}", frozen.trailer);
+    assert_eq!(
+        trailer_scope(frozen.trailer.strip_prefix("Mindmap-Sync: ").unwrap()),
+        Some(Some(page.0))
+    );
+    assert!(freeze_as(&repo.0, &doc, Some(page.0), "proposal").is_err());
+}
+
+#[test]
+fn a_record_takes_this_requests_edits_and_leaves_earlier_waiting_edits_out() {
+    let repo = Repo::new();
+    let (mut doc, page, _, other) = design();
+    repo.marker(&doc, &format!("page={} job=a", page.0));
+    // Waiting: a design edit on the page, and another on an unrelated page.
+    doc.create(page, NodeKind::Rectangle, "Retry", 0.0, 0.0, 5.0, 5.0)
+        .unwrap();
+    doc.create(other, NodeKind::Rectangle, "Elsewhere", 0.0, 0.0, 5.0, 5.0)
+        .unwrap();
+    let start = doc.clone();
+    let id = save_request(&repo.0, &start).unwrap();
+    // The request: a note on the page.
+    doc.create(page, NodeKind::Rectangle, "Note", 40.0, 0.0, 5.0, 5.0)
+        .unwrap();
+    let record = record_document(
+        &repo.0,
+        &load_request(&repo.0, &id).unwrap(),
+        &doc,
+        Some(page.0),
+    )
+    .unwrap();
+    let got = names(&record.document);
+    assert!(got.contains("Note"), "{got:?}");
+    assert!(
+        !got.contains("Retry"),
+        "the waiting edit is not recorded: {got:?}"
+    );
+    assert!(
+        got.contains("Elsewhere"),
+        "other pages stay as they are live: {got:?}"
+    );
+    assert!(record.had_record && record.waiting.is_empty());
+    assert!(record.edits > 0);
+    // Committed as the new record, the next Sync sees only the retry button.
+    repo.marker(&record.document, &format!("page={} job=b explain", page.0));
+    let drift = design_drift(&repo.0, &doc, Some(page.0)).unwrap();
+    let added: Vec<_> = drift
+        .added
+        .iter()
+        .map(|c| c["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(added, ["Retry"]);
+    assert!(drift.changed.is_empty() && drift.removed.is_empty());
+    assert!(load_request(&repo.0, "../escape").is_err());
+}
+
+#[test]
+fn an_edit_on_top_of_a_waiting_edit_keeps_waiting() {
+    let repo = Repo::new();
+    let (mut doc, page, card, _) = design();
+    repo.marker(&doc, &format!("page={} job=a", page.0));
+    doc.node_mut(card).unwrap().name = "Proposed".into();
+    let start = doc.clone();
+    doc.node_mut(card).unwrap().name = "Explained".into();
+    let record = record_document(&repo.0, &start, &doc, Some(page.0)).unwrap();
+    assert_eq!(record.document.node(card).unwrap().name, "Card");
+    assert_eq!(record.waiting, [format!("Explained (id {})", card.0)]);
+}
+
+#[test]
+fn without_an_earlier_record_the_page_as_found_is_recorded() {
+    let repo = Repo::new();
+    let (mut doc, page, _, _) = design();
+    repo.commit(&doc, "Code only");
+    let start = doc.clone();
+    doc.create(page, NodeKind::Rectangle, "Note", 0.0, 0.0, 5.0, 5.0)
+        .unwrap();
+    let record = record_document(&repo.0, &start, &doc, Some(page.0)).unwrap();
+    assert!(!record.had_record);
+    assert_eq!(names(&record.document), names(&doc));
+}

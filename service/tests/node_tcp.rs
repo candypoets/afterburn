@@ -888,3 +888,65 @@ fn captured_sync_survives_restart_commits_exact_frozen_design_and_keeps_later_ed
     assert_eq!(recovered["last"]["commit"], commit);
     assert_eq!(wire.inspect(&session, id), live);
 }
+
+#[test]
+fn a_recorded_explanation_commits_only_its_own_edits_and_sync_then_sees_only_the_waiting_one() {
+    let fixture = Fixture::new();
+    let node = Node::start(&fixture);
+    let mut wire = node.connect();
+    let session = wire.open(&fixture);
+    wire.create(&session, "recorded card");
+    wire.ok(json!({"method":"session.save","session":session}));
+    fixture.git(&["add", DESIGN]);
+    fixture.git(&["commit", "-qm", "Sync\n\nMindmap-Sync: all job=seed"]);
+
+    // A design edit waits; then a request adds an explanation note.
+    let retry = wire.create(&session, "retry button");
+    let request = wire.ok(json!({"method":"record.start","session":session}))["request"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let note = wire.create(&session, "explanation note");
+    let bad = wire.request_version(
+        json!({"method":"record","session":session,"request":request,"kind":"proposal"}),
+        Some(json!(1)),
+    );
+    assert_eq!(bad["ok"], false, "a design edit is never recorded");
+
+    let recorded =
+        wire.ok(json!({"method":"record","session":session,"request":request,"kind":"explain"}));
+    let job = recorded["job"].as_str().unwrap().to_owned();
+    let trailer = recorded["trailer"].as_str().unwrap().to_owned();
+    assert!(
+        trailer.starts_with("Mindmap-Sync: all job=") && trailer.ends_with(" explain"),
+        "{recorded}"
+    );
+    assert_eq!(recorded["kept_waiting"], json!([]));
+    let staged = fixture.disk();
+    assert!(
+        staged.node(note).is_some(),
+        "the request's note is recorded"
+    );
+    assert!(staged.node(retry).is_none(), "the waiting edit is not");
+
+    fixture.git(&["commit", "-qm", &format!("Explain the card\n\n{trailer}")]);
+    let commit = fixture.git(&["rev-parse", "HEAD"]);
+    let finished = wire.ok(json!({"method":"sync.finish","job":job,"commit":commit}));
+    assert_eq!(finished["job"]["state"], "done");
+    assert_eq!(finished["job"]["kind"], "explain");
+    assert!(
+        fixture.disk().node(retry).is_some(),
+        "the live map is saved again after the record"
+    );
+
+    let diff = wire.ok(json!({"method":"diff","session":session}));
+    let added: Vec<&str> = diff["map"]["added"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(added, ["retry button"], "{diff}");
+    assert_eq!(diff["last"]["kind"], "explain");
+    assert_eq!(diff["last_sync"]["kind"], "sync");
+}

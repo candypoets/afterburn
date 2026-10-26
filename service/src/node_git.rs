@@ -24,6 +24,11 @@ use crate::error::{Error, Result};
 
 pub const DESIGN_PATH: &str = ".mindmap/map.figcraft";
 const TRAILER: &str = "Mindmap-Sync";
+/// What a record says about the map it commits. `sync`: the code now implements it. `explain`:
+/// it describes the code as it already is. `fix`: a bug fix, committed with its code.
+pub const KINDS: [&str; 3] = ["sync", "explain", "fix"];
+/// Request start copies older than this are removed when a new one is kept.
+const REQUEST_TTL_SECS: u64 = 30 * 24 * 3600;
 static NEXT_FREEZE: AtomicU64 = AtomicU64::new(0);
 
 /// A reachable sync commit. `page: None` means an explicit `all` trailer, never an unknown scope.
@@ -33,11 +38,28 @@ pub struct Baseline {
     pub at: String,
     pub page: Option<u64>,
     pub trailer: String,
+    /// `sync`, `explain` or `fix` (see [`KINDS`]). Markers written before kinds existed are syncs.
+    #[serde(default = "sync_kind")]
+    pub kind: String,
+}
+
+fn sync_kind() -> String {
+    "sync".to_owned()
 }
 
 impl Baseline {
     pub fn last_json(&self) -> Value {
-        json!({"exists": true, "commit": self.commit, "at": self.at, "page": self.page})
+        json!({"exists": true, "commit": self.commit, "at": self.at, "page": self.page, "kind": self.kind})
+    }
+}
+
+/// The kind a marker records: its last word when that names one, else `sync`. The scope stays the
+/// first word, so older readers keep finding the page.
+pub fn marker_kind(marker: &str) -> &'static str {
+    match marker.split_whitespace().last() {
+        Some("explain") => "explain",
+        Some("fix") => "fix",
+        _ => "sync",
     }
 }
 
@@ -253,9 +275,20 @@ fn decode_design(bytes: &[u8]) -> Result<Document> {
     Ok(doc)
 }
 
-/// Last reachable, topologically ordered sync with a trailer for exactly this page, or `all`.
+/// Last reachable, topologically ordered record (a Sync, an explanation or a fix) with a trailer
+/// for exactly this page, or `all`. This is the design baseline: the map as last recorded.
 /// A whole-map request only accepts `all`; a page-only commit cannot baseline unrelated pages.
 pub fn baseline(path: &Path, page: Option<u64>) -> Result<Option<Baseline>> {
+    find_baseline(path, page, false)
+}
+
+/// Last reachable Sync for this page (or `all`): the code baseline. Explanations commit no code
+/// and fixes are not design work, so neither moves it.
+pub fn sync_baseline(path: &Path, page: Option<u64>) -> Result<Option<Baseline>> {
+    find_baseline(path, page, true)
+}
+
+fn find_baseline(path: &Path, page: Option<u64>, sync_only: bool) -> Result<Option<Baseline>> {
     validate_page(page)?;
     let root = repository(path)?;
     let Some(tip) = head(&root)? else {
@@ -281,6 +314,10 @@ pub fn baseline(path: &Path, page: Option<u64>) -> Result<Option<Baseline>> {
             if scope.is_some() && scope != page {
                 continue;
             }
+            let kind = marker_kind(&marker);
+            if sync_only && kind != "sync" {
+                continue;
+            }
             if design_blob(&root, commit)?.is_none() {
                 continue;
             }
@@ -289,6 +326,7 @@ pub fn baseline(path: &Path, page: Option<u64>) -> Result<Option<Baseline>> {
                 at,
                 page: scope,
                 trailer: format!("{TRAILER}: {marker}"),
+                kind: kind.to_owned(),
             }));
         }
     }
@@ -381,10 +419,32 @@ fn card(doc: &Document, id: NodeId) -> Value {
     json!({"id": id.0, "name": node.map(|n| n.name.as_str()).unwrap_or(""), "page": page.map(|n| n.name.as_str()).unwrap_or("")})
 }
 
-/// Complete property changes plus the old UI's `{last,map:{added,changed,removed},code:{...}}`.
-/// `changes` contains FigCraft's actual serde Change values, including non-text properties and
-/// document entries. No prompt-size limit or silent truncation is applied.
-pub fn diff(path: &Path, live: &Document, page: Option<u64>) -> Result<Value> {
+/// A card with its parent's id, so readers can keep only the top-most of new or removed layers.
+fn with_parent(mut card: Value, doc: &Document, id: NodeId) -> Value {
+    card["parent"] = json!(doc.node(id).and_then(|n| n.parent).map(|p| p.0));
+    card
+}
+
+/// The design waiting since the last record: FigCraft's changes from the recorded map to `live`,
+/// scoped to the page, and the cards added, changed and removed.
+pub struct Drift {
+    pub last: Option<Baseline>,
+    pub changes: Vec<Change>,
+    pub added: Vec<Value>,
+    pub changed: Vec<Value>,
+    pub removed: Vec<Value>,
+}
+
+impl Drift {
+    pub fn is_empty(&self) -> bool {
+        self.changes.is_empty()
+            && self.added.is_empty()
+            && self.changed.is_empty()
+            && self.removed.is_empty()
+    }
+}
+
+pub fn design_drift(path: &Path, live: &Document, page: Option<u64>) -> Result<Drift> {
     validate_page(page)?;
     let root = repository(path)?;
     let last = baseline(&root, page)?;
@@ -408,11 +468,11 @@ pub fn diff(path: &Path, live: &Document, page: Option<u64>) -> Result<Value> {
         .collect();
     let added: Vec<Value> = after
         .difference(&before)
-        .map(|id| card(live, *id))
+        .map(|id| with_parent(card(live, *id), live, *id))
         .collect();
     let removed: Vec<Value> = before
         .difference(&after)
-        .map(|id| card(&old, *id))
+        .map(|id| with_parent(card(&old, *id), &old, *id))
         .collect();
     let mut fields: BTreeMap<NodeId, BTreeSet<String>> = BTreeMap::new();
     for change in &changes {
@@ -429,13 +489,38 @@ pub fn diff(path: &Path, live: &Document, page: Option<u64>) -> Result<Value> {
     let changed: Vec<Value> = fields.into_iter().map(|(id, fields)| {
         json!({"id": id.0, "name": live.node(id).map(|n| n.name.as_str()).unwrap_or(""), "fields": fields})
     }).collect();
-    let global_count = changes.iter().filter(|c| c.node().is_none()).count();
+    Ok(Drift {
+        last,
+        changes,
+        added,
+        changed,
+        removed,
+    })
+}
+
+/// Complete property changes plus the old UI's `{last,map:{added,changed,removed},code:{...}}`.
+/// `changes` contains FigCraft's actual serde Change values, including non-text properties and
+/// document entries. No prompt-size limit or silent truncation is applied. The design compares
+/// with the last record of any kind; the code with the last Sync (`last_sync`).
+pub fn diff(path: &Path, live: &Document, page: Option<u64>) -> Result<Value> {
+    let root = repository(path)?;
+    let drift = design_drift(&root, live, page)?;
+    let last_sync = sync_baseline(&root, page)?;
+    let global_count = drift.changes.iter().filter(|c| c.node().is_none()).count();
     Ok(json!({
-        "last": last.as_ref().map(Baseline::last_json).unwrap_or_else(|| json!({"exists": false})),
-        "map": {"added": added, "changed": changed, "removed": removed},
-        "changes": changes, "global_changes": global_count, "page": page,
-        "code": code_diff(&root, last.as_ref().map(|b| b.commit.as_str()))?,
+        "last": drift.last.as_ref().map(Baseline::last_json).unwrap_or_else(|| json!({"exists": false})),
+        "last_sync": last_sync.as_ref().map(Baseline::last_json).unwrap_or_else(|| json!({"exists": false})),
+        "map": {"added": drift.added, "changed": drift.changed, "removed": drift.removed},
+        "changes": drift.changes, "global_changes": global_count, "page": page,
+        "code": code_diff(&root, last_sync.as_ref().map(|b| b.commit.as_str()))?,
     }))
+}
+
+/// The code committed since the last Sync, as `{head, from, files, commits}`.
+pub fn code_since_sync(path: &Path, page: Option<u64>) -> Result<Value> {
+    let root = repository(path)?;
+    let last_sync = sync_baseline(&root, page)?;
+    code_diff(&root, last_sync.as_ref().map(|b| b.commit.as_str()))
 }
 
 /// Page each of `changes`, `code.files`, and `code.commits` independently at the requested offset.
@@ -544,7 +629,20 @@ fn code_diff(path: &Path, from: Option<&str>) -> Result<Value> {
 /// Freeze the complete native document. The trailer alone restricts what is acknowledged: a
 /// page sync does not claim that other pages in the same archive were implemented.
 pub fn freeze(path: &Path, live: &Document, page: Option<u64>) -> Result<FrozenSync> {
+    freeze_as(path, live, page, "sync")
+}
+
+/// [`freeze`] for any record kind: the trailer ends with `explain` or `fix` for those.
+pub fn freeze_as(
+    path: &Path,
+    live: &Document,
+    page: Option<u64>,
+    kind: &str,
+) -> Result<FrozenSync> {
     validate_page(page)?;
+    if !KINDS.contains(&kind) {
+        return Err(Error::new("record kind must be sync, explain or fix"));
+    }
     let root = repository(path)?;
     let last = baseline(&root, page)?;
     if let Some(page) = page {
@@ -600,7 +698,11 @@ pub fn freeze(path: &Path, live: &Document, page: Option<u64>) -> Result<FrozenS
         page,
         baseline: last,
         blob,
-        trailer: format!("{TRAILER}: {scope} job={id}"),
+        trailer: if kind == "sync" {
+            format!("{TRAILER}: {scope} job={id}")
+        } else {
+            format!("{TRAILER}: {scope} job={id} {kind}")
+        },
         id,
         started: now.as_secs(),
     })
@@ -697,6 +799,7 @@ pub fn verify_completed(path: &Path, frozen: &FrozenSync, revision: &str) -> Res
         commit,
         at,
         page: frozen.page,
+        kind: marker_kind(expected).to_owned(),
         trailer: frozen.trailer.clone(),
     })
 }
@@ -734,6 +837,146 @@ pub fn find_completed(path: &Path, frozen: &FrozenSync) -> Result<Option<Baselin
         }
     }
     Ok(None)
+}
+
+fn requests_dir(root: &Path) -> Result<PathBuf> {
+    Ok(
+        PathBuf::from(git_text(root, &["rev-parse", "--absolute-git-dir"])?)
+            .join("mindmap-sync")
+            .join("requests"),
+    )
+}
+
+fn valid_request(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// Keep the map as it is when a request (a comment or Init) is sent: the request's starting
+/// point. A later [`record_document`] tells this request's edits from edits made before it. The
+/// copy lives in the worktree's private Git directory; copies older than a month are removed.
+pub fn save_request(path: &Path, live: &Document) -> Result<String> {
+    let root = repository(path)?;
+    let dir = requests_dir(&root)?;
+    fs::create_dir_all(&dir)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| Error::new("clock precedes Unix epoch"))?;
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| now.checked_sub(t.duration_since(UNIX_EPOCH).ok()?))
+                .is_some_and(|age| age.as_secs() > REQUEST_TTL_SECS);
+            if old {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    let id = format!(
+        "{:x}-{:x}",
+        now.as_nanos(),
+        NEXT_FREEZE.fetch_add(1, Ordering::Relaxed)
+    );
+    let bytes = figcraft_format::save_bytes(live, None)
+        .map_err(|e| Error::new(format!("keep request start: {e}")))?;
+    fs::write(dir.join(format!("{id}.figcraft")), bytes)?;
+    Ok(id)
+}
+
+/// The map as it was when request `id` was sent.
+pub fn load_request(path: &Path, id: &str) -> Result<Document> {
+    if !valid_request(id) {
+        return Err(Error::new("unknown request id"));
+    }
+    let root = repository(path)?;
+    let bytes = fs::read(requests_dir(&root)?.join(format!("{id}.figcraft")))
+        .map_err(|_| Error::new("unknown request id: its starting map is gone"))?;
+    decode_design(&bytes)
+}
+
+/// What a record committed and what it left waiting.
+pub struct Recorded {
+    pub document: Document,
+    /// Changes this request made to the map, all recorded but `waiting`.
+    pub edits: usize,
+    /// Cards (or document entries) the request changed where an older waiting edit changed the
+    /// same thing: they are not recorded and keep waiting for Sync.
+    pub waiting: Vec<String>,
+    /// Whether an earlier record exists for this scope. Without one, the whole scope as the
+    /// request found it is recorded too.
+    pub had_record: bool,
+}
+
+/// The map to commit for a request: the last recorded map plus only this request's edits.
+///
+/// `start` is the map when the request was sent, `live` the map now. The design edits waiting
+/// in scope at `start` (its difference from the last record) are taken back out, then the
+/// request's own edits (`start` to `live`) are merged on top with FigCraft's three-way merge.
+/// Where both touched the same thing the waiting edit wins, so nothing waiting is recorded.
+/// Outside the scope the map stays as it is live: the trailer claims only the scope. Without an
+/// earlier record for the scope (or when the page is newer than it), the request's starting map
+/// counts as recorded: this is how a first explanation or Init declares the map current.
+pub fn record_document(
+    path: &Path,
+    start: &Document,
+    live: &Document,
+    page: Option<u64>,
+) -> Result<Recorded> {
+    validate_page(page)?;
+    let root = repository(path)?;
+    let last = baseline(&root, page)?;
+    let recorded = match &last {
+        Some(last) => Some(load_design(&root, &last.commit)?)
+            .filter(|old| page.is_none_or(|p| old.pages.contains(&NodeId(p)))),
+        None => None,
+    };
+    let had_record = recorded.is_some();
+    let undone = match &recorded {
+        Some(old) => {
+            let before = scope_nodes(start, page);
+            let after = scope_nodes(old, page);
+            let ids = before.union(&after).copied().collect();
+            let mut replica = Replica::new(start.clone());
+            let back: Vec<Change> = figcraft_collab::diff(&replica, old)
+                .map_err(|e| Error::new(format!("record diff: {e}")))?
+                .changes
+                .into_iter()
+                .filter(|c| scoped_change(c, start, old, &ids, page))
+                .collect();
+            replica
+                .apply(&back, figcraft_collab::replica::Mode::Strict)
+                .map_err(|e| Error::new(format!("take waiting edits out: {e}")))?;
+            replica.document().clone()
+        }
+        None => start.clone(),
+    };
+    let plan =
+        merge::plan(start, live, &undone).map_err(|e| Error::new(format!("plan record: {e}")))?;
+    let waiting: Vec<String> = plan
+        .conflicts
+        .iter()
+        .map(|c| match &c.key {
+            merge::Key::Layer(id) | merge::Key::Node(id, _) => live
+                .node(*id)
+                .or_else(|| start.node(*id))
+                .map(|n| format!("{} (id {})", n.name, id.0))
+                .unwrap_or_else(|| c.key.to_string()),
+            _ => c.key.to_string(),
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let (document, _) = plan
+        .merge(&undone, merge::Side::Branch, &|_| Some(merge::Side::Main))
+        .map_err(|e| Error::new(format!("record merge: {e}")))?;
+    Ok(Recorded {
+        document,
+        edits: plan.branch.len(),
+        waiting,
+        had_record,
+    })
 }
 
 /// Immutable plan bound to three resolved commit ids. Apply its resulting document through the

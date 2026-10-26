@@ -48,11 +48,41 @@ Every factual card needs a repository source. Read the implementation before cla
 Keep one claim per card and explain it plainly. Label proposals as proposals. Do not edit
 `.mindmap/map.figcraft` directly or use the obsolete model renderer for live jobs.
 
+## Three kinds of comment work
+
+A comment's prompt carries a `REQUEST` section (its request id, the page's last record and the
+design edits still waiting for Sync) and says how to finish. Decide the kind first and start the
+reply with `Kind: …`:
+
+- **Explanation**: describe today's code on the map. Change no code. Record it as `explain`.
+- **Bug fix**: fix and test the code; correct cards that described the bug wrongly. Record it as
+  `fix`.
+- **Design edit**: propose new behaviour on the map only, labelled as a proposal. Do not record
+  or commit: it waits for Sync. When unsure, it is a design edit. A mixed request is split.
+
+Waiting cards are proposals, not current behaviour; do not describe them as what the code does.
+
+To record, after the last map edit of the request:
+
+```sh
+mindmap-node request '{"method":"record","session":"SESSION","request":"REQUEST","kind":"explain","page":123}'
+# explain: commit only the staged map; fix: commit the code with it. Trailer last.
+mindmap-node request '{"method":"sync.finish","job":"JOB","commit":"SHA"}'
+```
+
+`record` commits the last recorded map plus only this request's edits: design edits that were
+waiting stay out. Where an edit overlaps a waiting edit it is not recorded and keeps waiting;
+the reply lists those cards (`kept_waiting`). Without an earlier record for the page, the page
+as the request found it is recorded too, which declares it current. Init is one big
+explanation and ends with a `record` of the whole map. `record.start` keeps a starting point for
+work that did not come from a comment. An open record blocks Sync; `sync.cancel` releases it.
+
 ## Sync implements the design
 
-Sync freezes the authoritative design at job start. The last reachable commit with a matching
-`Mindmap-Sync:` trailer is the baseline for both design and code. A page-specific marker does
-not declare other pages synced. The node compares all FigCraft properties, including geometry,
+Sync freezes the authoritative design at job start. Its prompt lists the waiting design changes
+and the code committed since the last Sync. The design baseline is the last reachable record of
+any kind (`Mindmap-Sync:` trailer ending in nothing, `explain` or `fix`); the code baseline is
+the last Sync. A page-specific marker does not declare other pages synced. The node compares all FigCraft properties, including geometry,
 arrows, styles and document-level data. Follow `diff` pagination to read the entire change list.
 Read code drift with Git from that commit; the prompt is an entry point, not all the evidence.
 

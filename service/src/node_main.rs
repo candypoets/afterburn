@@ -7,6 +7,7 @@ mod error;
 mod herdr;
 mod mcp;
 mod node;
+mod node_brief;
 mod node_context;
 mod node_documents;
 mod node_git;
