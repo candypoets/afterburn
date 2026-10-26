@@ -137,7 +137,7 @@ in `client-workspaces.patch`.
   System, Screens and Product pages (including this picker design).
 - **TCP API** on `47821`: `health`, `workspaces`, `open`, `init` (newline JSON).
 
-The map now has an IDE-like header: sidebar icon, page tabs, + Page, live count and Sync. The composer, comment tree and sent-once removal are implemented: a draft remembers its node,
+The map now has an IDE-like header: sidebar icon, page tabs, + Page, live count and Sync. The composer, draft chips and sent-once removal are implemented: a draft remembers its node,
 a send carries the selected card's subtree (or the whole page with no selection), only those
 drafts leave the bar on success, and a page-level comment works with no selection. The Sync
 widget/backend is in progress; the model renderer, remote hosts, auth and a systemd unit remain. Still to come:

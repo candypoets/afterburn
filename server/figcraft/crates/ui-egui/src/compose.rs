@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::FigApp;
 use crate::a11y;
-use crate::theme::{regular, semibold};
+use crate::theme::regular;
 use crate::widgets;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::workspaces;
@@ -359,7 +359,6 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let active = app.active_workspace.is_some();
     if app.session.ds().is_ok_and(|ds| ds.view.comments) {
         draft_glow(app, ctx, page);
-        tree_panel(app, ctx, node_id, page, &included);
     }
     // The workspace pane takes the left edge; the composer belongs to the canvas, not the pane.
     let pane = if app.ws.pane_open && app.session.ds().is_ok_and(|ds| !ds.view.ui_hidden) { 300.0 } else { 0.0 };
@@ -644,89 +643,6 @@ fn editing_context(draft: &Draft, included: &[usize], index: usize) -> String {
     format!("EDITING DRAFT  ·  {on}  ·  {position} of {total}")
 }
 
-/// One line of the comment tree: a card under the selection and the drafts it carries.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TreeRow {
-    pub name: String,
-    pub count: usize,
-}
-
-/// The comment tree a send would carry: the root's total, then each other card with drafts, in the
-/// order its first draft was written. Drafts on the root itself count only in the total.
-pub fn tree_rows(drafts: &[Draft], included: &[usize], root: Option<NodeId>) -> (usize, Vec<TreeRow>) {
-    let mut rows: Vec<(Option<NodeId>, TreeRow)> = Vec::new();
-    for draft in included.iter().filter_map(|index| drafts.get(*index)) {
-        if draft.node_id.is_some() && draft.node_id == root {
-            continue;
-        }
-        let name = draft.node.clone().unwrap_or_else(|| "Whole page".to_string());
-        match rows.iter_mut().find(|(id, row)| *id == draft.node_id && (draft.node_id.is_some() || row.name == name)) {
-            Some((_, row)) => row.count += 1,
-            None => rows.push((draft.node_id, TreeRow { name, count: 1 })),
-        }
-    }
-    (included.len(), rows.into_iter().map(|(_, row)| row).collect())
-}
-
-/// `COMMENT TREE` at the top right of the canvas: what a prompt on the selection (or the page)
-/// carries, so the human sees the subtree before sending. Only when there is something to carry.
-fn tree_panel(app: &FigApp, ctx: &egui::Context, node_id: Option<NodeId>, page: Option<NodeId>, included: &[usize]) {
-    if included.is_empty() {
-        return;
-    }
-    let (total, rows) = tree_rows(&app.compose.drafts, included, node_id);
-    let root = match node_id {
-        Some(id) => node_name(app, id).unwrap_or_else(|| "This card".to_string()),
-        None => page.and_then(|id| node_name(app, id)).map(|name| format!("{name} · whole page")).unwrap_or_else(|| "Whole page".to_string()),
-    };
-    let header_h = if app.ui.mac_inset() { crate::MAC_BAND } else { 44.0 };
-    let note = match rows.len() {
-        0 => format!("A prompt on {} carries {}.", short(&root), if total == 1 { "it" } else { "them" }),
-        2 => format!("A prompt on {} carries both.", short(&root)),
-        n => format!("A prompt on {} carries all {}.", short(&root), n),
-    };
-    egui::Area::new(Id::new("map_comment_tree"))
-        .anchor(Align2::RIGHT_TOP, vec2(-40.0, header_h + 40.0))
-        .order(egui::Order::Middle)
-        .interactable(false)
-        .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER))
-                .corner_radius(CornerRadius::same(8))
-                .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 14, spread: 0, color: Color32::from_black_alpha(20) })
-                .inner_margin(Margin { left: 14, right: 14, top: 12, bottom: 14 })
-                .show(ui, |ui| {
-                    ui.set_width(252.0);
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.label(egui::RichText::new("COMMENT TREE").font(mono(8.5)).color(ACCENT));
-                    ui.add_space(13.0);
-                    let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
-                    let name = widgets::elide_font(ui, &root, line.width() - 30.0, semibold(11.5));
-                    ui.painter().text(line.left_center(), Align2::LEFT_CENTER, name, semibold(11.5), INK);
-                    ui.painter().text(line.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, total.to_string(), mono(9.0), ACCENT);
-                    if !rows.is_empty() {
-                        ui.add_space(8.0);
-                        let (rule, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                        ui.painter()
-                            .line_segment([rule.left_center() + vec2(8.0, 0.0), rule.right_center() + vec2(8.0, 0.0)], Stroke::new(1.0, BORDER));
-                        ui.add_space(6.0);
-                        let last = rows.len() - 1;
-                        for (index, row) in rows.iter().enumerate() {
-                            let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
-                            let branch = if index == last { "└" } else { "├" };
-                            ui.painter().text(line.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, branch, regular(10.5), INK);
-                            let name = widgets::elide_font(ui, &row.name, line.width() - 60.0, regular(10.5));
-                            ui.painter().text(line.left_center() + vec2(24.0, 0.0), Align2::LEFT_CENTER, name, regular(10.5), INK);
-                            ui.painter().text(line.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, row.count.to_string(), mono(9.0), MUTED);
-                        }
-                    }
-                    ui.add_space(10.0);
-                    ui.add(egui::Label::new(egui::RichText::new(note).font(mono(8.5)).color(MUTED)).wrap());
-                });
-        });
-}
-
 /// Cards waiting with a draft comment glow blue on the canvas until a send carries them away
 /// ("before: cards glow; after: no glow, sent once").
 fn draft_glow(app: &FigApp, ctx: &egui::Context, page: Option<NodeId>) {
@@ -760,11 +676,6 @@ fn draft_glow(app: &FigApp, ctx: &egui::Context, page: Option<NodeId>) {
         }
         painter.rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_rgb(0xA9, 0xC2, 0xEE)), StrokeKind::Inside);
     }
-}
-
-/// A root name without the ` · whole page` suffix, for the note.
-fn short(root: &str) -> &str {
-    root.split(" · ").next().unwrap_or(root)
 }
 
 /// The draft chips above the input: the first few, each editable and removable, then `+N`. On the
@@ -2307,46 +2218,5 @@ mod tests {
         state.targets.clear();
         let (_, shapes) = confirm_frame(&ctx, &mut state, 0.6, vec![]);
         assert!(!has_text(&shapes, "Send to UI review"));
-    }
-}
-
-#[cfg(test)]
-mod tree_tests {
-    use super::*;
-
-    fn draft(text: &str, node: Option<(&str, u64)>) -> Draft {
-        Draft {
-            text: text.to_string(),
-            node: node.map(|(name, _)| name.to_string()),
-            page: Some("Overview".to_string()),
-            node_id: node.map(|(_, id)| NodeId(id)),
-            page_id: Some(NodeId(1)),
-        }
-    }
-
-    #[test]
-    fn the_tree_counts_the_root_and_lists_each_card_below_it() {
-        let drafts = vec![
-            draft("on the card", Some(("Components", 10))),
-            draft("a variant", Some(("Variants", 11))),
-            draft("an override", Some(("Overrides", 12))),
-            draft("another override", Some(("Overrides", 12))),
-        ];
-        let (total, rows) = tree_rows(&drafts, &[0, 1, 2, 3], Some(NodeId(10)));
-        assert_eq!(total, 4);
-        assert_eq!(
-            rows,
-            vec![TreeRow { name: "Variants".into(), count: 1 }, TreeRow { name: "Overrides".into(), count: 2 }],
-            "the root's own draft counts in the total only"
-        );
-    }
-
-    #[test]
-    fn a_page_tree_groups_page_drafts_under_whole_page() {
-        let drafts = vec![draft("page note", None), draft("card note", Some(("Card", 5))), draft("second page note", None)];
-        let (total, rows) = tree_rows(&drafts, &[0, 1, 2], None);
-        assert_eq!(total, 3);
-        assert_eq!(rows, vec![TreeRow { name: "Whole page".into(), count: 2 }, TreeRow { name: "Card".into(), count: 1 }]);
-        assert_eq!(tree_rows(&drafts, &[], None), (0, Vec::new()));
     }
 }
