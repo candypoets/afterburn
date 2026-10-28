@@ -36,11 +36,9 @@ pub struct Request<'a> {
 /// Render the packet. The page falls back to the page of the first commented card.
 pub fn render(doc: &Document, request: &Request<'_>) -> String {
     let mut out = format!(
-        "MINDMAP CONTEXT\nWorktree: {}\nBranch: {}\nNode: {}\nSession: {}\n\
-         Read and edit the live session with `mindmap-node mcp --path <worktree>` (tools: inspect_document, get_node, \
-         create_node, set_properties, run_command, screenshot, node_request) or `mindmap-node request '<JSON>'`. \
-         Do not write .mindmap/map.figcraft: only the node saves it. Keep names stable and source claims. \
-         Read skills/mindmap/SKILL.md for the node workflow.\n",
+        "MINDMAP CONTEXT\nWorktree: {} · Branch: {} · Node: {} · Session: {}\n\
+         Use the mindmap skill (skills/mindmap/SKILL.md): it lists the tools and how each kind of work finishes. \
+         Only the node writes .mindmap/map.figcraft. Keep names stable and source claims.\n",
         one_line(request.worktree),
         one_line(request.branch),
         one_line(request.node),
@@ -76,23 +74,22 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
         let cards: Vec<String> = doc
             .node(page)
             .map(|node| {
-                node.children
-                    .iter()
+                card_ids(doc, node)
                     .take(MAX_CARD_NAMES)
-                    .map(|id| name(doc, *id))
+                    .map(|id| name(doc, id))
                     .collect()
             })
             .unwrap_or_default();
         if !cards.is_empty() {
-            let more = doc
-                .node(page)
-                .map_or(0, |node| node.children.len().saturating_sub(MAX_CARD_NAMES));
+            let more = doc.node(page).map_or(0, |node| {
+                card_ids(doc, node).count().saturating_sub(MAX_CARD_NAMES)
+            });
             let tail = if more > 0 {
                 format!(" … and {more} more")
             } else {
                 String::new()
             };
-            out.push_str(&format!("Top-level cards: {}{tail}\n", cards.join(", ")));
+            out.push_str(&format!("Cards: {}{tail}\n", cards.join(", ")));
         }
     } else {
         out.push_str("Scope: the whole map; the request names no page.\n");
@@ -125,8 +122,20 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
             out.push_str(&card(doc, id));
         }
     }
-    out.push_str("\nRead any card with get_node <id>; the full property diff comes from node_request {\"method\":\"diff\"} with pagination.\n");
     truncate_lines(out, MAX_CONTEXT_CHARS)
+}
+
+/// A page's cards: its top-level frames, groups, sections and components. Arrows, bounds and
+/// loose labels say nothing about the design; `get_node` reads them when needed.
+fn card_ids<'a>(
+    doc: &'a Document,
+    page: &'a figcraft_doc::Node,
+) -> impl Iterator<Item = NodeId> + 'a {
+    page.children.iter().copied().filter(|id| {
+        doc.node(*id).is_some_and(|node| {
+            node.kind.is_container() && !matches!(node.kind, NodeKind::Page { .. })
+        })
+    })
 }
 
 /// One card: name, id, type, path from the page, and its text.
@@ -357,7 +366,7 @@ mod tests {
             text.contains(&format!("Subpages: Remote setup (id {})", remote.0)),
             "{text}"
         );
-        assert!(text.contains("Top-level cards: Proposed system"), "{text}");
+        assert!(text.contains("Cards: Proposed system\n"), "{text}");
         assert!(
             text.contains(&format!("- Proposed system (id {}", card.0)),
             "{text}"
@@ -372,6 +381,28 @@ mod tests {
             "another page leaked in: {text}"
         );
         assert!(!text.contains("absoluteBounds"), "no raw JSON: {text}");
+    }
+
+    #[test]
+    fn the_card_list_names_frames_not_arrows_bounds_or_labels() {
+        let (doc, backend, _, _) = doc();
+        let mut session = Session::with_document(doc);
+        for (kind, name) in [("rectangle", "Page bounds"), ("text", "Section eyebrow")] {
+            session
+                .execute(
+                    "node.create",
+                    &json!({"type": kind, "parent": backend.0, "name": name, "text": "x"}),
+                )
+                .unwrap();
+        }
+        let text = render(session.doc().unwrap(), &request(Some(backend), &[]));
+        assert!(text.contains("Cards: Proposed system\n"), "{text}");
+        assert!(!text.contains("Page bounds"), "{text}");
+        assert!(!text.contains("Section eyebrow"), "{text}");
+        assert!(
+            !text.contains("tools:"),
+            "the skill lists the tools: {text}"
+        );
     }
 
     #[test]

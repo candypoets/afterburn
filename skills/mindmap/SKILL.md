@@ -38,11 +38,20 @@ request ID. After checking out another branch, reopen the worktree to use its se
 
 ## Comments and scope
 
-Context identifies the worktree, branch, session, page and selected cards. Read their live
+Context identifies the worktree, branch, session, page and selected cards. It names a page's
+cards (its top-level frames, groups and sections), not every arrow or label: read any layer with
+`get_node <id>`, and the full property diff with `diff` (follow pagination). Read their live
 content, then address the request there. A page-scoped job covers that page and its subpages;
 other pages are out of scope. Preserve card names and page IDs unless the task requires a
 change. Use existing components and layout conventions. Do not rebuild the whole map for a
 local edit.
+
+## Show, don't tell
+
+The canvas is the medium. An image is worth a thousand words: design one. Carry each idea with a
+rich diagram in whatever form it needs (structure, flow, chart, comparison, several at once) and
+as few words as possible. Words only label the parts and source them (file:line). No shape is
+prescribed; a wall of text cards is the thing to avoid. Check the result with `screenshot`.
 
 Every factual card needs a repository source. Read the implementation before claiming behavior.
 Keep one claim per card and explain it plainly. Label proposals as proposals. Do not edit
@@ -50,15 +59,21 @@ Keep one claim per card and explain it plainly. Label proposals as proposals. Do
 
 ## Three kinds of comment work
 
-A comment's prompt carries a `REQUEST` section (its request id, the page's last record and the
-design edits still waiting for Sync) and says how to finish. Decide the kind first and start the
-reply with `Kind: …`:
+A comment's prompt ends with `HOW TO FINISH`: the exact `record` command for its request. When
+design edits on the page are still waiting for Sync, a `WAITING FOR SYNC` section lists them;
+without it, every card describes the recorded state. Decide the kind before changing anything
+and start the reply with one line: `Kind: explanation`, `Kind: bug fix`, `Kind: design edit` or
+`Kind: bug fix + design edit`.
 
-- **Explanation**: describe today's code on the map. Change no code. Record it as `explain`.
-- **Bug fix**: fix and test the code; correct cards that described the bug wrongly. Record it as
-  `fix`.
-- **Design edit**: propose new behaviour on the map only, labelled as a proposal. Do not record
-  or commit: it waits for Sync. When unsure, it is a design edit. A mixed request is split.
+- **Explanation**: a question, or the map should describe how the app works today. Read the
+  code; change only the map, only as asked, and source every claim (file:line). Change no code.
+  Record it as `explain`.
+- **Bug fix**: the app is broken today. Fix and test the code; correct cards that described the
+  bug wrongly. Record it as `fix`.
+- **Design edit**: propose behaviour the code does not have, on the map only, labelled as a
+  proposal. Do not change code, record or commit: it waits for Sync.
+- **Unsure** is a design edit (it waits instead of disappearing). **Mixed**: do and record the
+  fix, and leave the proposal as a waiting design edit.
 
 Waiting cards are proposals, not current behaviour; do not describe them as what the code does.
 
@@ -67,6 +82,7 @@ To record, after the last map edit of the request:
 ```sh
 mindmap-node request '{"method":"record","session":"SESSION","request":"REQUEST","kind":"explain","page":123}'
 # explain: commit only the staged map; fix: commit the code with it. Trailer last.
+# Cannot commit? {"method":"sync.cancel","job":"JOB"}: an open record blocks Sync.
 mindmap-node request '{"method":"sync.finish","job":"JOB","commit":"SHA"}'
 ```
 

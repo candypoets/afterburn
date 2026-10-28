@@ -657,7 +657,6 @@ impl Node {
         // A page created with this prompt is not in any record yet; that is not an error.
         let drift = node_git::design_drift(&metadata.worktree, &document, scope).ok();
         let state = crate::node_brief::request_section(&crate::node_brief::State {
-            request: &request,
             page: scope,
             drift: drift.as_ref(),
         });

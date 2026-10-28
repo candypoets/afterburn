@@ -13,21 +13,18 @@ use crate::node_git::{Baseline, Drift};
 /// The most cards listed per group (added, changed, removed) before `… and N more`.
 const MAX_LISTED: usize = 12;
 
-/// Where the request sits: its id and what is recorded and waiting in its scope.
+/// What is recorded and waiting in the request's scope.
 pub struct State<'a> {
-    pub request: &'a str,
     pub page: Option<u64>,
     /// The design waiting in scope, or `None` when the node could not compare (a new page).
     pub drift: Option<&'a Drift>,
 }
 
-/// `REQUEST`: the request id, the scope's last record and the design edits waiting in it.
+/// `WAITING FOR SYNC`: the design edits that are proposals, not today's code, so the agent does
+/// not explain them as built. Empty when nothing waits: the request id is in the record command.
 pub fn request_section(state: &State<'_>) -> String {
-    let mut out = format!(
-        "REQUEST\nRequest: {} (Mindmap kept the map as it was when this was sent)\n",
-        state.request
-    );
     let scope = scope_name(state.page);
+    let mut out = String::from("WAITING FOR SYNC\n");
     match state.drift {
         None => out.push_str(&format!(
             "{scope} has no record yet: it describes nothing recorded, so Sync would treat every card as new design.\n"
@@ -36,61 +33,48 @@ pub fn request_section(state: &State<'_>) -> String {
             None => out.push_str(&format!(
                 "{scope} has never been recorded: Sync would treat every card as new design. Recording an explanation marks it all as describing today's code; do that only if it does.\n"
             )),
-            Some(last) => {
-                out.push_str(&format!("Last record of {}: {}\n", lower(&scope), record_line(last)));
-                if drift.is_empty() {
-                    out.push_str("Nothing waits for Sync here: every card describes the recorded state.\n");
-                } else {
-                    out.push_str(
-                        "Waiting for Sync (design edits since that record; proposals, not what the code does today):\n",
-                    );
-                    out.push_str(&cards(drift));
-                }
+            Some(_) if drift.is_empty() => return String::new(),
+            Some(_) => {
+                out.push_str("These design edits are proposals, not what the code does today:\n");
+                out.push_str(&cards(drift));
             }
         },
     }
     out
 }
 
-/// `HOW TO HANDLE THIS REQUEST`: decide the kind of work, then finish it the way that kind is
-/// finished. Init is one big explanation.
+/// `HOW TO SHOW IT`: the canvas is the medium, so ideas are drawn, not written.
+const HOW_TO_SHOW: &str = "HOW TO SHOW IT\n\
+     An image is worth a thousand words: design one. Use the canvas, rich diagrams in any form the idea needs, \
+     to carry it with as few words as possible. Words only label and source (file:line).\n";
+
+/// `HOW TO SHOW IT` and `HOW TO FINISH`: the kinds of work and their rules live in the mindmap
+/// skill; the prompt keeps the reply's first line and the exact record command. Init is one big
+/// explanation.
 pub fn comment_brief(request: &str, page: Option<u64>, init: bool) -> String {
     let page = page.map_or_else(String::new, |p| format!(",\"page\":{p}"));
     let record = |kind: &str| {
         format!("{{\"method\":\"record\",\"request\":\"{request}\",\"kind\":\"{kind}\"{page}}}")
     };
+    let finish =
+        "commit what it stages with the returned trailer as the last line, then node_request \
+         {\"method\":\"sync.finish\",\"job\":\"<job>\",\"commit\":\"<sha>\"}. \
+         If you cannot commit: {\"method\":\"sync.cancel\",\"job\":\"<job>\"}.";
     if init {
         return format!(
-            "HOW TO FINISH INIT\n\
-             Init describes the code as it is: it is one big explanation. Draw the map from the code; source every claim (file:line). Change no code.\n\
-             When the map is complete, record it so Sync does not treat the existing code as new design:\n\
-             1. node_request {}\n\
-             2. Commit only the staged .mindmap/map.figcraft, with the returned trailer as the last line of the message.\n\
-             3. node_request {{\"method\":\"sync.finish\",\"job\":\"<job>\",\"commit\":\"<sha>\"}}\n",
+            "{HOW_TO_SHOW}\n\
+             HOW TO FINISH INIT\n\
+             Init is one big explanation: draw the code as it is, source every claim (file:line), change no code.\n\
+             When the map is complete: node_request {}, {finish}\n",
             record("explain")
         );
     }
     format!(
-        "HOW TO HANDLE THIS REQUEST\n\
-         Decide what kind of work it is before changing anything, and start your reply with one line: \
-         \"Kind: explanation\", \"Kind: bug fix\", \"Kind: design edit\" or \"Kind: bug fix + design edit\".\n\
-         - Explanation: a question, or the map should describe how the app works today. Read the code; change only the map, \
-         only as asked, and source every claim (file:line). Never change code. Then record it as \"explain\".\n\
-         - Bug fix: the app is broken today. Fix and test the code, and correct any card that described the bug wrongly. \
-         Then record it as \"fix\".\n\
-         - Design edit: the request proposes behaviour the code does not have. Change only the map and label new or changed \
-         cards as proposals. Do not change code, record or commit: the edit waits for Sync.\n\
-         - Unsure: it is a design edit (it waits instead of disappearing). Mixed: do and record the fix, and leave the \
-         proposal as a waiting design edit.\n\
-         \n\
-         RECORD (explanation or bug fix only), after your last map edit for this request:\n\
-         1. node_request {} (or \"fix\"). Mindmap builds the map to commit: the last recorded map plus only this \
-         request's edits; design edits that were waiting stay out. It stages that map and returns a job and a trailer. \
-         If it lists cards kept waiting (your edit overlaps a waiting edit), say so in your reply.\n\
-         2. Commit: an explanation commits only the staged .mindmap/map.figcraft; a fix commits its code with it. The \
-         returned trailer is the last line of the message.\n\
-         3. node_request {{\"method\":\"sync.finish\",\"job\":\"<job>\",\"commit\":\"<sha>\"}}\n\
-         If you cannot commit, call {{\"method\":\"sync.cancel\",\"job\":\"<job>\"}}: an open record blocks Sync.\n",
+        "{HOW_TO_SHOW}\n\
+         HOW TO FINISH\n\
+         Start your reply with \"Kind: explanation\", \"Kind: bug fix\", \"Kind: design edit\" or \
+         \"Kind: bug fix + design edit\"; the skill says what each kind may change.\n\
+         Explanation or fix, after your last map edit: node_request {} (or \"fix\"), {finish}\n",
         record("explain")
     )
 }
@@ -171,14 +155,6 @@ fn scope_name(page: Option<u64>) -> String {
         Some(_) => "This page".to_owned(),
         None => "The map".to_owned(),
     }
-}
-
-fn lower(scope: &str) -> String {
-    let mut chars = scope.chars();
-    chars
-        .next()
-        .map(|c| c.to_lowercase().chain(chars).collect())
-        .unwrap_or_default()
 }
 
 /// `abc1234 (an explanation, 2026-10-26)`.
@@ -318,26 +294,27 @@ mod tests {
     }
 
     #[test]
-    fn a_comment_names_its_request_what_is_recorded_and_what_waits() {
+    fn a_comment_lists_what_waits_and_says_nothing_when_nothing_does() {
         let d = drift(Some(last("explain")), &["Retry"]);
         let text = request_section(&State {
-            request: "r1",
             page: Some(7),
             drift: Some(&d),
         });
-        assert!(text.contains("Request: r1"), "{text}");
-        assert!(
-            text.contains("Last record of this page: 0123456 (an explanation, 2026-10-26)"),
-            "{text}"
-        );
+        assert!(text.starts_with("WAITING FOR SYNC\n"), "{text}");
         assert!(text.contains("Added: Retry (id 10)"), "{text}");
         assert!(
             text.contains("Changed: Status (id 3): characters, fills"),
             "{text}"
         );
+        let mut quiet = drift(Some(last("explain")), &[]);
+        quiet.changed.clear();
+        let text = request_section(&State {
+            page: Some(7),
+            drift: Some(&quiet),
+        });
+        assert_eq!(text, "", "nothing waits, so the block is left out");
         let never = drift(None, &["A"]);
         let text = request_section(&State {
-            request: "r1",
             page: Some(7),
             drift: Some(&never),
         });
@@ -349,8 +326,9 @@ mod tests {
     }
 
     #[test]
-    fn the_brief_lets_the_agent_choose_and_finish_each_kind() {
+    fn the_brief_asks_for_pictures_and_keeps_the_kind_line_and_record_command() {
         let text = comment_brief("r1", Some(7), false);
+        assert!(text.starts_with("HOW TO SHOW IT\n"), "{text}");
         for kind in ["Kind: explanation", "Kind: bug fix", "Kind: design edit"] {
             assert!(text.contains(kind), "{text}");
         }
@@ -362,12 +340,18 @@ mod tests {
             text.contains("sync.finish") && text.contains("sync.cancel"),
             "{text}"
         );
+        assert!(
+            text.len() < 800,
+            "the rules live in the skill: {} chars",
+            text.len()
+        );
         let init = comment_brief("r2", None, true);
         assert!(
             init.contains(r#"{"method":"record","request":"r2","kind":"explain"}"#),
             "{init}"
         );
         assert!(init.contains("one big explanation"), "{init}");
+        assert!(init.contains("HOW TO SHOW IT"), "{init}");
     }
 
     #[test]
