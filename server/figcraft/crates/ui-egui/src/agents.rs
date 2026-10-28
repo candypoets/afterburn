@@ -279,7 +279,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         });
 
     if let Some(target) = pick {
-        app.compose.target = Some(target);
+        app.compose.choose(target);
     }
     if refresh {
         crate::compose::refresh_targets(app, ctx);

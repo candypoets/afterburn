@@ -78,6 +78,7 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
         "map.selectArea" => app.start_key_box(),
         "map.copyImage" => crate::menus::invoke_legacy(app, "edit.copyAsPng"),
         "map.export" => app.ui.export_preview = true,
+        "app.checkForUpdates" => crate::update::open(app, ctx),
         id => {
             let engine = match id {
                 "map.zoomIn" => "view.zoomIn",
@@ -120,6 +121,7 @@ pub fn blocking_overlay(app: &FigApp, ctx: &Context) -> bool {
         || app.page_delete.is_some()
         || app.machine_modal.open
         || app.new_workspace.open
+        || app.update.open
         || app.status.switcher_open
         || app.compose.confirm.is_some()
         || crate::map_navigation::search_open(ctx)
@@ -173,6 +175,8 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
         }
     } else if app.machine_modal.open {
         app.machine_modal.open = false;
+    } else if app.update.open {
+        app.update.close();
     } else if app.new_page.open {
         if !app.new_page.busy {
             app.new_page.open = false;

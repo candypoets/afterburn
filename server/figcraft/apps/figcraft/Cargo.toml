@@ -42,6 +42,10 @@ fmv-macos-events = "=0.1.0"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSToolbar"] }
+# The native menu bar (`mac_menu`). Menu items need an Objective-C target class, i.e. `unsafe`,
+# which the workspace forbids; muda (Tauri's menu crate) wraps NSMenu behind a safe API. Pinned
+# exactly: review the diff before bumping. No default features: those are its GTK backend.
+muda = { version = "=0.21.2", default-features = false }
 
 [dev-dependencies]
 wat = { workspace = true }

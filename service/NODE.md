@@ -189,6 +189,22 @@ does not terminate shared Herdr/agent processes. The installer retains existing 
 session settings, with explicit `HERDR_SESSION`, `HERDR_SOCKET_PATH`, or `HERDR_BIN_PATH` environment
 overrides. The default remains the user's existing shared Herdr session.
 
+The Mac app's **Check for Updates…** (`app.checkForUpdates`, also checked at launch and daily)
+installs prebuilt releases this way, never from source. It reads a JSON release feed from
+`MINDMAP_UPDATE_FEED` (no built-in feed exists yet, so the check ends "Up to date" with a note):
+
+```json
+{"version":"0.8.0","notes":["…"],
+ "platforms":{"darwin-arm64":{
+   "app":{"url":"https://…/Mindmap.zip","sha256":"<hex>"},
+   "node":{"url":"https://…/mindmap-node","sha256":"<hex>","build_id":"<BUILD_ID>"}}}}
+```
+
+It downloads both with `curl`, checks the SHA-256s and `codesign --verify --deep --strict`, refuses
+while `session.list` reports a prepared Sync or ready merge, runs the new bundle's
+`install-node.sh --binary … --build-id … --upgrade` (exit 21 is the same wait), swaps the `.app`
+and relaunches. See `server/figcraft/crates/ui-egui/src/update.rs`.
+
 ### Legacy document migration
 
 `mindmap-node migrate --records service/data/projects.json` exports and verifies legacy documents

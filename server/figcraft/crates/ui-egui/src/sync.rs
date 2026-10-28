@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 
 use crate::FigApp;
 use crate::a11y;
+use crate::agent_menu;
 use crate::compose::TargetInfo;
 use crate::theme::{regular, semibold};
 use crate::widgets;
@@ -470,8 +471,10 @@ pub struct State {
     refresh: bool,
     /// The sync request is on its thread; the job has not come back yet.
     starting: bool,
-    /// The target menu is open.
+    /// The agent menu is open.
     menu_open: bool,
+    /// The agent menu's search and arrow cursor.
+    menu: crate::agent_menu::MenuState,
     /// Sync every page instead of the current page and its subpages.
     all_pages: bool,
     /// The page the diff was read for (`None` when it covers every page).
@@ -854,9 +857,9 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
                 ui.add_space(7.0);
                 ui.label(egui::RichText::new("AGENT").font(mono(8.5)).color(MUTED));
                 ui.add_space(7.0);
-                let picked = target_chip(ui, &compose.targets, compose.target.as_ref(), &mut state.menu_open);
-                if picked.is_some() {
-                    compose.target = picked;
+                // The composer's agent button and menu: the same agent, chosen the same way.
+                if let Some(target) = agent_button(ui, state, compose) {
+                    compose.choose(target);
                 }
 
                 ui.add_space(7.0);
@@ -1053,11 +1056,7 @@ fn start_cancel(app: &mut FigApp, ctx: &egui::Context, job: String) {
             .unwrap_or_else(|_| Err("The cancel request failed unexpectedly.".to_string()))
             .and_then(|text| {
                 let value: Value = serde_json::from_str(&text).map_err(|e| format!("The node sent an unreadable answer: {e}"))?;
-                if value["ok"] == true {
-                    Ok(())
-                } else {
-                    Err(value["error"].as_str().unwrap_or("The node refused the cancel.").to_string())
-                }
+                if value["ok"] == true { Ok(()) } else { Err(value["error"].as_str().unwrap_or("The node refused the cancel.").to_string()) }
             });
         let _ = tx.send(reply);
         context.request_repaint();
@@ -1228,156 +1227,30 @@ fn file_row(ui: &mut Ui, file: &FileDelta) {
     ui.label(egui::RichText::new(format!("{path}{stats}")).font(regular(10.0)).color(INK));
 }
 
-/// The compact target chip; true when it should open, and the pick from its menu.
-fn target_chip(ui: &mut Ui, targets: &[TargetInfo], selected: Option<&Target>, menu_open: &mut bool) -> Option<Target> {
-    let info = selected.and_then(|target| targets.iter().find(|info| &info.target == target));
-    let label = match (selected, info) {
-        (Some(target), Some(info)) if !info.new_agent => {
-            let kind = kind_label(target.kind());
-            let status = info.status.trim();
-            if status.is_empty() { kind.to_string() } else { format!("{kind} · {status}") }
-        }
-        (Some(target), _) => kind_label(target.kind()).to_string(),
-        (None, _) => "choose an agent".to_string(),
-    };
-    // As wide as its label: `codex · idle  ▾`.
-    let shown = widgets::elide_font(ui, &label, 220.0, semibold(10.5));
-    let width = text_width(ui, &shown, semibold(10.5)) + 36.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    a11y::button(&response, "Choose the agent to sync with");
-    let hot = response.hovered() || *menu_open;
-    ui.painter().rect_filled(rect, CornerRadius::same(6), if hot { SOFT } else { PANEL });
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, BORDER), StrokeKind::Inside);
-    ui.painter().text(pos2(rect.min.x + 11.0, rect.center().y), Align2::LEFT_CENTER, shown, semibold(10.5), INK);
-    let c = pos2(rect.max.x - 13.0, rect.center().y + 0.5);
-    ui.painter().add(egui::Shape::convex_polygon(
-        vec![pos2(c.x - 3.5, c.y - 1.5), pos2(c.x + 3.5, c.y - 1.5), pos2(c.x, c.y + 2.0)],
-        MUTED,
-        Stroke::NONE,
-    ));
+/// The agent button and its menu, shared with the composer; the pick, if any.
+fn agent_button(ui: &mut Ui, state: &mut State, compose: &crate::compose::State) -> Option<Target> {
+    let label = agent_menu::button_label(&compose.targets, compose.target.as_ref(), "Choose an agent");
+    let width = agent_menu::button_width(ui, &label, 120.0, ui.available_width().min(280.0));
+    let response =
+        agent_menu::button(ui, Id::new("sync_agent_button"), &compose.targets, compose.target.as_ref(), &label, vec2(width, 28.0), state.menu_open);
     if response.clicked() {
-        *menu_open = !*menu_open;
-    }
-
-    let mut picked = None;
-    if *menu_open {
-        let frame = egui::Frame::NONE
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0, BORDER))
-            .corner_radius(CornerRadius::same(8))
-            .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(24) })
-            .inner_margin(egui::Margin::symmetric(12, 10));
-        let mut open = *menu_open;
-        egui::Popup::new(Id::new("sync_targets"), ui.ctx().clone(), &response, response.layer_id)
-            .width(260.0)
-            .gap(6.0)
-            .frame(frame)
-            .open_bool(&mut open)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                picked = target_menu_body(ui, targets, selected);
-            });
-        *menu_open = open;
-    }
-    if picked.is_some() {
-        *menu_open = false;
-    }
-    picked
-}
-
-/// The target menu's rows: the workspace's agents, then the CLIs a new agent can start.
-fn target_menu_body(ui: &mut Ui, targets: &[TargetInfo], selected: Option<&Target>) -> Option<Target> {
-    ui.set_width(ui.available_width());
-    ui.spacing_mut().item_spacing = vec2(6.0, 2.0);
-    eyebrow(ui, "AGENTS IN THIS WORKSPACE", MUTED);
-    ui.add_space(1.0);
-    let mut picked = None;
-    let agents: Vec<&TargetInfo> = targets.iter().filter(|info| !info.new_agent).collect();
-    if agents.is_empty() {
-        paragraph(ui, "No agents in this workspace yet.", 11.0, MUTED);
-    } else {
-        for info in agents {
-            if agent_row(ui, info, selected == Some(&info.target)) {
-                picked = Some(info.target.clone());
-            }
+        state.menu_open = !state.menu_open;
+        if state.menu_open {
+            state.menu.opened();
         }
     }
-    ui.add_space(5.0);
-    divider(ui);
-    ui.add_space(5.0);
-    eyebrow(ui, "START A NEW AGENT", MUTED);
-    ui.add_space(1.0);
-    let clis: Vec<&TargetInfo> = targets.iter().filter(|info| info.new_agent).collect();
-    if clis.is_empty() {
-        paragraph(ui, "No agent CLIs installed on the project host.", 11.0, MUTED);
-    } else {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-            for info in clis {
-                if cli_chip(ui, info.target.kind(), selected == Some(&info.target)) {
-                    picked = Some(info.target.clone());
-                }
-            }
-        });
-    }
-    picked
-}
-
-/// One agent row: state dot, kind, and its lifecycle state.
-fn agent_row(ui: &mut Ui, info: &TargetInfo, selected: bool) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let kind = kind_label(info.target.kind());
-    let status = info.status.trim();
-    a11y::button(&response, &if status.is_empty() { kind.to_string() } else { format!("{kind} · {status}") });
-    let hot = response.hovered();
-    if selected || hot {
-        ui.painter().rect_filled(
-            rect.shrink2(vec2(4.0, 1.0)),
-            CornerRadius::same(5),
-            if selected { Color32::from_rgb(0xF1, 0xEC, 0xE7) } else { SOFT },
-        );
-    }
-    let dot = pos2(rect.min.x + 9.0, rect.center().y);
-    ui.painter().circle_filled(dot, 3.0, status_color(status));
-    if info.focused {
-        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, MAP_INK));
-    }
-    ui.painter().text(pos2(rect.min.x + 19.0, rect.center().y), Align2::LEFT_CENTER, kind, semibold(11.5), INK);
-    if !status.is_empty() && !status.eq_ignore_ascii_case("unknown") {
-        let trail = if selected { 32.0 } else { 8.0 };
-        ui.painter().text(pos2(rect.max.x - trail, rect.center().y), Align2::RIGHT_CENTER, status, mono(9.5), MUTED);
-    }
-    if selected {
-        let c = pos2(rect.max.x - 22.0, rect.center().y);
-        let stroke = Stroke::new(1.6, ACCENT);
-        ui.painter().line_segment([pos2(c.x - 4.0, c.y), pos2(c.x - 1.0, c.y + 3.5)], stroke);
-        ui.painter().line_segment([pos2(c.x - 1.0, c.y + 3.5), pos2(c.x + 4.5, c.y - 4.0)], stroke);
-    }
-    response.clicked()
-}
-
-/// One CLI to start a new agent.
-fn cli_chip(ui: &mut Ui, kind: &str, selected: bool) -> bool {
-    let label = kind_label(kind);
-    let width = text_width(ui, label, semibold(10.5)) + 22.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    a11y::button(&response, &format!("Start a new {label}"));
-    let hot = response.hovered();
-    let fill = if selected {
-        Color32::from_rgb(0xF1, 0xEC, 0xE7)
-    } else if hot {
-        SOFT
-    } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
-    let border = if selected || hot { ACCENT } else { BORDER };
-    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, border), StrokeKind::Inside);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(10.5), if selected || hot { ACCENT } else { INK });
-    response.clicked()
+    let options =
+        agent_menu::Options { loading: compose.loading_targets(), error: compose.targets_error.as_deref(), ..agent_menu::Options::default() };
+    agent_menu::popup(
+        ui,
+        Id::new("sync_targets"),
+        &response,
+        &mut state.menu_open,
+        &mut state.menu,
+        &compose.targets,
+        compose.target.as_ref(),
+        options,
+    )
 }
 
 /// One scope choice in the widget's header.
@@ -1853,19 +1726,6 @@ fn short_commit(commit: &str) -> String {
 fn kind_label(kind: &str) -> &str {
     let kind = kind.trim();
     if kind.is_empty() { "agent" } else { kind }
-}
-
-fn status_color(status: &str) -> Color32 {
-    match status.to_ascii_lowercase().as_str() {
-        "working" | "busy" | "running" | "thinking" => ACCENT,
-        "blocked" | "error" | "failed" => DANGER,
-        "idle" | "done" | "ready" | "waiting" => MAP_INK,
-        _ => FAINT,
-    }
-}
-
-fn eyebrow(ui: &mut Ui, text: &str, color: Color32) {
-    ui.label(egui::RichText::new(text).font(mono(8.5)).color(color));
 }
 
 fn paragraph(ui: &mut Ui, text: &str, size: f32, color: Color32) {

@@ -158,6 +158,14 @@ pub const ACTIONS: &[Action] = &[
     action!("map.switchWorktree", "Switch worktree", "Workspaces + app", "", "", "Workspace: choose another worktree from the actions palette."),
     action!("map.focusComposer", "Focus composer", "Comments + composer", "", "", "Composer: focus the prompt field without sending anything."),
     action!("map.syncReview", "Open Sync review", "Workspaces + app", "", "", "Workspace: review Sync; opening this view never starts Sync."),
+    action!(
+        "app.checkForUpdates",
+        "Check for Updates…",
+        "Workspaces + app",
+        "",
+        "",
+        "App: look for a new Mindmap release; install the app and its node together."
+    ),
 ];
 
 /// Second bindings that run an action without being its primary shortcut: ⌘K, the palette's
@@ -255,8 +263,17 @@ pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static 
     }
     let no_map = app.ui.home || app.session.ds().is_err();
     match action.id {
-        "map.actions" | "map.help" | "map.openWorkspace" | "map.newWorkspace" | "map.preferences" | "map.fullscreen" | "map.focusMode"
-        | "map.workspacePane" | "map.nextRegion" | "map.previousRegion" => None,
+        "map.actions"
+        | "map.help"
+        | "map.openWorkspace"
+        | "map.newWorkspace"
+        | "map.preferences"
+        | "map.fullscreen"
+        | "map.focusMode"
+        | "map.workspacePane"
+        | "map.nextRegion"
+        | "map.previousRegion"
+        | "app.checkForUpdates" => None,
         // Navigation resolves links (including subpages linked through their source card),
         // and safely declines an absent or ambiguous detail page.
         "map.copy" | "map.copyImage" | "map.zoomSelection" | "map.openDetail" => {

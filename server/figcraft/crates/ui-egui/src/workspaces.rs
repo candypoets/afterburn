@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 use crate::FigApp;
 use crate::a11y;
+use crate::agent_menu;
 use crate::theme::{Tokens, regular, semibold};
 use crate::widgets;
 
@@ -231,9 +232,10 @@ fn default_target(w: &Workspace, clis: &[String]) -> Option<Target> {
     clis.iter().map(|kind| kind.trim()).find(|kind| !kind.is_empty()).map(|kind| Target::New { kind: kind.to_string() })
 }
 
-/// An agent in the middle of something (or waiting on its human) can't take Init.
+/// An agent in the middle of something (or waiting on its human) can't take Init; the agent menu
+/// shows it disabled.
 fn agent_busy(status: &str) -> bool {
-    matches!(status.trim().to_ascii_lowercase().as_str(), "working" | "busy" | "running" | "thinking" | "blocked")
+    crate::agent_menu::is_busy(status)
 }
 
 /// An agent kind as shown: the service may not know it.
@@ -385,6 +387,10 @@ pub struct State {
     pub node_version: Option<String>,
     /// What Init should use for the selected workspace; `None` lets the service choose.
     pub target: Option<Target>,
+    /// Init's agent menu (the composer's button and menu) is open.
+    pub agent_menu_open: bool,
+    /// Init's agent menu: its search and arrow cursor.
+    agent_menu: crate::agent_menu::MenuState,
     /// The channel a request's reply arrives on.
     rx: Option<Receiver<(Kind, Result<ServiceReply, String>)>>,
     /// The link the screen joins now (then shows the map).
@@ -504,6 +510,7 @@ impl State {
         self.worktree_init = false;
         self.selected = Some(workspace.to_string());
         self.error = None;
+        self.agent_menu_open = false;
         self.target = self.rows.iter().find(|w| w.id == workspace).and_then(|w| default_target(w, &self.clis));
     }
 
@@ -565,6 +572,19 @@ impl State {
             }
             Some(Retry::List) | None => self.refresh(ctx),
         }
+    }
+
+    /// The picked agent turned busy: `Pick another agent` goes back to the workspace's default
+    /// and opens the agent menu on it.
+    fn pick_another(&mut self, w: &Workspace) {
+        self.target = default_target(w, &self.clis);
+        self.open_agent_menu();
+    }
+
+    /// Open Init's agent menu on an empty search.
+    pub(crate) fn open_agent_menu(&mut self) {
+        self.agent_menu_open = true;
+        self.agent_menu.opened();
     }
 
     /// Keep the chosen target when a new list still offers it; refresh its status; otherwise fall
@@ -1605,7 +1625,7 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     ui.add_space(32.0);
     let busy = app.ws.busy.clone();
     let busy_here = busy.as_ref().is_some_and(|b| b.for_workspace(&w.id));
-    let label = action_label(kind, w, None, busy.as_ref());
+    let label = action_label(kind, w, busy.as_ref());
     let mut run = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
@@ -1830,73 +1850,6 @@ fn accent_button(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: bool) -> b
     resp.clicked() && enabled
 }
 
-/// One choice in AGENT FOR THIS MAP: an agent already in the workspace, or a CLI to start.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct AgentChoice {
-    target: Target,
-    label: String,
-    /// Busy agents are shown but can't be picked.
-    busy: bool,
-}
-
-/// The agents in the workspace first (busy ones disabled), then the installed CLIs as new agents.
-/// A CLI whose kind already runs here reads `new <kind>`.
-fn agent_choices(w: &Workspace, clis: &[String]) -> Vec<AgentChoice> {
-    let mut out: Vec<AgentChoice> = w
-        .agents_detail
-        .iter()
-        .map(|agent| {
-            let busy = agent_busy(&agent.status);
-            let kind = display_kind(&agent.kind);
-            AgentChoice {
-                target: Target::Existing { pane: agent.pane.clone(), kind: agent.kind.clone(), status: agent.status.clone() },
-                label: if busy { format!("{kind} · {}", agent.status.trim()) } else { kind.to_string() },
-                busy,
-            }
-        })
-        .collect();
-    for kind in clis.iter().map(|kind| kind.trim()).filter(|kind| !kind.is_empty()) {
-        let here = w.agents_detail.iter().any(|agent| agent.kind.trim().eq_ignore_ascii_case(kind));
-        out.push(AgentChoice {
-            target: Target::New { kind: kind.to_string() },
-            label: if here { format!("new {kind}") } else { kind.to_string() },
-            busy: false,
-        });
-    }
-    out
-}
-
-/// The line under Init: who will draw, and why the busy ones can't.
-fn init_hint(target: Option<&Target>, choices: &[AgentChoice]) -> String {
-    let mut parts = Vec::new();
-    match target {
-        Some(Target::Existing { kind, status, .. }) => {
-            let status = status.trim();
-            parts.push(if status.is_empty() || status.eq_ignore_ascii_case("unknown") {
-                format!("{} is already here", display_kind(kind))
-            } else {
-                format!("{} is {status}", display_kind(kind))
-            });
-        }
-        Some(Target::New { kind }) => parts.push(format!("a new {} starts in the workspace", display_kind(kind))),
-        None => {}
-    }
-    let busy: Vec<String> = choices
-        .iter()
-        .filter(|choice| choice.busy)
-        .filter_map(|choice| match &choice.target {
-            Target::Existing { kind, status, .. } => Some(format!("{} is {}", display_kind(kind), status.trim())),
-            Target::New { .. } => None,
-        })
-        .collect();
-    match busy.len() {
-        0 => {}
-        1 => parts.push(format!("{}, so it can't be picked", busy.join(""))),
-        _ => parts.push(format!("{}, so they can't be picked", busy.join(" · "))),
-    }
-    parts.join(" · ")
-}
-
 /// The chosen agent turned busy after it was picked: the second step names what it is doing.
 fn turned_busy<'a>(w: &'a Workspace, target: Option<&Target>) -> Option<&'a AgentDetail> {
     match target {
@@ -1937,32 +1890,19 @@ fn init_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
 
     let busy = app.ws.busy.clone();
     let busy_here = busy.as_ref().is_some_and(|b| b.for_workspace(&w.id));
-    let choices = agent_choices(w, &app.ws.clis);
-    let target = app.ws.target.clone();
+    let targets = agent_menu::targets_of(w.agents_detail.clone(), &app.ws.clis);
     ui.add_space(10.0);
     ui.label(egui::RichText::new("AGENT FOR THIS MAP").font(mono(9.0)).color(s.muted));
     ui.add_space(6.0);
-    if choices.is_empty() {
+    if targets.is_empty() {
         paragraph(
             ui,
             "No agent is in this workspace and no agent CLI is installed to start one. Install codex, claude or kimi, then Refresh.",
             11.0,
             s.muted,
         );
-    } else {
-        let mut picked = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-            for (index, choice) in choices.iter().enumerate() {
-                let selected = target.as_ref() == Some(&choice.target);
-                if agent_chip(ui, s, Id::new(("init_agent", &w.id, index)), choice, selected, busy.is_none()) {
-                    picked = Some(choice.target.clone());
-                }
-            }
-        });
-        if let Some(target) = picked {
-            app.ws.target = Some(target);
-        }
+    } else if let Some(target) = init_agent_button(ui, &mut app.ws, &w.id, &targets, busy.is_none()) {
+        app.ws.target = Some(target);
     }
     let target = app.ws.target.clone();
 
@@ -1981,16 +1921,16 @@ fn init_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             anyway = init_button(ui, s, Id::new(("init_anyway", &w.id)), &format!("Ask {} anyway", display_kind(&agent.kind)), busy.is_none());
-            other = ghost_button(ui, s, Id::new(("init_other", &w.id)), "Pick another", busy.is_none(), false).clicked();
+            other = ghost_button(ui, s, Id::new(("init_other", &w.id)), "Pick another agent", busy.is_none(), false).clicked();
         });
         if anyway {
             app.ws.act(&ctx, &w.id, true);
         } else if other {
-            app.ws.target = default_target(w, &app.ws.clis);
+            app.ws.pick_another(w);
         }
     } else {
-        let label = action_label(w.map_state(), w, target.as_ref(), busy.as_ref());
-        let enabled = busy.is_none() && !choices.is_empty() && target.is_some();
+        let label = action_label(w.map_state(), w, busy.as_ref());
+        let enabled = busy.is_none() && !targets.is_empty() && target.is_some();
         if init_button(ui, s, Id::new(("workspace_action", &w.id)), &label, enabled) {
             app.ws.act(&ctx, &w.id, true);
         }
@@ -2006,7 +1946,7 @@ fn init_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
                 _ => "the node is starting the agent; the map appears as it draws".to_string(),
             }
         } else {
-            init_hint(target.as_ref(), &choices)
+            "One button, one menu: busy agents are disabled in the list.".to_string()
         };
         if !hint.is_empty() {
             ui.add(egui::Label::new(egui::RichText::new(hint).font(mono(10.0)).color(s.muted)).wrap());
@@ -2027,7 +1967,7 @@ fn init_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
         ui.add(
             egui::Label::new(
                 egui::RichText::new(
-                    "Pick an idle agent, then press Init. A busy agent is disabled; if one turns busy after the list opens, a second step names what it is doing.",
+                    "The agent button opens the same menu as the composer — search, a scrolling list and new CLIs. Pick an idle agent, press Init.",
                 )
                 .font(mono(9.0))
                 .color(s.muted),
@@ -2037,33 +1977,33 @@ fn init_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
     });
 }
 
-/// One agent chip: dark when chosen, white otherwise; a busy agent is greyed with a red dot.
-fn agent_chip(ui: &mut Ui, s: &Skin, id: Id, choice: &AgentChoice, selected: bool, enabled: bool) -> bool {
-    let font = if selected { semibold(10.0) } else { regular(10.0) };
-    let dot = if choice.busy { 10.0 } else { 0.0 };
-    let width = text_width(ui, &choice.label, font.clone()) + 24.0 + dot;
-    let (rect, _) = ui.allocate_exact_size(vec2(width.max(66.0), 26.0), Sense::hover());
-    let pickable = enabled && !choice.busy;
-    let resp = ui.interact(rect, id, if pickable { Sense::click() } else { Sense::hover() });
-    a11y::button(&resp, &choice.label);
-    let (fill, stroke, ink) = if selected {
-        (s.primary, s.primary, s.on_primary)
-    } else if choice.busy {
-        (s.soft, s.border, s.faint)
-    } else if resp.hovered() && pickable {
-        (s.soft, s.border, s.text)
-    } else {
-        (s.panel, s.border, s.text)
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, stroke), StrokeKind::Inside);
-    if choice.busy {
-        ui.painter().circle_filled(pos2(rect.min.x + 13.0, rect.center().y), 3.0, s.accent);
+/// AGENT FOR THIS MAP: the composer's agent button and menu, with busy agents disabled; the
+/// pick, if any.
+fn init_agent_button(ui: &mut Ui, ws: &mut State, workspace: &str, targets: &[crate::compose::TargetInfo], enabled: bool) -> Option<Target> {
+    let label = agent_menu::button_label(targets, ws.target.as_ref(), "Choose an agent");
+    let width = agent_menu::button_width(ui, &label, 220.0, 360.0);
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            agent_menu::button(ui, Id::new(("init_agent", workspace)), targets, ws.target.as_ref(), &label, vec2(width, 34.0), ws.agent_menu_open)
+        })
+        .inner;
+    if response.clicked() {
+        ws.agent_menu_open = !ws.agent_menu_open;
+        if ws.agent_menu_open {
+            ws.agent_menu.opened();
+        }
     }
-    ui.painter().text(pos2(rect.min.x + 12.0 + dot, rect.center().y), Align2::LEFT_CENTER, &choice.label, font, ink);
-    focus_ring(ui, s, rect, &resp, 6);
-    let resp = if choice.busy { resp.on_hover_text("Busy: it can't take Init now") } else { resp };
-    resp.clicked() && pickable
+    let options = agent_menu::Options { disable_busy: true, ..agent_menu::Options::default() };
+    agent_menu::popup(
+        ui,
+        Id::new(("init_agent_menu", workspace)),
+        &response,
+        &mut ws.agent_menu_open,
+        &mut ws.agent_menu,
+        targets,
+        ws.target.as_ref(),
+        options,
+    )
 }
 
 /// The accent Init button: 34 pt tall, 16 pt of padding.
@@ -2095,7 +2035,7 @@ fn init_button(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: bool) -> boo
 }
 
 /// The action's label, including what the service is doing while it works.
-fn action_label(kind: MapState, w: &Workspace, target: Option<&Target>, busy: Option<&Busy>) -> String {
+fn action_label(kind: MapState, w: &Workspace, busy: Option<&Busy>) -> String {
     if let Some(Busy::Open { workspace, init, target: asking }) = busy
         && workspace == &w.id
     {
@@ -2108,14 +2048,8 @@ fn action_label(kind: MapState, w: &Workspace, target: Option<&Target>, busy: Op
         }
         return "Opening…".to_string();
     }
-    match kind {
-        MapState::Map => kind.action().to_string(),
-        MapState::Empty | MapState::None => match target {
-            Some(Target::Existing { kind, .. }) => format!("Init with {}", display_kind(kind)),
-            Some(Target::New { kind }) => format!("Init with {}", display_kind(kind)),
-            None => "Init map".to_string(),
-        },
-    }
+    // The agent is on its own button above; the action stays `Init map`.
+    kind.action().to_string()
 }
 
 fn explanation(kind: MapState) -> &'static str {
@@ -2502,19 +2436,44 @@ mod detail_tests {
 
     #[test]
     fn init_offers_the_agents_here_then_new_clis_and_disables_busy_ones() {
-        let w = Workspace { agents_detail: vec![agent("w:p1", "kimi", "idle"), agent("w:p2", "codex", "working")], ..Workspace::default() };
-        let choices = agent_choices(&w, &["claude".into(), "codex".into()]);
-        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
-        assert_eq!(labels, ["kimi", "codex · working", "claude", "new codex"]);
-        assert_eq!(choices.iter().map(|c| c.busy).collect::<Vec<_>>(), [false, true, false, false]);
+        let w = Workspace {
+            agents_detail: vec![agent("w:p1", "kimi", "idle"), agent("w:p2", "codex", "working"), agent("w:p3", "claude", "blocked")],
+            ..Workspace::default()
+        };
+        // The composer's menu: the agents here first, then the CLIs a new agent can start.
+        let targets = agent_menu::targets_of(w.agents_detail.clone(), &["claude".into(), "codex".into()]);
+        let lines: Vec<String> = targets.iter().map(|info| info.target.line()).collect();
+        assert_eq!(lines, ["pane:w:p1", "pane:w:p2", "pane:w:p3", "kind:claude", "kind:codex"]);
+        let disabled: Vec<bool> = targets.iter().map(|info| !info.new_agent && agent_menu::is_busy(&info.status)).collect();
+        assert_eq!(disabled, [false, true, true, false, false], "working and blocked agents are disabled in Init's menu");
+        let first = default_target(&w, &["claude".into()]);
         assert_eq!(
-            default_target(&w, &["claude".into()]),
+            first,
             Some(Target::Existing { pane: "w:p1".into(), kind: "kimi".into(), status: "idle".into() }),
             "a busy agent is never the default"
         );
-        let hint = init_hint(Some(&choices[0].target), &choices);
-        assert_eq!(hint, "kimi is idle · codex is working, so it can't be picked");
-        assert_eq!(init_hint(Some(&Target::New { kind: "claude".into() }), &[]), "a new claude starts in the workspace");
+        assert_eq!(agent_menu::button_label(&targets, first.as_ref(), "Choose an agent"), "Pane 1 · Kimi · p1 · idle");
+        assert_eq!(action_label(MapState::Empty, &w, None), "Init map", "the agent is on its own button");
+    }
+
+    #[test]
+    fn pick_another_agent_returns_to_the_default_and_opens_the_menu() {
+        let w = Workspace {
+            id: "w".into(),
+            agents_detail: vec![agent("w:p1", "kimi", "working"), agent("w:p2", "codex", "idle")],
+            ..Workspace::default()
+        };
+        let mut ws = State {
+            rows: vec![w.clone()],
+            target: Some(Target::Existing { pane: "w:p1".into(), kind: "kimi".into(), status: "idle".into() }),
+            ..State::default()
+        };
+        assert!(turned_busy(&w, ws.target.as_ref()).is_some(), "the second step shows");
+        ws.pick_another(&w);
+        assert_eq!(ws.target.as_ref().map(Target::line).as_deref(), Some("pane:w:p2"));
+        assert!(ws.agent_menu_open, "the agent menu opens on the idle agent");
+        ws.select("w");
+        assert!(!ws.agent_menu_open, "selecting a workspace closes it");
     }
 
     #[test]

@@ -677,6 +677,9 @@ pub struct Prefs {
     /// `widget:<plugin>`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent_actions: Vec<String>,
+    /// When Mindmap last looked for a new release (Unix seconds); it looks again a day later.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_checked: Option<u64>,
 }
 
 /// Recently run actions kept for the Actions palette (newest first).
@@ -712,6 +715,7 @@ impl Default for Prefs {
             home_order: "desc".into(),
             view: BTreeMap::new(),
             recent_actions: Vec::new(),
+            update_checked: None,
         }
     }
 }

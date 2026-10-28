@@ -27,6 +27,8 @@ mod graphics;
 mod linux_window;
 #[cfg(target_os = "macos")]
 mod mac_chrome;
+#[cfg(target_os = "macos")]
+mod mac_menu;
 mod recovery;
 mod services;
 mod startup;
@@ -65,6 +67,9 @@ struct App {
     /// Documents and quit requests from Finder, the Dock and Open With.
     #[cfg(target_os = "macos")]
     apple_events: fmv_macos_events::Inbox,
+    /// The map client's native menu bar (`None` outside map mode: winit's default bar stays).
+    #[cfg(target_os = "macos")]
+    menu: Option<mac_menu::MacMenu>,
 }
 
 impl eframe::App for App {
@@ -83,6 +88,10 @@ impl eframe::App for App {
             #[cfg(target_os = "macos")]
             if figcraft_ui_egui::map_mode() {
                 mac_chrome::unify_toolbars();
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(menu) = self.menu.as_mut() {
+                menu.poll(fig, ctx);
             }
             // Closing the window asks about unsaved changes (and keeps the app running while other
             // windows are open).
@@ -284,6 +293,9 @@ fn main() -> eframe::Result {
                 recovery,
                 #[cfg(target_os = "macos")]
                 apple_events: apple_events.connect(&_cc.egui_ctx),
+                // After launch, so it replaces winit's default bar.
+                #[cfg(target_os = "macos")]
+                menu: figcraft_ui_egui::map_mode().then(|| mac_menu::MacMenu::install(&_cc.egui_ctx)),
             }))
         }),
     );

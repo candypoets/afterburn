@@ -211,8 +211,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             });
     });
 
-    if selected != app.compose.target {
-        app.compose.target = selected;
+    if selected != app.compose.target
+        && let Some(target) = selected
+    {
+        app.compose.choose(target);
     }
     if close && !busy {
         app.new_page.open = false;

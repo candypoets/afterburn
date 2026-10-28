@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod a11y;
+pub mod agent_menu;
 pub mod agents;
 pub mod assets_panel;
 pub mod bidi;
@@ -161,6 +162,7 @@ fn page_tab(ui: &mut egui::Ui, name: &str, active: bool) -> (egui::Response, boo
 pub mod machine_modal;
 pub mod menus;
 pub mod missing_fonts;
+pub mod native_menu;
 pub mod new_page;
 pub mod new_workspace;
 #[cfg(not(target_arch = "wasm32"))]
@@ -192,6 +194,9 @@ pub mod tabs;
 pub mod theme;
 pub mod toolbar;
 pub mod typography;
+pub mod update;
+#[cfg(not(target_arch = "wasm32"))]
+mod update_install;
 pub mod variable_ui;
 pub mod variables_panel;
 pub mod vector_panel;
@@ -288,6 +293,8 @@ mod menu_input_tests;
 #[cfg(test)]
 mod missing_fonts_tests;
 #[cfg(test)]
+mod native_menu_tests;
+#[cfg(test)]
 mod new_page_menu_tests;
 #[cfg(test)]
 mod online_tests;
@@ -338,13 +345,15 @@ mod shortcuts_tests;
 #[cfg(test)]
 mod style_folder_rename_tests;
 #[cfg(test)]
-mod sync_scope_tests;
-#[cfg(test)]
 mod sync_record_tests;
+#[cfg(test)]
+mod sync_scope_tests;
 #[cfg(test)]
 mod text_enter_tests;
 #[cfg(test)]
 mod titlebar_tests;
+#[cfg(test)]
+mod update_tests;
 #[cfg(test)]
 mod variables_export_ui_tests;
 #[cfg(test)]
@@ -877,6 +886,8 @@ pub struct FigApp {
     pub machine_modal: machine_modal::State,
     /// The New workspace modal.
     pub new_workspace: new_workspace::State,
+    /// Check for Updates: the Update sheet and the launch and daily checks.
+    pub update: update::State,
     pub canvas: canvas::CanvasState,
     pub services: Box<dyn Services>,
     worker: Option<render_worker::Worker>,
@@ -937,6 +948,7 @@ impl FigApp {
             onboarding: onboarding::State::default(),
             machine_modal: machine_modal::State::default(),
             new_workspace: new_workspace::State::default(),
+            update: update::State::default(),
             session,
             canvas: canvas::CanvasState::default(),
             services,
@@ -1614,6 +1626,11 @@ impl FigApp {
         windows::begin(self, &ctx);
         let (files, prefs) = (self.session.docs.len(), self.session.prefs.clone());
         self.frame(ui);
+        // Check for Updates: over every screen of the map client, checked at launch and daily.
+        if map_mode() {
+            update::tick(self, &ctx);
+            update::show(self, &ctx);
+        }
         windows::settle(self, &ctx, files);
         if self.session.prefs != prefs {
             windows::repaint_others(self, &ctx);

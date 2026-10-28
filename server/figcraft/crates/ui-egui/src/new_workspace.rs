@@ -3,7 +3,8 @@
 //! Design: `Widget New workspace` on the Mindmap page (states Local, Remote, Connect, Creating,
 //! Init, Init busy, Init busy no info). One 520 × 390 card: the machine field opens into the
 //! machine list in place, and "Connect a machine…" grows an SSH target instead of sending the
-//! person elsewhere.
+//! person elsewhere. Init is no form of its own: the workspace opens the Empty map page, with the
+//! composer's agent button and menu (busy agents disabled in it).
 //!
 //! The node has no create-workspace RPC today (its methods are listing, Open and Init), so Create
 //! never claims success: it looks for a workspace at the chosen folder in the listed
@@ -447,6 +448,8 @@ enum Action {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BusyAction {
     Close,
+    /// `Pick another agent`.
+    Pick,
     Wait,
     StartNew,
 }
@@ -570,7 +573,8 @@ fn start_create(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
-/// The workspace exists: it opens its map, or the Init page where the agent is chosen.
+/// The workspace exists: it opens its map, or the Empty map page, where the composer's agent
+/// button and menu choose the agent.
 fn hand_off(app: &mut FigApp, ctx: &egui::Context, id: &str) {
     let map = app.ws.rows.iter().find(|w| w.id == id).map(Workspace::map_state).unwrap_or(MapState::None);
     app.new_workspace.close();
@@ -888,11 +892,11 @@ fn busy_card(app: &mut FigApp, ui: &mut Ui) {
         let sub = crate::widgets::elide_font(ui, &sub, info.width() - 36.0, egui::FontId::monospace(8.5));
         shell::mono(ui, info.min + vec2(24.0, 28.0), &sub, 8.5, s.faint);
         shell::mono(ui, card.min + vec2(24.0, 212.0), note, 8.5, s.faint);
-        let pick = shell::quiet_button(ui, &s, Id::new("init_busy_pick"), shell::at(card, 24.0, 300.0, 120.0, 30.0), "Pick another");
-        let wait = shell::quiet_button(ui, &s, Id::new("init_busy_wait"), shell::at(card, 156.0, 300.0, 110.0, 30.0), "Wait for it");
-        let start = shell::primary_button(ui, &s, Id::new("init_busy_start"), shell::at(card, 278.0, 300.0, 172.0, 30.0), "Start a new agent", true);
+        let pick = shell::quiet_button(ui, &s, Id::new("init_busy_pick"), shell::at(card, 24.0, 300.0, 150.0, 30.0), "Pick another agent");
+        let wait = shell::quiet_button(ui, &s, Id::new("init_busy_wait"), shell::at(card, 186.0, 300.0, 110.0, 30.0), "Wait for it");
+        let start = shell::primary_button(ui, &s, Id::new("init_busy_start"), shell::at(card, 308.0, 300.0, 172.0, 30.0), "Start a new agent", true);
         if pick {
-            Some(BusyAction::Close)
+            Some(BusyAction::Pick)
         } else if wait {
             Some(BusyAction::Wait)
         } else if start {
@@ -905,8 +909,13 @@ fn busy_card(app: &mut FigApp, ui: &mut Ui) {
     let Some(action) = action else { return };
     app.new_workspace.busy = None;
     match action {
-        // The agent menu beside Init is where another agent is picked.
         BusyAction::Close => {}
+        // The Empty map screen's agent button is where another agent is picked: its menu opens,
+        // with busy agents disabled.
+        BusyAction::Pick => {
+            app.ws.select(&busy.workspace);
+            app.ws.open_agent_menu();
+        }
         BusyAction::Wait => app.new_workspace.waiting = Some(busy),
         BusyAction::StartNew => {
             app.ws.select(&busy.workspace);

@@ -6,20 +6,26 @@
 //! comment. The service is reached over plain TCP on a thread of its own, so the window never
 //! waits on the network.
 //!
+//! The recipient is the shared agent button and menu ([`crate::agent_menu`]). It defaults to the
+//! page's agent, else the first idle agent in stable workspace order; with none idle, nobody. Each
+//! page remembers its agent: switching pages selects that page's agent again; a page with no
+//! history uses the last agent used anywhere. Once shown, a status change never moves it.
+//!
 //! Map mode's right-click menu lives here too: the human gets Copy and Comment, never the
 //! editor's tools.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver};
 
 use egui::text::{CCursor, CCursorRange};
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Key, Margin, Modifiers, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, FontId, Id, Key, Margin, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_doc::{Document, NodeId};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::FigApp;
 use crate::a11y;
+use crate::agent_menu::{self, kind_label, recipient};
 use crate::theme::regular;
 use crate::widgets;
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,10 +44,6 @@ const SEND_W: f32 = 84.0;
 /// The recipient chip's width range; a long agent name is elided inside it.
 const CHIP_MIN_W: f32 = 120.0;
 const CHIP_MAX_W: f32 = 280.0;
-/// The agent menu's width, and the scrolling list's height (six rows and a peek at the seventh).
-const MENU_W: f32 = 300.0;
-const MENU_LIST_H: f32 = 160.0;
-const MENU_ROW_H: f32 = 26.0;
 /// How many draft chips fit in the strip before `+N`.
 const VISIBLE_DRAFTS: usize = 3;
 
@@ -59,18 +61,10 @@ const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
 /// The draft open in the field, and that field: a blue that leaves the warm accents alone.
 const EDIT: Color32 = Color32::from_rgb(0x2F, 0x6F, 0xDB);
 const EDIT_FILL: Color32 = Color32::from_rgb(0xEA, 0xF0, 0xFB);
-/// Agent status inks, as the agent menu draws its dots.
-const IDLE: Color32 = Color32::from_rgb(0x2F, 0x7A, 0x4F);
+/// A working agent's ink, and the help line's when nobody is chosen.
 const WORKING: Color32 = Color32::from_rgb(0xA8, 0x6B, 0x12);
-const DONE: Color32 = Color32::from_rgb(0x41, 0x6F, 0x91);
-/// The recipient chip's fill: green for a ready agent, amber for a working one, red for blocked.
-const READY_FILL: Color32 = Color32::from_rgb(0xEA, 0xF3, 0xF0);
-const WORKING_FILL: Color32 = Color32::from_rgb(0xFF, 0xF4, 0xDB);
-const BLOCKED_FILL: Color32 = Color32::from_rgb(0xFB, 0xED, 0xEA);
 /// Send while it can't send.
 const DISABLED_FILL: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
-/// The selected row in the agent menu.
-const CHOSEN_FILL: Color32 = Color32::from_rgb(0xF1, 0xEC, 0xE7);
 
 /// The help line when no agent is idle, so the composer chose nobody.
 const NO_IDLE: &str = "No idle agent. Choose deliberately or start a new agent.";
@@ -167,12 +161,16 @@ pub struct State {
     targets_rx: Option<Receiver<Result<Vec<TargetInfo>, String>>>,
     /// Why the target list is empty, when the service could not answer.
     pub(crate) targets_error: Option<String>,
-    /// The agent menu's search text.
-    query: String,
-    /// The agent row the menu's arrows are on, an index into the filtered rows.
-    menu_cursor: usize,
-    /// Give the menu's search field the keyboard on its next draw (the menu just opened).
-    menu_focus: bool,
+    /// The agent menu's search and arrow cursor.
+    menu: agent_menu::MenuState,
+    /// The agent each page last used or picked, by page.
+    page_agents: HashMap<NodeId, Target>,
+    /// The agent last used or picked on any page: a page with no history starts on it.
+    last_used: Option<Target>,
+    /// The page the chosen agent belongs to; another page selects its own agent again.
+    agent_page: Option<NodeId>,
+    /// The page and agent of the send in flight; a new agent's pane replaces its CLI once known.
+    sent_to: Option<(Option<NodeId>, Target)>,
     /// Send met a working or blocked agent: the confirmation is open and nothing is sent yet.
     pub(crate) confirm: Option<Confirm>,
     /// Why the last Send did not leave (`Choose an available agent`), until the next choice.
@@ -251,6 +249,11 @@ impl State {
         self.input.clear();
     }
 
+    /// The agent list is being read.
+    pub(crate) fn loading_targets(&self) -> bool {
+        self.targets_rx.is_some()
+    }
+
     /// The chosen recipient as the latest agent list has it; `None` when nobody is chosen or the
     /// pane has left the list. Panes are matched by id, never by status.
     pub(crate) fn chosen(&self) -> Option<&TargetInfo> {
@@ -292,19 +295,74 @@ impl State {
         }
     }
 
-    /// The human picked a recipient in the menu.
-    fn choose(&mut self, target: Target) {
+    /// The human picked a recipient (in the agent menu, the Sync panel or the Agents list): the
+    /// page remembers it, and so does a page with no history of its own.
+    pub(crate) fn choose(&mut self, target: Target) {
+        self.remember(self.agent_page, target.clone());
         self.target = Some(target);
         self.notice = None;
+    }
+
+    /// `target` was used or picked on `page`.
+    fn remember(&mut self, page: Option<NodeId>, target: Target) {
+        if let Some(page) = page {
+            self.page_agents.insert(page, target.clone());
+        }
+        self.last_used = Some(target);
+    }
+
+    /// The agent a page starts on: the one it last used, else the last one used anywhere, else
+    /// the first idle agent in the list's stable order; with none idle, nobody. A remembered agent
+    /// counts only while the list still has it.
+    fn page_default(&self, page: Option<NodeId>) -> Option<Target> {
+        let listed = |target: &Target| {
+            let line = target.line();
+            self.targets.iter().find(|info| info.target.line() == line).map(|info| info.target.clone())
+        };
+        page.and_then(|page| self.page_agents.get(&page))
+            .and_then(listed)
+            .or_else(|| self.last_used.as_ref().and_then(listed))
+            .or_else(|| default_target(&self.targets))
+    }
+
+    /// The map moved to `page`: select that page's agent again. Only a page switch changes the
+    /// recipient this way; a status change never does.
+    fn switch_page(&mut self, page: Option<NodeId>) {
+        if self.agent_page == page {
+            return;
+        }
+        self.agent_page = page;
+        // Before the list arrives nobody is chosen; the list then takes the page's agent.
+        if !self.targets.is_empty() {
+            self.target = self.page_default(page);
+            self.notice = None;
+        }
+    }
+
+    /// A send to `sent` from `page` went to `agent` (the node's reply). A new CLI's agent now has a
+    /// pane: the page remembers that pane, and the button moves to it if it still shows the CLI,
+    /// so the next send does not start another agent.
+    fn started(&mut self, page: Option<NodeId>, sent: &Target, agent: &Value) {
+        let Target::New { kind } = sent else { return };
+        let Some(pane) = agent.get("pane").and_then(Value::as_str).map(str::trim).filter(|pane| !pane.is_empty()) else { return };
+        let kind = agent.get("kind").and_then(Value::as_str).map(str::trim).filter(|kind| !kind.is_empty()).unwrap_or(kind);
+        let pane = Target::Existing { pane: pane.to_string(), kind: kind.to_string(), status: "working".to_string() };
+        if self.last_used.as_ref() == Some(sent) {
+            self.last_used = Some(pane.clone());
+        }
+        if let Some(page) = page {
+            self.page_agents.insert(page, pane.clone());
+        }
+        if self.target.as_ref() == Some(sent) {
+            self.target = Some(pane);
+        }
     }
 
     /// Open or close the agent menu; it opens on an empty search with the keyboard in it.
     fn toggle_menu(&mut self) {
         self.menu_open = !self.menu_open;
         if self.menu_open {
-            self.query.clear();
-            self.menu_cursor = 0;
-            self.menu_focus = true;
+            self.menu.opened();
         }
     }
 
@@ -334,6 +392,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     // Selecting another card (or another page) empties the input; the drafts stay above it.
     let selection = app.session.selection();
     let page = app.session.page().ok();
+    app.compose.switch_page(page);
     if selection != app.compose.last_selection || page != app.compose.last_page {
         app.compose.input.clear();
         app.compose.editing = None;
@@ -588,14 +647,31 @@ fn body(
         };
         let send_w = send_width(ui, send_label);
         let chip_label = target_label(state, active);
-        let chip_w = chip_width(ui, &chip_label).min((ui.available_width() - send_w - 8.0).max(60.0));
+        let chip_w = agent_menu::button_width(ui, &chip_label, CHIP_MIN_W, CHIP_MAX_W).min((ui.available_width() - send_w - 8.0).max(60.0));
         ui.add_space((ui.available_width() - chip_w - send_w - 8.0).max(0.0));
-        let target_response = target_chip(ui, state, &chip_label, chip_w);
+        let target_response = agent_menu::button(
+            ui,
+            Id::new("map_composer_target_chip"),
+            &state.targets,
+            state.target.as_ref(),
+            &chip_label,
+            vec2(chip_w, ROW_H),
+            state.menu_open,
+        );
         if target_response.clicked() {
             state.toggle_menu();
         }
-        if state.menu_open {
-            target_menu(ui, state, &target_response);
+        let options = agent_menu::Options {
+            align: egui::RectAlign::TOP_END,
+            loading: state.targets_rx.is_some(),
+            error: state.targets_error.as_deref(),
+            ..agent_menu::Options::default()
+        };
+        let mut open = state.menu_open;
+        let picked = agent_menu::popup(ui, menu_id(), &target_response, &mut open, &mut state.menu, &state.targets, state.target.as_ref(), options);
+        state.menu_open = open;
+        if let Some(target) = picked {
+            state.choose(target);
         }
         ui.add_space(8.0);
         if send_button(ui, send_label, send_w, can_send) {
@@ -809,259 +885,15 @@ fn help_line(state: &State, active: bool) -> Option<(String, Color32)> {
     (active && state.target.is_none() && agents).then(|| (NO_IDLE.to_string(), WORKING))
 }
 
-/// The recipient chip's text: `Backend · Codex · p1 · idle`.
+/// The agent button's text: `Backend · Codex · p1 · idle`.
 fn target_label(state: &State, active: bool) -> String {
-    match (&state.target, state.chosen()) {
-        (Some(Target::New { kind }), _) => format!("New {} agent", kind_label(kind)),
-        (Some(_), Some(info)) => recipient(info, false),
-        (Some(_), None) => "Agent gone · choose again".to_string(),
-        (None, _) if !active || (state.targets.is_empty() && state.targets_error.is_some()) => "No agents · reconnect".to_string(),
-        (None, _) => "Choose an agent".to_string(),
-    }
-}
-
-/// One agent's identity: `Backend · Codex · p1 · idle` (`pane 1` in full).
-pub(crate) fn recipient(info: &TargetInfo, full: bool) -> String {
-    match &info.target {
-        Target::New { kind } => format!("New {} agent", kind_label(kind)),
-        Target::Existing { pane, kind, .. } => {
-            let pane = if full { format!("pane {}", pane_number(pane)) } else { pane_short(pane).to_string() };
-            format!("{} · {} · {pane} · {}", info.label, kind_title(kind), status_text(&info.status))
-        }
-    }
-}
-
-/// The recipient chip's width for its label, within the chip's range.
-fn chip_width(ui: &Ui, label: &str) -> f32 {
-    (text_width(ui, label, regular(11.0)) + 46.0).clamp(CHIP_MIN_W, CHIP_MAX_W)
+    let nobody = if !active || (state.targets.is_empty() && state.targets_error.is_some()) { "No agents · reconnect" } else { "Choose an agent" };
+    agent_menu::button_label(&state.targets, state.target.as_ref(), nobody)
 }
 
 /// Send's width: its least, or wider for `Review send`.
 fn send_width(ui: &Ui, label: &str) -> f32 {
     (text_width(ui, label, regular(12.0)) + 24.0).max(SEND_W)
-}
-
-/// The compact recipient chip beside Send; clicking it opens or closes the agent menu. Its colour
-/// is the chosen pane's readiness: green when idle, amber when working, red when blocked.
-fn target_chip(ui: &mut Ui, state: &State, label: &str, width: f32) -> Response {
-    let (_, rect) = ui.allocate_space(vec2(width, ROW_H));
-    let resp = ui.interact(rect, Id::new("map_composer_target_chip"), Sense::click());
-    a11y::button(&resp, &format!("Recipient: {label}. Choose the agent to send to"));
-    let (fill, stroke, ink) = match (&state.target, state.chosen()) {
-        (Some(Target::New { .. }), _) => (PANEL, BORDER, INK),
-        (Some(_), Some(info)) => match readiness(&info.status) {
-            Readiness::Ready => (READY_FILL, MAP_INK, INK),
-            Readiness::Working => (WORKING_FILL, WORKING, WORKING),
-            Readiness::Blocked => (BLOCKED_FILL, DANGER, DANGER),
-            Readiness::Unavailable => (PANEL, BORDER, MUTED),
-        },
-        _ => (PANEL, BORDER, MUTED),
-    };
-    let fill = if resp.hovered() || state.menu_open { fill.lerp_to_gamma(SOFT, 0.35) } else { fill };
-    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, stroke), StrokeKind::Inside);
-    let shown = widgets::elide_font(ui, label, (width - 40.0).max(24.0), regular(11.0));
-    ui.painter().text(pos2(rect.min.x + 12.0, rect.center().y), Align2::LEFT_CENTER, &shown, regular(11.0), ink);
-    // A drawn chevron, so no font has to have the glyph.
-    let c = pos2(rect.max.x - 14.0, rect.center().y);
-    let chevron = Stroke::new(1.2, ink);
-    ui.painter().line_segment([pos2(c.x - 3.5, c.y - 1.5), pos2(c.x, c.y + 2.0)], chevron);
-    ui.painter().line_segment([pos2(c.x, c.y + 2.0), pos2(c.x + 3.5, c.y - 1.5)], chevron);
-    resp
-}
-
-/// The agent menu above the chip: a search field, the workspace's agents in a list that scrolls,
-/// and the CLIs a new agent can start pinned below it.
-fn target_menu(ui: &mut Ui, state: &mut State, anchor: &Response) {
-    let ctx = ui.ctx().clone();
-    let frame = egui::Frame::NONE
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(CornerRadius::same(8))
-        .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(24) })
-        .inner_margin(Margin::same(12));
-    let mut open = state.menu_open;
-    let mut picked = None;
-    egui::Popup::new(Id::new("map_composer_targets"), ctx, anchor, anchor.layer_id)
-        .width(MENU_W - 24.0)
-        .gap(6.0)
-        .align(egui::RectAlign::TOP_END)
-        .frame(frame)
-        .open_bool(&mut open)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| {
-            picked = target_menu_body(ui, state);
-        });
-    // Esc closes the menu (the map's Escape routing does too; either is enough).
-    if ui.input(|i| i.key_pressed(Key::Escape)) {
-        open = false;
-    }
-    if let Some(target) = picked {
-        state.choose(target);
-        open = false;
-    }
-    state.menu_open = open;
-}
-
-/// The agents a search keeps, in the list's stable order: every word of the query must appear in
-/// the agent's label, kind, pane or status.
-pub(crate) fn filter_agents<'a>(targets: &'a [TargetInfo], query: &str) -> Vec<&'a TargetInfo> {
-    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    targets
-        .iter()
-        .filter(|info| !info.new_agent)
-        .filter(|info| {
-            let Target::Existing { pane, kind, .. } = &info.target else { return false };
-            let haystack = format!("{} {} {} {} {}", info.label, kind, pane_short(pane), pane, status_text(&info.status)).to_lowercase();
-            words.iter().all(|word| haystack.contains(word.as_str()))
-        })
-        .collect()
-}
-
-fn target_menu_body(ui: &mut Ui, state: &mut State) -> Option<Target> {
-    let mut picked = None;
-    ui.set_width(ui.available_width());
-    ui.spacing_mut().item_spacing = vec2(6.0, 2.0);
-
-    // The keys the list owns are taken before the search field sees them: arrows move, Enter picks.
-    let total = filter_agents(&state.targets, &state.query).len();
-    let (down, up, enter) = ui.input_mut(|i| {
-        (i.consume_key(Modifiers::NONE, Key::ArrowDown), i.consume_key(Modifiers::NONE, Key::ArrowUp), i.consume_key(Modifiers::NONE, Key::Enter))
-    });
-    let moved = down || up;
-    if down {
-        state.menu_cursor = (state.menu_cursor + 1).min(total.saturating_sub(1));
-    }
-    if up {
-        state.menu_cursor = state.menu_cursor.saturating_sub(1);
-    }
-
-    let before = state.query.clone();
-    let search = egui::Frame::NONE
-        .fill(Color32::from_rgb(0xF6, 0xF5, 0xF2))
-        .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(Margin::symmetric(10, 7))
-        .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut state.query)
-                    .id(menu_search_id())
-                    .frame(egui::Frame::NONE)
-                    .font(regular(11.5))
-                    .hint_text(egui::RichText::new("Find an agent…").font(regular(11.5)).color(MUTED))
-                    .desired_width(ui.available_width()),
-            )
-        })
-        .inner;
-    if state.menu_focus {
-        search.request_focus();
-        state.menu_focus = false;
-    }
-    if state.query != before {
-        state.menu_cursor = 0;
-    }
-    ui.add_space(8.0);
-
-    let agents = filter_agents(&state.targets, &state.query);
-    let count = state.targets.iter().filter(|info| !info.new_agent).count();
-    state.menu_cursor = state.menu_cursor.min(agents.len().saturating_sub(1));
-    if enter && let Some(info) = agents.get(state.menu_cursor) {
-        picked = Some(info.target.clone());
-    }
-    eyebrow(ui, &format!("AGENTS IN THIS WORKSPACE · {count}"));
-    ui.add_space(2.0);
-    if !agents.is_empty() {
-        let chosen = state.target.as_ref().map(Target::line);
-        egui::ScrollArea::vertical().id_salt("map_composer_agent_list").max_height(MENU_LIST_H).auto_shrink([false, true]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            for (index, info) in agents.iter().enumerate() {
-                let selected = chosen.as_deref() == Some(info.target.line().as_str());
-                let resp = agent_row(ui, info, selected, index == state.menu_cursor);
-                if moved && index == state.menu_cursor {
-                    resp.scroll_to_me(None);
-                }
-                if resp.clicked() {
-                    picked = Some(info.target.clone());
-                }
-            }
-        });
-    } else if state.targets_rx.is_some() && count == 0 {
-        paragraph(ui, "Looking for agents…", 11.0, MUTED);
-    } else if count == 0 {
-        paragraph(ui, "No agents in this workspace yet.", 11.0, MUTED);
-    } else {
-        paragraph(ui, "No agent matches the search.", 11.0, MUTED);
-    }
-    if let Some(error) = state.targets_error.as_deref() {
-        paragraph(ui, error, 10.5, DANGER);
-    }
-
-    ui.add_space(8.0);
-    divider(ui);
-    ui.add_space(8.0);
-    eyebrow(ui, "START A NEW AGENT");
-    ui.add_space(4.0);
-    let clis: Vec<&TargetInfo> = state.targets.iter().filter(|info| info.new_agent).collect();
-    if clis.is_empty() {
-        paragraph(ui, "No agent CLIs installed on the project host.", 11.0, MUTED);
-    } else {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-            for info in clis {
-                let selected = state.target.as_ref() == Some(&info.target);
-                if cli_chip(ui, info.target.kind(), selected) {
-                    picked = Some(info.target.clone());
-                }
-            }
-        });
-    }
-    picked
-}
-
-/// One agent in the menu: its status dot, its label, and `Kind · pN · status` beside it.
-fn agent_row(ui: &mut Ui, info: &TargetInfo, selected: bool, cursor: bool) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW_H), Sense::click());
-    let meta = match &info.target {
-        Target::Existing { pane, kind, .. } => format!("{} · {} · {}", kind_title(kind), pane_short(pane), status_text(&info.status)),
-        Target::New { kind } => kind_label(kind).to_string(),
-    };
-    a11y::button(&resp, &format!("{} · {meta}", info.label));
-    let hot = resp.hovered() || cursor;
-    if selected || hot {
-        ui.painter().rect_filled(rect.shrink2(vec2(2.0, 0.0)), CornerRadius::same(5), if selected { CHOSEN_FILL } else { SOFT });
-    }
-    let dot = pos2(rect.min.x + 12.0, rect.center().y);
-    ui.painter().circle_filled(dot, 3.0, status_color(&info.status));
-    if info.focused {
-        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, MAP_INK));
-    }
-    let meta_x = rect.min.x + 132.0;
-    let label = widgets::elide_font(ui, &info.label, (meta_x - rect.min.x - 32.0).max(24.0), regular(11.5));
-    ui.painter().text(pos2(rect.min.x + 24.0, rect.center().y), Align2::LEFT_CENTER, &label, regular(11.5), INK);
-    let meta = widgets::elide_font(ui, &meta, (rect.max.x - meta_x - 8.0).max(24.0), regular(10.5));
-    ui.painter().text(pos2(meta_x, rect.center().y), Align2::LEFT_CENTER, &meta, regular(10.5), MUTED);
-    resp
-}
-
-/// A CLI to start as a new agent: a small pill under the list.
-fn cli_chip(ui: &mut Ui, kind: &str, selected: bool) -> bool {
-    let label = kind_label(kind);
-    let width = (text_width(ui, label, regular(10.5)) + 24.0).max(58.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click());
-    a11y::button(&resp, &format!("Start a new {}", label));
-    let hot = resp.hovered();
-    let fill = if selected {
-        CHOSEN_FILL
-    } else if hot {
-        SOFT
-    } else {
-        PANEL
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(11), fill);
-    let border = if selected || hot { ACCENT } else { BORDER };
-    ui.painter().rect_stroke(rect, CornerRadius::same(11), Stroke::new(1.0, border), StrokeKind::Inside);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, regular(10.5), if selected || hot { ACCENT } else { INK });
-    resp.clicked()
 }
 
 /// Send: the accent when it can send, grey when it can't. `Review send` when the chosen agent is
@@ -1393,7 +1225,8 @@ fn poll_targets(app: &mut FigApp) {
         Ok(targets) => {
             app.compose.targets = targets;
             app.compose.targets_error = None;
-            app.compose.target = refresh_target(app.compose.target.take(), &app.compose.targets);
+            let refreshed = refresh_target(app.compose.target.take(), &app.compose.targets);
+            app.compose.target = refreshed.or_else(|| app.compose.page_default(app.compose.agent_page));
         }
         Err(error) => {
             app.compose.targets_error = Some(error.clone());
@@ -1430,73 +1263,26 @@ fn fetch_targets(address: &str, workspace: &str, session: &str) -> Result<Vec<Ta
         .into_iter()
         .find(|row| row.id == workspace)
         .ok_or_else(|| "The workspace is no longer listed by the node.".to_string())?;
-    Ok(build_targets(row.agents_detail, &reply.clis))
+    Ok(agent_menu::targets_of(row.agents_detail, &reply.clis))
 }
 
-/// The target list from the service's answer: its agents, then the CLIs to start.
-#[cfg(not(target_arch = "wasm32"))]
-fn build_targets(agents: Vec<workspaces::AgentDetail>, clis: &[String]) -> Vec<TargetInfo> {
-    let mut targets = Vec::new();
-    for agent in agents {
-        if agent.pane.trim().is_empty() {
-            continue;
-        }
-        let label = agent_label(agent.name.as_deref(), agent.tab.as_deref(), &agent.pane);
-        let title = agent.title.map(|title| title.trim().to_string()).filter(|title| !title.is_empty());
-        targets.push(TargetInfo {
-            target: Target::Existing { pane: agent.pane, kind: agent.kind, status: agent.status.clone() },
-            label,
-            title,
-            status: agent.status,
-            focused: agent.focused,
-            new_agent: false,
-        });
-    }
-    for kind in clis {
-        let kind = kind.trim();
-        if kind.is_empty() {
-            continue;
-        }
-        targets.push(TargetInfo {
-            target: Target::New { kind: kind.to_string() },
-            label: kind.to_string(),
-            title: None,
-            status: String::new(),
-            focused: false,
-            new_agent: true,
-        });
-    }
-    targets
-}
-
-/// What the human calls a pane: Herdr's agent name, else its tab's name, else `Pane N`. Never the
-/// terminal title: that is the session's task, not the pane's name.
-#[cfg(any(test, not(target_arch = "wasm32")))]
-pub(crate) fn agent_label(name: Option<&str>, tab: Option<&str>, pane: &str) -> String {
-    [name, tab]
-        .into_iter()
-        .flatten()
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
-        .find(|text| !text.is_empty())
-        .unwrap_or_else(|| format!("Pane {}", pane_number(pane)))
-}
-
-/// The recipient a fresh list starts on: the first idle agent in the list's stable order. With
-/// none idle, nobody: the human chooses deliberately (or starts a new agent).
+/// The recipient a page without a remembered agent starts on: the first idle agent in the list's
+/// stable order. With none idle, nobody: the human chooses deliberately (or starts a new agent).
 fn default_target(targets: &[TargetInfo]) -> Option<Target> {
     targets.iter().find(|info| !info.new_agent && info.status.trim().eq_ignore_ascii_case("idle")).map(|info| info.target.clone())
 }
 
 /// The recipient after the agent list refreshed. A chosen pane stays chosen whatever its status
 /// does (its fresh status comes along); a pane that left the list stays chosen too, so Send can
-/// say it is gone instead of quietly picking another. Only an empty choice takes the default.
+/// say it is gone instead of quietly picking another. Only an empty choice takes the page's
+/// default ([`State::page_default`]).
 fn refresh_target(current: Option<Target>, targets: &[TargetInfo]) -> Option<Target> {
     match current {
         Some(current) => {
             let line = current.line();
             Some(targets.iter().find(|info| info.target.line() == line).map_or(current, |info| info.target.clone()))
         }
-        None => default_target(targets),
+        None => None,
     }
 }
 
@@ -1601,6 +1387,9 @@ fn start_send(app: &mut FigApp, ctx: &egui::Context) {
     })
     .to_string();
     let (tx, rx) = mpsc::channel();
+    // The page remembers the agent it sent to; so does a page with no history.
+    app.compose.remember(page, target.clone());
+    app.compose.sent_to = Some((page, target));
     app.compose.busy = true;
     app.compose.sending = sending;
     app.compose.rx = Some(rx);
@@ -1641,8 +1430,12 @@ fn poll_send(app: &mut FigApp) {
     };
     app.compose.rx = None;
     app.compose.busy = false;
+    let sent_to = app.compose.sent_to.take();
     match received {
         Ok(reply) if reply.ok => {
+            if let (Some((page, sent)), Some(agent)) = (sent_to, reply.agent.as_ref()) {
+                app.compose.started(page, &sent, agent);
+            }
             let sent = if reply.sent > 0 { reply.sent } else { app.compose.sending.len() as u64 };
             let agent = reply
                 .agent
@@ -1689,62 +1482,23 @@ fn ask(address: &str, request: &str, timeout: Duration) -> Result<String, String
     crate::node::ask(address, request, timeout)
 }
 
-fn eyebrow(ui: &mut Ui, text: &str) {
-    ui.label(egui::RichText::new(text).font(mono(8.5)).color(MUTED));
-}
-
 fn paragraph(ui: &mut Ui, text: &str, size: f32, color: Color32) {
     ui.add(egui::Label::new(egui::RichText::new(text).font(regular(size)).color(color)).wrap());
 }
 
-fn divider(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, BORDER));
-}
-
-/// A status dot's ink: green idle, amber working, red blocked, blue done.
-fn status_color(status: &str) -> Color32 {
-    match status.trim().to_ascii_lowercase().as_str() {
-        "working" | "busy" | "running" | "thinking" => WORKING,
-        "blocked" | "waiting" | "error" | "failed" => ACCENT,
-        "idle" | "ready" => IDLE,
-        "done" => DONE,
-        _ => FAINT,
-    }
-}
-
-/// A status as shown: lowercase, `unknown` when the node has none.
-fn status_text(status: &str) -> String {
-    let status = status.trim().to_lowercase();
-    if status.is_empty() { "unknown".to_string() } else { status }
-}
-
-/// An agent kind as shown: the service may not know it.
-fn kind_label(kind: &str) -> &str {
-    let kind = kind.trim();
-    if kind.is_empty() { "agent" } else { kind }
-}
-
-/// An agent kind as a recipient names it: `Codex`, `Claude`.
-fn kind_title(kind: &str) -> String {
-    let mut chars = kind_label(kind).chars();
-    chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
-}
-
-/// The pane's own part of a Herdr pane id: `p2` for `w1:p2`.
-fn pane_short(pane: &str) -> &str {
-    let pane = pane.trim();
-    pane.rsplit(':').next().filter(|short| !short.is_empty()).unwrap_or(pane)
-}
-
-/// The pane's number for `Pane 2` and `pane 2`: `2` for `w1:p2`; the short id when it has none.
-fn pane_number(pane: &str) -> &str {
-    let short = pane_short(pane);
-    short.strip_prefix('p').filter(|number| !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())).unwrap_or(short)
-}
-
 pub(crate) fn input_id() -> Id {
     Id::new("map_composer_input")
+}
+
+/// The composer's agent menu.
+fn menu_id() -> Id {
+    Id::new("map_composer_targets")
+}
+
+/// The agent menu's search field.
+#[cfg(test)]
+fn menu_search_id() -> Id {
+    agent_menu::search_id(menu_id())
 }
 
 /// The `Whole page · N comments` chip in the strip.
@@ -1755,11 +1509,6 @@ fn page_summary_id() -> Id {
 /// The `Page comment` pill above the bar.
 fn page_comment_id() -> Id {
     Id::new("map_composer_page_comment_chip")
-}
-
-/// The agent menu's search field.
-fn menu_search_id() -> Id {
-    Id::new("map_composer_agent_search")
 }
 
 /// The clickable label half of a draft chip (it opens the draft in the field).
@@ -1783,6 +1532,7 @@ fn mono(size: f32) -> FontId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_menu::{agent_label, filter_agents};
     use crate::live_tests::{flat, has_text};
     use egui::{Event, PointerButton, RawInput, Shape};
 
@@ -2047,7 +1797,62 @@ mod tests {
 
         let gone = vec![agent("w1:p1", "codex", "idle", None)];
         assert_eq!(pane(&refresh_target(chosen, &gone)).as_deref(), Some("pane:w1:p2"), "a pane that left stays chosen until Send says so");
-        assert_eq!(pane(&refresh_target(None, &gone)).as_deref(), Some("pane:w1:p1"), "only an empty choice takes the default");
+        assert_eq!(refresh_target(None, &gone), None, "only an empty choice takes the page's default");
+        let state = State { targets: gone, ..State::default() };
+        assert_eq!(pane(&state.page_default(None)).as_deref(), Some("pane:w1:p1"));
+    }
+
+    #[test]
+    fn each_page_remembers_its_agent_and_a_new_page_takes_the_last_one_used() {
+        let (one, two, three) = (Some(NodeId(1)), Some(NodeId(2)), Some(NodeId(3)));
+        let mut state = State {
+            targets: vec![
+                agent("w1:p1", "codex", "working", Some("Backend")),
+                agent("w1:p2", "claude", "idle", Some("Tests")),
+                agent("w1:p3", "kimi", "idle", Some("Docs")),
+            ],
+            ..State::default()
+        };
+        state.switch_page(one);
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p2"), "no history anywhere: the first idle agent");
+
+        state.choose(state.targets[2].target.clone());
+        state.switch_page(two);
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p3"), "a page with no history takes the last agent used anywhere");
+        state.choose(state.targets[0].target.clone());
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p1"), "a busy agent can be picked; Send confirms it");
+
+        state.switch_page(one);
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p3"), "page one selects its own agent again");
+        state.switch_page(two);
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p1"), "and page two its own, busy or not");
+        state.switch_page(three);
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p1"), "a new page: the last agent used anywhere");
+
+        // A remembered agent that left the list is skipped; with nobody idle, nobody is chosen.
+        state.targets = vec![agent("w1:p3", "kimi", "working", Some("Docs")), cli("codex")];
+        state.switch_page(two);
+        assert_eq!(state.target, None, "page two's agent and the last one used are gone, and nobody is idle");
+        state.switch_page(one);
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p3"), "page one's agent is still here, working");
+
+        // A status change on the same page never moves the choice.
+        state.targets[0].status = "idle".into();
+        state.switch_page(one);
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p3"));
+    }
+
+    #[test]
+    fn a_new_agent_started_from_a_page_becomes_that_pages_agent() {
+        let page = Some(NodeId(7));
+        let mut state = State { targets: vec![cli("codex")], ..State::default() };
+        state.switch_page(page);
+        let new = Target::New { kind: "codex".into() };
+        state.choose(new.clone());
+        state.started(page, &new, &json!({"kind": "codex", "pane": "w1:p5", "prompted": true}));
+        assert_eq!(pane(&state.target).as_deref(), Some("pane:w1:p5"), "the next send goes to the started pane, not to a second codex");
+        assert_eq!(pane(&state.page_agents.get(&NodeId(7)).cloned()).as_deref(), Some("pane:w1:p5"));
+        assert_eq!(pane(&state.last_used).as_deref(), Some("pane:w1:p5"));
     }
 
     #[test]
@@ -2105,7 +1910,7 @@ mod tests {
             title: Some("mindmap | Ready | Sync backend mindmap | main".into()),
             ..workspaces::AgentDetail::default()
         };
-        let targets = build_targets(vec![detail("w1:p1", Some("small brain")), detail("w1:p4", None)], &[]);
+        let targets = agent_menu::targets_of(vec![detail("w1:p1", Some("small brain")), detail("w1:p4", None)], &[]);
         let labels: Vec<_> = targets.iter().map(|info| info.label.as_str()).collect();
         assert_eq!(labels, ["small brain", "Pane 4"]);
         assert!(targets.iter().all(|info| info.title.is_some()), "the title stays as the task");
@@ -2167,16 +1972,16 @@ mod tests {
         assert!(bar.ctx.memory(|m| m.has_focus(menu_search_id())), "typing goes to the search field");
 
         text(&mut bar, "tests");
-        assert_eq!(bar.state.query, "tests");
+        assert_eq!(bar.state.menu.query, "tests");
         bar.key(Key::ArrowDown, Modifiers::NONE);
-        assert_eq!(bar.state.menu_cursor, 1);
+        assert_eq!(bar.state.menu.cursor, 1);
         bar.key(Key::Enter, Modifiers::NONE);
         assert_eq!(pane(&bar.state.target).as_deref(), Some("pane:w1:p3"));
         assert!(!bar.state.menu_open, "picking closes the menu");
 
         bar.state.toggle_menu();
         bar.frame(vec![]);
-        assert!(bar.state.query.is_empty(), "the menu opens on an empty search");
+        assert!(bar.state.menu.query.is_empty(), "the menu opens on an empty search");
         bar.key(Key::Escape, Modifiers::NONE);
         assert!(!bar.state.menu_open);
         assert_eq!(pane(&bar.state.target).as_deref(), Some("pane:w1:p3"), "Esc changes nothing");
