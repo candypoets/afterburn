@@ -1,11 +1,10 @@
 //! The bottom comment composer: one bar that is both the comment box and the prompt box.
 //!
-//! The selection tells it what a comment is about. Enter turns the input into a draft on that
-//! card (the drafts wait above the input, across selections); Cmd+Enter sends the input as the
-//! prompt with every draft attached to an agent in the workspace. Clicking a chip opens its draft
-//! back in the input to edit; a second click (or Esc) goes back to a new comment, and only the
-//! chip's × removes the draft. The service is reached over plain TCP on a thread of its own, so
-//! the window never waits on the network.
+//! The selection tells it what a comment is about. Enter sends the input as the prompt with every
+//! comment attached; Shift+Enter adds a line. Clicking a chip opens its comment back in the input
+//! to edit; a second click (or Esc) goes back to a new comment, and only the chip's × removes the
+//! comment. The service is reached over plain TCP on a thread of its own, so the window never
+//! waits on the network.
 //!
 //! Map mode's right-click menu lives here too: the human gets Copy and Comment, never the
 //! editor's tools.
@@ -496,25 +495,32 @@ fn body(
     }
     ui.add_space(6.0);
 
-    // The field is multiline: Enter belongs to it. Shift+Enter turns the current text into a
-    // draft comment (or saves the one being edited); Cmd+Enter sends the prompt and every draft.
-    // Both are consumed before the field sees them.
+    // The field is multiline: Shift+Enter belongs to it (a new line). Enter sends the prompt and
+    // every comment; Cmd+Enter sends all. The field only ever sees the modifiers that do not send.
     let input_focused = ui.is_enabled() && ui.memory(|m| m.has_focus(input_id()));
-    let command_enter = input_focused && !state.menu_open && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
-    let shift_enter = !command_enter && input_focused && ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Enter));
-    if shift_enter {
-        if state.editing.is_some() {
-            state.save_edited();
-        } else if !state.input.trim().is_empty() {
-            state.drafts.push(Draft {
-                text: state.input.trim().to_string(),
-                node: names.node.map(str::to_string),
-                page: names.page.map(str::to_string),
-                node_id: names.node_id,
-                page_id: names.page_id,
+    let mut enter = false;
+    let mut command_enter = false;
+    if input_focused && !state.menu_open {
+        ui.input_mut(|i| {
+            i.events.retain_mut(|event| {
+                let egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } = event else {
+                    return true;
+                };
+                if modifiers.command {
+                    command_enter = true;
+                    false
+                } else if modifiers.shift {
+                    // The field gets the bare Enter it knows as a new line.
+                    *event = egui::Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+                    true
+                } else if modifiers.any() {
+                    true
+                } else {
+                    enter = true;
+                    false
+                }
             });
-            state.input.clear();
-        }
+        });
     }
     // Esc stops editing and leaves the draft as it was; Backspace on an empty field does the
     // same, matching the design's "Esc or an empty field cancels" note. Esc is only read (not
@@ -597,7 +603,7 @@ fn body(
         }
     });
 
-    if command_enter {
+    if enter || command_enter {
         send = true;
     }
     // Sending a draft that is open in the field sends that draft: put the edit back into it and
@@ -608,13 +614,13 @@ fn body(
 
     ui.add_space(8.0);
     let hint = if state.editing.is_some() {
-        "⇧⏎ save changes   ·   Esc stop editing   ·   × on the chip removes it".to_string()
+        "⏎ send   ·   ⇧⏎ new line   ·   Esc stop editing   ·   × on the chip removes it".to_string()
     } else if !active {
         "add the service to send".to_string()
     } else {
         // Esc hands the keys back to the canvas while the field has them.
         let esc = if input_focused { "esc back to the canvas   ·   " } else { "" };
-        format!("{esc}⏎ new line   ·   ⇧⏎ comment   ·   ⌘⏎ send all   ·   {comments} in the tree")
+        format!("{esc}⏎ send   ·   ⇧⏎ new line   ·   ⌘⏎ send all   ·   {comments} in the tree")
     };
     ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
     out.send = send;
@@ -1925,28 +1931,39 @@ mod tests {
     }
 
     #[test]
-    fn send_chord_requires_the_composer_field_and_no_target_menu() {
+    fn enter_sends_the_comment() {
+        let mut bar = Bar::new(&[("Alpha", "Fix the lane")]);
+        bar.click_chip(0);
+        assert_eq!(bar.state.editing, Some(0));
+        assert!(bar.key(Key::Enter, Modifiers::NONE), "Enter asks for a send");
+        assert_eq!(bar.state.editing, None);
+        assert!(bar.state.input.is_empty(), "the sent text leaves the field");
+        assert_eq!(bar.state.drafts[0].text, "Fix the lane");
+    }
+
+    #[test]
+    fn enter_requires_the_composer_field_and_no_target_menu() {
         let mut bar = Bar::new(&[("Alpha", "Keep this draft")]);
         bar.state.input = "Unsent prompt".into();
         bar.ctx.memory_mut(|m| m.surrender_focus(input_id()));
-        assert!(!bar.key(Key::Enter, Modifiers::COMMAND));
+        assert!(!bar.key(Key::Enter, Modifiers::NONE));
         assert_eq!(bar.state.input, "Unsent prompt");
         bar.ctx.memory_mut(|m| m.request_focus(input_id()));
         bar.state.menu_open = true;
-        assert!(!bar.key(Key::Enter, Modifiers::COMMAND));
+        assert!(!bar.key(Key::Enter, Modifiers::NONE));
         assert_eq!(bar.state.drafts.len(), 1);
     }
 
     #[test]
-    fn shift_enter_saves_the_edit_into_the_draft() {
+    fn shift_enter_keeps_the_field_multiline() {
         let mut bar = Bar::new(&[("Alpha", "Fix the lane")]);
         bar.click_chip(0);
         bar.state.input = "Fix the lane: renamed".to_string();
 
-        assert!(!bar.key(Key::Enter, Modifiers::SHIFT), "saving is not sending");
-        assert_eq!(bar.state.editing, None);
-        assert!(bar.state.input.is_empty());
-        assert_eq!(bar.state.drafts[0].text, "Fix the lane: renamed");
+        assert!(!bar.key(Key::Enter, Modifiers::SHIFT), "a new line is not a send");
+        assert_eq!(bar.state.editing, Some(0), "the draft stays open");
+        assert_eq!(bar.state.input, "Fix the lane\n: renamed", "Shift+Enter adds a line at the caret");
+        assert_eq!(bar.state.drafts[0].text, "Fix the lane", "a new line does not save the draft");
     }
 
     #[test]

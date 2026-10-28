@@ -139,19 +139,19 @@ fn map_focus_mode_hides_chrome_and_workspace_shortcuts_preserve_prompt() {
     });
 }
 #[test]
-fn map_composer_typing_owns_enter_and_draft_chord() {
+fn map_composer_typing_owns_shift_enter_and_enter_sends() {
     crate::with_map_mode(|| {
         let (mut u, a, _) = setup();
         u.app.compose.focus_input = true;
         u.frame(vec![]);
         u.frame(vec![Event::Text("A note".into())]);
-        press(&mut u, Key::Enter, Modifiers::NONE);
-        assert!(u.app.compose.input.contains('\n'));
-        assert_eq!(u.app.session.selection(), vec![a]);
         press(&mut u, Key::Enter, Modifiers::SHIFT);
-        assert_eq!(u.app.compose.drafts.len(), 1);
-        assert_eq!(u.app.compose.drafts[0].text, "A note");
-        assert!(u.app.compose.input.is_empty());
+        assert!(u.app.compose.input.contains('\n'), "Shift+Enter adds a line");
+        assert!(u.app.compose.drafts.is_empty(), "a new line does not add a draft");
+        assert_eq!(u.app.session.selection(), vec![a]);
+        press(&mut u, Key::Enter, Modifiers::NONE);
+        assert_eq!(u.app.compose.input, "A note\n", "the composer keeps the text when there is no workspace");
+        assert_eq!(u.app.session.selection(), vec![a], "the composer keeps the Enter");
     });
 }
 
