@@ -387,8 +387,6 @@ pub const STATES: [&str; 6] = ["Checking", "Up to date", "Available", "Downloadi
 pub const AVAILABLE_BODY: &str = "The app and its node update together. Agents keep running; a prepared Sync waits until the restart.";
 /// The line under the buttons.
 pub const SAFETY: &str = "Prepared Sync or pending merge? The update waits.";
-/// The entry line at the foot of the sheet.
-pub const ENTRY: &str = "ENTRY  ·  MINDMAP MENU › CHECK FOR UPDATES…  ·  OPENS THIS SHEET  ·  CHECKED AT LAUNCH AND DAILY";
 
 /// A build id as the sheet shows it: its first six characters.
 pub fn short_build(build: &str) -> String {
@@ -700,7 +698,7 @@ fn sheet(ui: &mut Ui, s: &shell::Skin, ink: &Ink, view: &View) -> Option<Act> {
         y += galley.size().y + 20.0 + 14.0;
     }
     let buttons_y = y;
-    let height = buttons_y + 114.0;
+    let height = buttons_y + 98.0;
 
     let card = shell::card(ui, WIDTH, height);
     let painter = ui.painter().clone();
@@ -743,7 +741,6 @@ fn sheet(ui: &mut Ui, s: &shell::Skin, ink: &Ink, view: &View) -> Option<Act> {
         }
     }
     painter.text(at(X, buttons_y + 54.0), egui::Align2::LEFT_TOP, SAFETY, FontId::monospace(8.5), s.faint);
-    painter.text(at(X, buttons_y + 70.0), egui::Align2::LEFT_TOP, ENTRY, FontId::monospace(8.0), s.accent);
     chosen
 }
 

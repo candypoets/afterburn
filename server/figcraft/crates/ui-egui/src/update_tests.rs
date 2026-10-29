@@ -238,11 +238,11 @@ fn the_sheet_draws_the_available_release_with_install_and_later() {
         "Install and restart",
         "Later",
         crate::update::SAFETY,
-        crate::update::ENTRY,
     ] {
         assert!(shown.iter().any(|text| text == needle), "{needle:?} not in {shown:?}");
     }
     assert!(shown.iter().any(|text| text.contains("• Faster map open and sync checks")), "{shown:?}");
+    assert!(!shown.iter().any(|text| text.starts_with("ENTRY")), "the design card's entry note is not UI: {shown:?}");
     assert!(app.update.open);
     // The opener runs from the catalog's action, as the App menu will.
     let mut fresh = FigApp::new(Session::new(), Box::new(NoServices));
