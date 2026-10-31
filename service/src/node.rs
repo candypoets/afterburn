@@ -654,18 +654,14 @@ impl Node {
         let document = docs.document(&session)?;
         drop(docs);
         let request = node_git::save_request(&metadata.worktree, &document)?;
-        // A page created with this prompt is not in any record yet; that is not an error.
-        let drift = node_git::design_drift(&metadata.worktree, &document, scope).ok();
-        let state = crate::node_brief::request_section(&crate::node_brief::State {
-            page: scope,
-            drift: drift.as_ref(),
-        });
+        // The prompt carries the commented cards, not the page's other cards or what waits for
+        // Sync: the agent reads more with get_node or diff, and record leaves waiting edits out.
         let prompt = crate::comments::format_prompt(
             &workspace.label,
             workspace.path.as_deref(),
             &comments,
             prompt,
-            Some(&format!("{context}\n{state}")),
+            Some(&context),
         )?;
         let prompt = format!(
             "{prompt}\n\n{}",

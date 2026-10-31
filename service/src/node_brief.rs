@@ -13,36 +13,6 @@ use crate::node_git::{Baseline, Drift};
 /// The most cards listed per group (added, changed, removed) before `… and N more`.
 const MAX_LISTED: usize = 12;
 
-/// What is recorded and waiting in the request's scope.
-pub struct State<'a> {
-    pub page: Option<u64>,
-    /// The design waiting in scope, or `None` when the node could not compare (a new page).
-    pub drift: Option<&'a Drift>,
-}
-
-/// `WAITING FOR SYNC`: the design edits that are proposals, not today's code, so the agent does
-/// not explain them as built. Empty when nothing waits: the request id is in the record command.
-pub fn request_section(state: &State<'_>) -> String {
-    let scope = scope_name(state.page);
-    let mut out = String::from("WAITING FOR SYNC\n");
-    match state.drift {
-        None => out.push_str(&format!(
-            "{scope} has no record yet: it describes nothing recorded, so Sync would treat every card as new design.\n"
-        )),
-        Some(drift) => match &drift.last {
-            None => out.push_str(&format!(
-                "{scope} has never been recorded: Sync would treat every card as new design. Recording an explanation marks it all as describing today's code; do that only if it does.\n"
-            )),
-            Some(_) if drift.is_empty() => return String::new(),
-            Some(_) => {
-                out.push_str("These design edits are proposals, not what the code does today:\n");
-                out.push_str(&cards(drift));
-            }
-        },
-    }
-    out
-}
-
 /// `HOW TO SHOW IT`: the canvas is the medium, so ideas are drawn, not written.
 const HOW_TO_SHOW: &str = "HOW TO SHOW IT\n\
      An image is worth a thousand words: design one. Use the canvas, rich diagrams in any form the idea needs, \
@@ -148,13 +118,6 @@ pub fn sync_prompt(sync: &SyncPrompt<'_>) -> String {
         out.push('\n');
     }
     out
-}
-
-fn scope_name(page: Option<u64>) -> String {
-    match page {
-        Some(_) => "This page".to_owned(),
-        None => "The map".to_owned(),
-    }
 }
 
 /// `abc1234 (an explanation, 2026-10-26)`.
@@ -291,38 +254,6 @@ mod tests {
             changed: vec![json!({"id": 3, "name": "Status", "fields": ["characters", "fills"]})],
             removed: Vec::new(),
         }
-    }
-
-    #[test]
-    fn a_comment_lists_what_waits_and_says_nothing_when_nothing_does() {
-        let d = drift(Some(last("explain")), &["Retry"]);
-        let text = request_section(&State {
-            page: Some(7),
-            drift: Some(&d),
-        });
-        assert!(text.starts_with("WAITING FOR SYNC\n"), "{text}");
-        assert!(text.contains("Added: Retry (id 10)"), "{text}");
-        assert!(
-            text.contains("Changed: Status (id 3): characters, fills"),
-            "{text}"
-        );
-        let mut quiet = drift(Some(last("explain")), &[]);
-        quiet.changed.clear();
-        let text = request_section(&State {
-            page: Some(7),
-            drift: Some(&quiet),
-        });
-        assert_eq!(text, "", "nothing waits, so the block is left out");
-        let never = drift(None, &["A"]);
-        let text = request_section(&State {
-            page: Some(7),
-            drift: Some(&never),
-        });
-        assert!(text.contains("never been recorded"), "{text}");
-        assert!(
-            !text.contains("Added"),
-            "a never-recorded page is not listed card by card: {text}"
-        );
     }
 
     #[test]

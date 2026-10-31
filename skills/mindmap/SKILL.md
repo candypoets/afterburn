@@ -38,10 +38,10 @@ request ID. After checking out another branch, reopen the worktree to use its se
 
 ## Comments and scope
 
-Context identifies the worktree, branch, session, page and selected cards. It names a page's
-cards (its top-level frames, groups and sections), not every arrow or label: read any layer with
-`get_node <id>`, and the full property diff with `diff` (follow pagination). Read their live
-content, then address the request there. A page-scoped job covers that page and its subpages;
+Context identifies the worktree, branch, session, page and the cards the request is about, with
+their ids and text. It does not list the page's other cards: read the page with
+`get_node <page>` (its cards, with ids and places) and any layer with `get_node <id>`. Read their
+live content, then address the request there. A page-scoped job covers that page and its subpages;
 other pages are out of scope. Preserve card names and page IDs unless the task requires a
 change. Use existing components and layout conventions. Do not rebuild the whole map for a
 local edit.
@@ -59,10 +59,9 @@ Keep one claim per card and explain it plainly. Label proposals as proposals. Do
 
 ## Three kinds of comment work
 
-A comment's prompt ends with `HOW TO FINISH`: the exact `record` command for its request. When
-design edits on the page are still waiting for Sync, a `WAITING FOR SYNC` section lists them;
-without it, every card describes the recorded state. Decide the kind before changing anything
-and start the reply with one line: `Kind: explanation`, `Kind: bug fix`, `Kind: design edit` or
+A comment's prompt ends with `HOW TO FINISH`: the exact `record` command for its request. Some
+cards on a page may be design edits still waiting for Sync; `diff` lists them when it matters
+(follow pagination). Decide the kind before changing anything and start the reply with one line: `Kind: explanation`, `Kind: bug fix`, `Kind: design edit` or
 `Kind: bug fix + design edit`.
 
 - **Explanation**: a question, or the map should describe how the app works today. Read the

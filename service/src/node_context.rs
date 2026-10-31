@@ -10,8 +10,6 @@ use figcraft_doc::{Document, NodeId, NodeKind};
 pub const MAX_CONTEXT_CHARS: usize = 8_000;
 /// The most characters of one card's text.
 const MAX_CARD_TEXT: usize = 600;
-/// The most top-level card names listed for a page.
-const MAX_CARD_NAMES: usize = 40;
 /// Plugin data key a subpage stores its parent page under (set by the client's page tree).
 const PARENT_KEY: &str = "mindmap.parent_page";
 
@@ -71,26 +69,6 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
         if request.new_page {
             out.push_str("This page was just created for the prompt below.\n");
         }
-        let cards: Vec<String> = doc
-            .node(page)
-            .map(|node| {
-                card_ids(doc, node)
-                    .take(MAX_CARD_NAMES)
-                    .map(|id| name(doc, id))
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !cards.is_empty() {
-            let more = doc.node(page).map_or(0, |node| {
-                card_ids(doc, node).count().saturating_sub(MAX_CARD_NAMES)
-            });
-            let tail = if more > 0 {
-                format!(" … and {more} more")
-            } else {
-                String::new()
-            };
-            out.push_str(&format!("Cards: {}{tail}\n", cards.join(", ")));
-        }
     } else {
         out.push_str("Scope: the whole map; the request names no page.\n");
     }
@@ -123,19 +101,6 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
         }
     }
     truncate_lines(out, MAX_CONTEXT_CHARS)
-}
-
-/// A page's cards: its top-level frames, groups, sections and components. Arrows, bounds and
-/// loose labels say nothing about the design; `get_node` reads them when needed.
-fn card_ids<'a>(
-    doc: &'a Document,
-    page: &'a figcraft_doc::Node,
-) -> impl Iterator<Item = NodeId> + 'a {
-    page.children.iter().copied().filter(|id| {
-        doc.node(*id).is_some_and(|node| {
-            node.kind.is_container() && !matches!(node.kind, NodeKind::Page { .. })
-        })
-    })
 }
 
 /// One card: name, id, type, path from the page, and its text.
@@ -366,7 +331,7 @@ mod tests {
             text.contains(&format!("Subpages: Remote setup (id {})", remote.0)),
             "{text}"
         );
-        assert!(text.contains("Cards: Proposed system\n"), "{text}");
+        assert!(!text.contains("Cards:"), "no card list: {text}");
         assert!(
             text.contains(&format!("- Proposed system (id {}", card.0)),
             "{text}"
@@ -384,21 +349,18 @@ mod tests {
     }
 
     #[test]
-    fn the_card_list_names_frames_not_arrows_bounds_or_labels() {
+    fn a_page_brings_its_name_not_a_list_of_its_cards() {
         let (doc, backend, _, _) = doc();
-        let mut session = Session::with_document(doc);
-        for (kind, name) in [("rectangle", "Page bounds"), ("text", "Section eyebrow")] {
-            session
-                .execute(
-                    "node.create",
-                    &json!({"type": kind, "parent": backend.0, "name": name, "text": "x"}),
-                )
-                .unwrap();
-        }
-        let text = render(session.doc().unwrap(), &request(Some(backend), &[]));
-        assert!(text.contains("Cards: Proposed system\n"), "{text}");
-        assert!(!text.contains("Page bounds"), "{text}");
-        assert!(!text.contains("Section eyebrow"), "{text}");
+        let text = render(&doc, &request(Some(backend), &[]));
+        assert!(
+            text.contains(&format!("Page: backend code (id {})", backend.0)),
+            "{text}"
+        );
+        assert!(!text.contains("Cards:"), "{text}");
+        assert!(
+            !text.contains("Proposed system"),
+            "only selected or commented cards: {text}"
+        );
         assert!(
             !text.contains("tools:"),
             "the skill lists the tools: {text}"
