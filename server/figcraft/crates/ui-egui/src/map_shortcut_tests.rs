@@ -139,7 +139,7 @@ fn map_focus_mode_hides_chrome_and_workspace_shortcuts_preserve_prompt() {
     });
 }
 #[test]
-fn map_composer_typing_owns_shift_enter_and_enter_sends() {
+fn map_composer_typing_owns_shift_enter_and_enter_saves() {
     crate::with_map_mode(|| {
         let (mut u, a, _) = setup();
         u.app.compose.focus_input = true;
@@ -150,7 +150,11 @@ fn map_composer_typing_owns_shift_enter_and_enter_sends() {
         assert!(u.app.compose.drafts.is_empty(), "a new line does not add a draft");
         assert_eq!(u.app.session.selection(), vec![a]);
         press(&mut u, Key::Enter, Modifiers::NONE);
-        assert_eq!(u.app.compose.input, "A note\n", "the composer keeps the text when there is no workspace");
+        assert!(u.app.compose.input.is_empty(), "Enter saves even without a connected workspace");
+        assert_eq!(u.app.compose.drafts.len(), 1);
+        assert_eq!(u.app.compose.drafts[0].text, "A note");
+        assert_eq!(u.app.compose.drafts[0].node_id, Some(a));
+        assert_eq!(u.app.compose.drafts[0].page_id, u.app.session.page().ok());
         assert_eq!(u.app.session.selection(), vec![a], "the composer keeps the Enter");
     });
 }

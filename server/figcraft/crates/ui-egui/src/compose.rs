@@ -1,8 +1,9 @@
 //! The bottom comment composer: one bar that is both the comment box and the prompt box.
 //!
-//! The selection tells it what a comment is about. Enter sends the input as the prompt with every
-//! comment attached; Shift+Enter adds a line. Clicking a chip opens its comment back in the input
-//! to edit; a second click (or Esc) goes back to a new comment, and only the chip's × removes the
+//! The selection tells it what a comment is about. Enter saves the comment; Cmd+Enter sends the
+//! input as the prompt with every comment in scope attached. Shift+Enter adds a line. Clicking a
+//! chip opens its comment back in the input to edit; a second click (or Esc) goes back to a new
+//! comment, and only the chip's × removes the
 //! comment. The service is reached over plain TCP on a thread of its own, so the window never
 //! waits on the network.
 //!
@@ -247,6 +248,26 @@ impl State {
             }
         }
         self.input.clear();
+    }
+
+    /// Keep a comment in its card/page context without asking an agent to do anything.
+    fn save_comment(&mut self, names: &Names<'_>) {
+        if self.input.trim().is_empty() {
+            return;
+        }
+        if self.editing.is_some() {
+            self.save_edited();
+        } else {
+            self.drafts.push(Draft {
+                text: self.input.trim().to_string(),
+                node: names.node.map(str::to_owned),
+                page: names.page.map(str::to_owned),
+                node_id: names.node_id,
+                page_id: names.page_id,
+            });
+            self.input.clear();
+        }
+        self.focus_input = true;
     }
 
     /// The agent list is being read.
@@ -554,8 +575,8 @@ fn body(
     }
     ui.add_space(6.0);
 
-    // The field is multiline: Shift+Enter belongs to it (a new line). Enter sends the prompt and
-    // every comment; Cmd+Enter sends all. The field only ever sees the modifiers that do not send.
+    // Shift+Enter belongs to the multiline field. Consume Enter to save a comment and Cmd+Enter
+    // to send the prompt with the saved comments in scope; neither inserts a newline.
     let input_focused = ui.is_enabled() && ui.memory(|m| m.has_focus(input_id()));
     let mut enter = false;
     let mut command_enter = false;
@@ -679,7 +700,11 @@ fn body(
         }
     });
 
-    if enter || command_enter {
+    if enter {
+        state.save_comment(names);
+        ui.ctx().request_repaint();
+    }
+    if command_enter {
         send = true;
     }
     // Sending a draft that is open in the field sends that draft: put the edit back into it and
@@ -690,13 +715,13 @@ fn body(
 
     ui.add_space(8.0);
     let hint = if state.editing.is_some() {
-        "⏎ send   ·   ⇧⏎ new line   ·   Esc stop editing   ·   × on the chip removes it".to_string()
+        "⏎ save edit   ·   ⇧⏎ new line   ·   ⌘⏎ send all   ·   Esc stop editing".to_string()
     } else if !active {
         "add the service to send".to_string()
     } else {
         // Esc hands the keys back to the canvas while the field has them.
         let esc = if input_focused { "esc back to the canvas   ·   " } else { "" };
-        format!("{esc}⏎ send   ·   ⇧⏎ new line   ·   ⌘⏎ send all   ·   {comments} in the tree")
+        format!("{esc}⏎ save   ·   ⇧⏎ new line   ·   ⌘⏎ send all   ·   {comments} in the tree")
     };
     ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
     out.send = send;
@@ -1581,7 +1606,8 @@ mod tests {
             let mut send = false;
             let mut out = self.ctx.run_ui(input, |ui| {
                 ui.set_width(760.0);
-                let names = Names { node: Some("Card"), page: Some("Page"), node_id: None, page_id: None };
+                let names =
+                    Names { node: selected.then_some("Card"), page: Some("Page"), node_id: selected.then_some(NodeId(42)), page_id: Some(NodeId(7)) };
                 send = body(ui, state, "COMMENTING ON · Card · 0 comments", &names, selected, true, included, 0).send;
             });
             out.textures_delta.clear();
@@ -1681,14 +1707,79 @@ mod tests {
     }
 
     #[test]
-    fn enter_sends_the_comment() {
+    fn enter_saves_an_edit_without_sending_or_duplicating_it() {
         let mut bar = Bar::new(&[("Alpha", "Fix the lane")]);
         bar.click_chip(0);
+        bar.state.input = "Fix the renamed lane".into();
         assert_eq!(bar.state.editing, Some(0));
-        assert!(bar.key(Key::Enter, Modifiers::NONE), "Enter asks for a send");
+        assert!(!bar.key(Key::Enter, Modifiers::NONE), "saving never asks for a send");
         assert_eq!(bar.state.editing, None);
-        assert!(bar.state.input.is_empty(), "the sent text leaves the field");
-        assert_eq!(bar.state.drafts[0].text, "Fix the lane");
+        assert!(bar.state.input.is_empty(), "the saved text leaves the field");
+        assert_eq!(bar.state.drafts.len(), 1);
+        assert_eq!(bar.state.drafts[0].text, "Fix the renamed lane");
+        assert_eq!(bar.state.drafts[0].node.as_deref(), Some("Alpha"), "editing preserves the comment's context");
+    }
+
+    #[test]
+    fn enter_saves_card_and_page_comments_without_a_recipient() {
+        for whole_page in [false, true] {
+            let mut bar = Bar::new(&[]);
+            bar.whole_page = whole_page;
+            bar.state.input = "  Keep this comment  ".into();
+            bar.ctx.memory_mut(|m| m.request_focus(input_id()));
+            assert!(!bar.key(Key::Enter, Modifiers::NONE));
+            assert_eq!(bar.state.drafts.len(), 1);
+            let draft = &bar.state.drafts[0];
+            assert_eq!(draft.text, "Keep this comment");
+            assert_eq!(draft.node_id, (!whole_page).then_some(NodeId(42)));
+            assert_eq!(draft.node.as_deref(), (!whole_page).then_some("Card"));
+            assert_eq!(draft.page_id, Some(NodeId(7)));
+            assert_eq!(draft.page.as_deref(), Some("Page"));
+            assert!(bar.state.input.is_empty());
+            assert!(bar.state.confirm.is_none());
+            assert!(bar.state.notice.is_none());
+            bar.frame(vec![]);
+            assert!(bar.ctx.memory(|m| m.has_focus(input_id())));
+            assert!(!bar.key(Key::Enter, Modifiers::NONE), "empty Enter does nothing");
+            assert_eq!(bar.state.drafts.len(), 1);
+            bar.included = vec![0];
+            assert!(bar.key(Key::Enter, Modifiers::COMMAND), "Cmd+Enter can send saved comments with an empty field");
+            assert_eq!(bar.state.drafts.len(), 1, "comments stay until successful delivery");
+        }
+    }
+
+    #[test]
+    fn empty_enter_does_not_replace_an_open_comment() {
+        let mut bar = Bar::new(&[("Alpha", "Keep this comment")]);
+        bar.click_chip(0);
+        bar.state.input = " \n ".into();
+        assert!(!bar.key(Key::Enter, Modifiers::NONE));
+        assert_eq!(bar.state.editing, Some(0));
+        assert_eq!(bar.state.drafts[0].text, "Keep this comment");
+    }
+
+    #[test]
+    fn saved_comments_follow_card_subtrees_and_page_scope() {
+        let mut app = FigApp::new(figcraft_engine::Session::new(), Box::new(crate::NoServices));
+        app.session.execute("file.new", &json!({})).unwrap();
+        let page = app.session.page().unwrap();
+        let card = NodeId(app.session.execute("frame.create", &json!({"name":"Card"})).unwrap()["id"].as_u64().unwrap());
+        let child = NodeId(app.session.execute("shape.rectangle", &json!({"parent":card.0})).unwrap()["id"].as_u64().unwrap());
+        let sibling = NodeId(app.session.execute("frame.create", &json!({"parent":page.0})).unwrap()["id"].as_u64().unwrap());
+        let other = NodeId(app.session.execute("page.add", &json!({"name":"Other page"})).unwrap()["id"].as_u64().unwrap());
+        for (node_id, page_id, text) in [
+            (Some(card), page, "Card comment"),
+            (Some(child), page, "Child comment"),
+            (Some(sibling), page, "Sibling comment"),
+            (None, page, "Page comment"),
+            (None, other, "Other page comment"),
+        ] {
+            app.compose.input = text.into();
+            app.compose.save_comment(&Names { node: None, page: None, node_id, page_id: Some(page_id) });
+        }
+        assert_eq!(included_drafts(&app, &[card], Some(page)), [0, 1]);
+        assert_eq!(included_drafts(&app, &[], Some(page)), [0, 1, 2, 3]);
+        assert_eq!(included_drafts(&app, &[], Some(other)), [4]);
     }
 
     #[test]
