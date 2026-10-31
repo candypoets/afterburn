@@ -7,7 +7,9 @@ use figcraft_engine::keymap::{KEYS, Platform, parse};
 
 use crate::layers_drag_tests::Ui;
 use crate::map_action_catalog::{ACTIONS, find};
-use crate::native_menu::{ADD_MACHINE, CHECK_FOR_UPDATES, DOCS, Entry, Menu, Native, Role, enabled, key_equivalent, menus, run};
+use crate::native_menu::{
+    ADD_MACHINE, CHECK_FOR_UPDATES, DOCS, Entry, Menu, Native, Role, WORKSPACE_KEYS, enabled, key_equivalent, menus, run, workspace_items,
+};
 
 fn items(menu: &Menu) -> Vec<(&'static str, &'static str)> {
     menu.entries.iter().filter_map(|e| if let Entry::Item { id, label } = e { Some((*id, *label)) } else { None }).collect()
@@ -22,12 +24,12 @@ fn menu(title: &str) -> Menu {
 }
 
 #[test]
-fn the_bar_is_app_file_edit_view_window_help() {
+fn the_bar_is_app_file_workspace_edit_view_window_help() {
     let bar = menus();
     let titles: Vec<_> = bar.iter().map(|m| m.title).collect();
-    assert_eq!(titles, ["Mindmap", "File", "Edit", "View", "Window", "Help"]);
+    assert_eq!(titles, ["Mindmap", "File", "Workspace", "Edit", "View", "Window", "Help"]);
     let roles: Vec<_> = bar.iter().map(|m| m.role).collect();
-    assert_eq!(roles, [Role::App, Role::Plain, Role::Plain, Role::Plain, Role::Window, Role::Help]);
+    assert_eq!(roles, [Role::App, Role::Plain, Role::Plain, Role::Plain, Role::Plain, Role::Window, Role::Help]);
 }
 
 #[test]
@@ -50,7 +52,34 @@ fn app_window_and_help_menus_follow_the_design() {
         [Entry::Item { id: "map.help", label: "Keyboard shortcuts" }, Entry::Item { id: DOCS, label: "Docs" }, Entry::Native(Native::About)]
     );
     let file: Vec<_> = items(&menu("File")).into_iter().map(|(_, label)| label).collect();
-    assert_eq!(file, ["New workspace…", "Open workspace…", "Close map", "Sync…", "Add machine…", "Save", "Export…"]);
+    assert_eq!(file, ["Close tab", "Close map", "Sync…", "Save", "Export…"]);
+}
+
+#[test]
+fn the_workspace_menu_lists_workspaces_then_switches_and_creates() {
+    assert_eq!(
+        menu("Workspace").entries,
+        [
+            Entry::Workspaces,
+            Entry::Separator,
+            Entry::Item { id: "map.switchWorkspace", label: "Switch workspace…" },
+            Entry::Worktrees,
+            Entry::Separator,
+            Entry::Item { id: "map.openWorkspace", label: "All workspaces…" },
+            Entry::Item { id: "map.newWorkspace", label: "New workspace…" },
+            Entry::Item { id: ADD_MACHINE, label: "Add machine…" },
+        ]
+    );
+    assert_eq!(key_equivalent("map.switchWorkspace"), Some("Ctrl+Cmd+O"));
+    assert_eq!(key_equivalent("map.openWorkspace"), Some("Shift+Cmd+O"));
+    for (i, id) in WORKSPACE_KEYS.iter().enumerate() {
+        assert_eq!(key_equivalent(id), Some(format!("Ctrl+Cmd+{}", i + 1)).as_deref());
+    }
+    // No workspace listed: one disabled line.
+    let u = Ui::new(Session::new());
+    let items = workspace_items(&u.app);
+    assert_eq!(items.len(), 1);
+    assert!(!items[0].enabled && !enabled(&u.app, &items[0].id));
 }
 
 #[test]
@@ -67,7 +96,8 @@ fn every_item_id_resolves() {
 fn the_bar_offers_exactly_the_live_bindings_of_the_shortcuts_page() {
     let ids: HashSet<_> = all_ids().into_iter().collect();
     // Every binding a human can use from the map (the shortcuts page minus the field-only keys).
-    for action in ACTIONS.iter().filter(|a| !a.keys(Platform::Mac).is_empty()) {
+    // ⌃⌘1…⌃⌘9 ride on the listed workspaces, which the Workspace menu builds as they change.
+    for action in ACTIONS.iter().filter(|a| !a.keys(Platform::Mac).is_empty() && !WORKSPACE_KEYS.contains(&a.id)) {
         assert_eq!(ids.contains(action.id), action.palette_enabled(), "{} ({})", action.id, action.label);
     }
     // The drawing editor's bindings (tools, text edit, history…) are agent-only here.
@@ -90,7 +120,7 @@ fn only_command_shortcuts_become_key_equivalents() {
         assert_eq!(key_equivalent(id), None, "{id}");
     }
     let mut seen = HashSet::new();
-    for id in all_ids() {
+    for id in all_ids().into_iter().chain(WORKSPACE_KEYS) {
         if let Some(keys) = key_equivalent(id) {
             let (mods, _) = parse(keys).unwrap();
             assert!(mods.cmd, "{id}: {keys}");

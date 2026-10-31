@@ -2,35 +2,37 @@
 //!
 //! A page with `mindmap.parent_page` is a subpage. A subpage created from a card also stores
 //! `mindmap.source_node`; if that card disappears, the subpage and its descendants are removed.
-//! The header shows only root pages; the current path is a read-only breadcrumb. The centered
-//! tree popover opens from an already-focused root tab, a right-click on a tab, or Cmd/Ctrl+Shift+O.
+//! The tree is docked in the map's sidebar under the workspace switcher (design: `Sidebar pages ·
+//! window`): every page, indented by level, the open one marked; a click opens a page. ⌘P (the
+//! `map.pageTree` action) reveals the sidebar.
 
-use std::time::Duration;
+use std::collections::HashSet;
 
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Stroke, vec2};
+use egui::{Align2, Color32, CornerRadius, FontId, Id, Rect, Sense, Stroke, Ui, pos2, vec2};
 use figcraft_doc::{Document, NodeId};
 
 use crate::FigApp;
+use crate::theme::{Tokens, regular};
+use crate::workspaces::Skin;
 
 pub const PARENT_KEY: &str = "mindmap.parent_page";
 /// Pages nest at most this deep (the root counts as the first level).
 pub const MAX_LEVELS: usize = 5;
 pub const SOURCE_KEY: &str = "mindmap.source_node";
 
-const PANEL: Color32 = Color32::WHITE;
-const SOFT: Color32 = Color32::from_rgb(0xF8, 0xF6, 0xF3);
-const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
-const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
-const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
-const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
+/// One row of the docked tree, and its pitch.
+const ROW_H: f32 = 30.0;
+/// Each level sits this much further in.
+const INDENT: f32 = 16.0;
 
-/// Popover state plus the orphan-cleanup clock.
+/// The tree's state plus the orphan-cleanup clock.
 #[derive(Default)]
 pub struct State {
+    /// Asked to show the tree (⌘P): the sidebar opens on the next frame.
     pub open: bool,
     pub just_opened: bool,
+    /// Pages whose children are folded away in the docked tree.
+    pub collapsed: HashSet<NodeId>,
     last_cleanup: f64,
 }
 
@@ -192,171 +194,243 @@ pub fn maintain(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
-/// The centered page tree popover and its shortcut.
-pub fn show(app: &mut FigApp, ctx: &egui::Context) {
-    if !crate::map_mode() && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::P)) {
-        app.page_tree.open = true;
-        app.page_tree.just_opened = true;
-    }
-    if !app.page_tree.open {
-        return;
-    }
-    let (roots, pages) = match app.session.doc() {
-        Ok(doc) => (roots(doc), doc.pages.clone()),
-        Err(_) => return,
-    };
-    let current = app.session.page().ok();
-    let current_root = current.and_then(|page| app.session.doc().ok().map(|doc| root(doc, page)));
-    let subpages = pages.len().saturating_sub(roots.len());
-    let levels = app.session.doc().map(|doc| pages.iter().map(|page| depth(doc, *page) + 1).max().unwrap_or(1)).unwrap_or(1);
-    let mut close = false;
-    let mut pick = None;
-    let mut remove = None;
-
-    let area =
-        egui::Area::new(Id::new("page_tree_modal")).anchor(Align2::CENTER_CENTER, vec2(0.0, -18.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER))
-                .corner_radius(CornerRadius::same(10))
-                .shadow(egui::epaint::Shadow { offset: [0, 12], blur: 30, spread: 0, color: Color32::from_black_alpha(36) })
-                .inner_margin(Margin { left: 12, right: 12, top: 18, bottom: 13 })
-                .show(ui, |ui| {
-                    ui.set_width(436.0);
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    // PAGES, then `8 subpages · 5 levels` under it; the × at the top right.
-                    let head = ui.max_rect();
-                    let close_rect = egui::Rect::from_min_size(egui::pos2(head.right() - 22.0, head.top() - 8.0), vec2(22.0, 22.0));
-                    let close_resp = ui.interact(close_rect, Id::new("page_tree_close"), egui::Sense::click());
-                    ui.painter().text(
-                        close_rect.center(),
-                        Align2::CENTER_CENTER,
-                        "×",
-                        crate::theme::regular(15.0),
-                        if close_resp.hovered() { INK } else { MUTED },
-                    );
-                    if close_resp.clicked() {
-                        close = true;
-                    }
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        ui.label(RichText::new("PAGES").font(FontId::monospace(9.0)).color(ACCENT));
-                    });
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        let plural = if subpages == 1 { "" } else { "s" };
-                        let level_plural = if levels == 1 { "" } else { "s" };
-                        ui.label(
-                            RichText::new(format!("{subpages} subpage{plural} · {levels} level{level_plural}"))
-                                .font(FontId::monospace(8.5))
-                                .color(MUTED),
-                        );
-                    });
-                    ui.add_space(8.0);
-                    egui::ScrollArea::vertical().id_salt("page_tree_scroll").max_height(430.0).auto_shrink([false, true]).show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        for root in &roots {
-                            row(app, ui, *root, 0, current, current_root, &mut pick, &mut remove);
-                            let mut stack: Vec<(NodeId, usize)> = match app.session.doc() {
-                                Ok(doc) => children(doc, *root).into_iter().map(|child| (child, 1)).collect(),
-                                Err(_) => Vec::new(),
-                            };
-                            while let Some((page, level)) = stack.pop() {
-                                row(app, ui, page, level, current, current_root, &mut pick, &mut remove);
-                                let mut kids: Vec<(NodeId, usize)> = match app.session.doc() {
-                                    Ok(doc) => children(doc, page).into_iter().map(|child| (child, level + 1)).collect(),
-                                    Err(_) => Vec::new(),
-                                };
-                                kids.reverse();
-                                stack.extend(kids);
-                            }
-                        }
-                    });
-                    ui.add_space(14.0);
-                    let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
-                    ui.painter().line_segment([line.left_center() + vec2(8.0, 0.0), line.right_center() - vec2(4.0, 0.0)], Stroke::new(1.0, BORDER));
-                    ui.add_space(9.0);
-                    let (foot, _) = ui.allocate_exact_size(vec2(ui.available_width(), 11.0), egui::Sense::hover());
-                    let font = FontId::monospace(8.5);
-                    ui.painter().text(foot.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, "Subpages come from a card", font.clone(), FAINT);
-                    ui.painter().text(foot.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, format!("{MAX_LEVELS} levels max"), font, FAINT);
-                });
-        });
-
-    if let Some(page) = pick {
-        app.run("page.select", serde_json::json!({"id": page.0}));
-        app.page_tree.open = false;
-    }
-    if let Some(page) = remove {
-        app.page_delete = Some(page);
-        app.page_tree.open = false;
-    }
-    let pressed = ctx.input(|input| input.pointer.any_pressed());
-    let pointer = ctx.input(|input| input.pointer.interact_pos());
-    let inside = pointer.is_some_and(|pos| area.response.rect.contains(pos));
-    let just_opened = app.page_tree.just_opened;
-    app.page_tree.just_opened = false;
-    if (pressed && !inside && !just_opened) || close || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.page_tree.open = false;
+/// ⌘P (`map.pageTree`): the tree lives in the sidebar, so asking for it shows the sidebar.
+pub fn show(app: &mut FigApp, _ctx: &egui::Context) {
+    if std::mem::take(&mut app.page_tree.open) {
+        app.page_tree.just_opened = false;
+        app.ws.pane_open = true;
     }
 }
 
-fn row(
-    app: &FigApp,
-    ui: &mut egui::Ui,
+/// The docked tree's rows, top to bottom: each root, then its pages depth first in document
+/// order, with their level; a folded page's descendants are left out.
+pub fn rows(doc: &Document, collapsed: &HashSet<NodeId>) -> Vec<(NodeId, usize)> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack: Vec<(NodeId, usize)> = roots(doc).into_iter().rev().map(|page| (page, 0)).collect();
+    while let Some((page, level)) = stack.pop() {
+        if !seen.insert(page) {
+            continue;
+        }
+        out.push((page, level));
+        if !collapsed.contains(&page) {
+            stack.extend(children(doc, page).into_iter().rev().map(|child| (child, level + 1)));
+        }
+    }
+    out
+}
+
+/// One docked row as drawn.
+struct Line {
     page: NodeId,
     level: usize,
-    current: Option<NodeId>,
-    current_root: Option<NodeId>,
-    pick: &mut Option<NodeId>,
-    remove: &mut Option<NodeId>,
-) {
-    let doc = match app.session.doc() {
-        Ok(doc) => doc,
+    name: String,
+    kids: usize,
+    folded: bool,
+}
+
+/// What a click in the tree asked for.
+enum Ask {
+    Open(NodeId),
+    Fold(NodeId),
+    Delete(NodeId),
+    NewPage,
+}
+
+/// The docked tree in `rect`: `PAGES  11`, the rows, and `+ Page` under them.
+pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
+    let tokens = Tokens::get(ui.ctx());
+    let s = Skin::of(&tokens);
+    // The open row's fill, as designed (the dark skin's selection otherwise).
+    let current_fill = if tokens.dark { s.selected } else { Color32::from_rgb(0xEF, 0xEE, 0xEA) };
+    let (lines, total) = match app.session.doc() {
+        Ok(doc) => {
+            let lines: Vec<Line> = rows(doc, &app.page_tree.collapsed)
+                .into_iter()
+                .map(|(page, level)| Line {
+                    page,
+                    level,
+                    name: page_name(doc, page),
+                    kids: children(doc, page).len(),
+                    folded: app.page_tree.collapsed.contains(&page),
+                })
+                .collect();
+            (lines, doc.pages.len())
+        }
         Err(_) => return,
     };
-    let name = page_name(doc, page);
-    let kids = children(doc, page).len();
-    let is_current = current == Some(page);
-    let _ = current_root;
-    // 24 pt rows on a 26 pt pitch; 14 pt of indent per level; the chevron marks a page with children.
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), egui::Sense::click());
-    if is_current {
-        ui.painter().rect_filled(rect, CornerRadius::same(5), Color32::from_rgb(0xF1, 0xF0, 0xED));
-        ui.painter().rect_filled(egui::Rect::from_min_size(rect.min, vec2(2.0, rect.height())), CornerRadius::ZERO, ACCENT);
-    } else if response.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(5), SOFT);
+    let current = app.session.page().ok();
+    ui.painter().text(pos2(rect.min.x + 14.0, rect.min.y), Align2::LEFT_TOP, format!("PAGES  {total}"), FontId::monospace(9.0), s.muted);
+
+    let list = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 18.0), rect.max);
+    let mut ask = None;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(list).id_salt("page_tree_docked"), |ui| {
+        ui.set_clip_rect(list.intersect(ui.clip_rect()));
+        egui::ScrollArea::vertical().id_salt("page_tree_docked_scroll").auto_shrink([false, false]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for line in &lines {
+                if let Some(a) = row(ui, &s, line, current == Some(line.page), current_fill) {
+                    ask = Some(a);
+                }
+            }
+            ui.add_space(14.0);
+            let (outer, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+            let plus = Rect::from_min_max(pos2(outer.min.x + 6.0, outer.min.y), pos2(outer.min.x + 90.0, outer.max.y));
+            let resp = ui.interact(plus, Id::new("page_tree_new_page"), Sense::click());
+            crate::a11y::button(&resp, "New page");
+            if resp.hovered() {
+                ui.painter().rect_filled(plus, CornerRadius::same(4), s.soft);
+            }
+            let ink = if resp.hovered() { s.text } else { s.muted };
+            ui.painter().text(pos2(plus.min.x + 8.0, plus.center().y), Align2::LEFT_CENTER, "+ Page", regular(12.0), ink);
+            if resp.on_hover_text("New page").clicked() {
+                ask = Some(Ask::NewPage);
+            }
+            ui.add_space(12.0);
+        });
+    });
+
+    match ask {
+        Some(Ask::Open(page)) => {
+            app.run("page.select", serde_json::json!({"id": page.0}));
+        }
+        Some(Ask::Fold(page)) => {
+            if !app.page_tree.collapsed.remove(&page) {
+                app.page_tree.collapsed.insert(page);
+            }
+        }
+        Some(Ask::Delete(page)) => app.page_delete = Some(page),
+        Some(Ask::NewPage) => app.new_page.start(total + 1),
+        None => {}
     }
-    let x = rect.left() + 8.0 + level as f32 * 14.0;
-    if kids > 0 {
-        ui.painter().text(egui::pos2(x, rect.center().y), Align2::LEFT_CENTER, "⌄", crate::theme::regular(11.0), MUTED);
-    }
-    ui.painter().text(egui::pos2(x + 13.0, rect.center().y), Align2::LEFT_CENTER, &name, FontId::monospace(10.5), INK);
-    // The right column: how many children, or the depth cap on a page at the last level.
-    let trail = if kids > 0 {
-        kids.to_string()
-    } else if level + 1 >= MAX_LEVELS {
-        format!("L{}", level + 1)
-    } else {
-        String::new()
-    };
-    let close = ui.interact(
-        egui::Rect::from_center_size(egui::pos2(rect.right() - 10.0, rect.center().y), vec2(16.0, 20.0)),
-        ui.id().with(("page_tree_delete", page.0)),
-        egui::Sense::click(),
+}
+
+/// One page: the fold chevron for a page with children, its name indented by level, and its child
+/// count at the right (× to delete while hovered). The open page wears the fill and the accent bar.
+fn row(ui: &mut Ui, s: &Skin, line: &Line, is_current: bool, current_fill: Color32) -> Option<Ask> {
+    let (outer, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+    let rect = Rect::from_min_max(pos2(outer.min.x + 6.0, outer.min.y), pos2(outer.max.x - 6.0, outer.max.y));
+    crate::a11y::button(&response, &line.name);
+    let x = rect.min.x + 22.0 + line.level as f32 * INDENT;
+    let fold = (line.kids > 0).then(|| {
+        let r = Rect::from_center_size(pos2(x - 11.0, rect.center().y), vec2(16.0, ROW_H));
+        ui.interact(r, Id::new(("page_tree_fold", line.page.0)), Sense::click())
+    });
+    let delete = ui.interact(
+        Rect::from_center_size(pos2(rect.max.x - 14.0, rect.center().y), vec2(20.0, ROW_H - 6.0)),
+        Id::new(("page_tree_delete", line.page.0)),
+        Sense::click(),
     );
-    let hot = response.hovered() || close.hovered();
-    if !trail.is_empty() {
-        ui.painter().text(egui::pos2(rect.left() + 398.0, rect.center().y), Align2::LEFT_CENTER, trail, FontId::monospace(9.0), FAINT);
+    let hot = response.hovered() || delete.hovered() || fold.as_ref().is_some_and(|f| f.hovered());
+    if is_current {
+        ui.painter().rect_filled(rect, CornerRadius { nw: 0, sw: 0, ne: 5, se: 5 }, current_fill);
+        ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height())), CornerRadius::ZERO, s.accent);
+    } else if hot {
+        ui.painter().rect_filled(rect, CornerRadius::same(5), s.soft);
     }
+    if let Some(fold) = &fold {
+        let ink = if fold.hovered() { s.text } else { s.muted };
+        chevron(ui, pos2(x - 11.0, rect.center().y), !line.folded, ink);
+    }
+    let room = (rect.max.x - 34.0 - x).max(30.0);
+    let name = crate::widgets::elide_font(ui, &line.name, room, regular(12.0));
+    ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, name, regular(12.0), s.text);
+    // The right column: how many children, or the depth cap on a page at the last level.
+    let trail = pos2(rect.max.x - 14.0, rect.center().y);
     if hot {
-        ui.painter().text(close.rect.center(), Align2::CENTER_CENTER, "×", crate::theme::regular(11.0), if close.hovered() { DANGER } else { FAINT });
+        let ink = if delete.hovered() { s.danger } else { s.faint };
+        ui.painter().text(trail, Align2::CENTER_CENTER, "×", regular(12.0), ink);
+    } else if line.kids > 0 {
+        ui.painter().text(trail, Align2::CENTER_CENTER, line.kids.to_string(), FontId::monospace(9.0), s.faint);
+    } else if line.level + 1 >= MAX_LEVELS {
+        ui.painter().text(trail, Align2::CENTER_CENTER, format!("L{}", line.level + 1), FontId::monospace(9.0), s.faint);
     }
-    if close.clicked() {
-        *remove = Some(page);
+    let delete = delete.on_hover_text(format!("Delete {}…", line.name));
+    let mut ask = None;
+    if delete.clicked() {
+        ask = Some(Ask::Delete(line.page));
+    } else if fold.as_ref().is_some_and(|f| f.clicked()) {
+        ask = Some(Ask::Fold(line.page));
     } else if response.clicked() {
-        *pick = Some(page);
+        ask = Some(Ask::Open(line.page));
     }
-    let _ = Duration::from_secs(0);
+    response.context_menu(|ui| {
+        if ui.button("Open").clicked() {
+            ask = Some(Ask::Open(line.page));
+            ui.close();
+        }
+        if ui.button("Delete page…").clicked() {
+            ask = Some(Ask::Delete(line.page));
+            ui.close();
+        }
+    });
+    ask
+}
+
+/// The fold mark: ⌄ when open, › when folded.
+fn chevron(ui: &Ui, c: egui::Pos2, open: bool, color: Color32) {
+    let stroke = Stroke::new(1.1, color);
+    let points = if open {
+        [pos2(c.x - 3.0, c.y - 1.5), pos2(c.x, c.y + 1.5), pos2(c.x + 3.0, c.y - 1.5)]
+    } else {
+        [pos2(c.x - 1.5, c.y - 3.0), pos2(c.x + 1.5, c.y), pos2(c.x - 1.5, c.y + 3.0)]
+    };
+    ui.painter().line_segment([points[0], points[1]], stroke);
+    ui.painter().line_segment([points[1], points[2]], stroke);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sub(doc: &mut Document, parent: NodeId, name: &str) -> NodeId {
+        let page = doc.add_page(name);
+        doc.node_mut(page).unwrap().plugin_data.insert(PARENT_KEY.into(), parent.0.to_string());
+        page
+    }
+
+    #[test]
+    fn the_docked_rows_go_depth_first_in_document_order() {
+        let mut doc = Document::new("Map");
+        let overview = doc.pages[0];
+        let canvas = sub(&mut doc, overview, "Canvas and layers");
+        let components = sub(&mut doc, overview, "Components");
+        let paint = sub(&mut doc, canvas, "Paint");
+        let checkout = doc.add_page("Checkout");
+        let listed = rows(&doc, &HashSet::new());
+        assert_eq!(listed, [(overview, 0), (canvas, 1), (paint, 2), (components, 1), (checkout, 0)]);
+        let folded = rows(&doc, &HashSet::from([canvas]));
+        assert_eq!(folded, [(overview, 0), (canvas, 1), (components, 1), (checkout, 0)]);
+    }
+
+    #[test]
+    fn clicking_a_docked_page_opens_it() {
+        crate::with_map_mode(|| {
+            let mut session = figcraft_engine::Session::new();
+            let second = session.execute("page.add", &serde_json::json!({"name": "Second"})).unwrap()["id"].as_u64().unwrap();
+            let first = session.doc().unwrap().pages[0];
+            session.execute("page.select", &serde_json::json!({"id": first.0})).unwrap();
+            let mut u = crate::layers_drag_tests::Ui::new(session);
+            u.app.onboarding.active = false;
+            u.app.onboarding.decided = true;
+            u.app.ui.home = false;
+            u.app.ws.pane_open = true;
+            u.frame(vec![]);
+            assert_eq!(u.app.session.page().ok(), Some(first));
+            // Walk down the sidebar's rows until one opens the second page.
+            let mut opened = false;
+            // Below the switcher head, which opens the switcher.
+            for y in (124..400).step_by(10) {
+                let p = egui::pos2(120.0, y as f32);
+                u.button(p, true);
+                u.button(p, false);
+                if u.app.session.page().ok() == Some(NodeId(second)) {
+                    opened = true;
+                    break;
+                }
+            }
+            assert!(opened, "a row of the docked tree opens its page");
+            assert!(!u.app.new_page.open);
+        });
+    }
 }

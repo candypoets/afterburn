@@ -122,7 +122,7 @@ fn map_focus_mode_hides_chrome_and_workspace_shortcuts_preserve_prompt() {
         press(&mut u, Key::Backslash, cmd());
         assert!(!u.app.session.ds().unwrap().view.ui_hidden);
         u.app.compose.input = "Unsent".into();
-        press(&mut u, Key::W, cmd());
+        press(&mut u, Key::W, cmd() | Modifiers::SHIFT);
         assert!(u.app.ui.home);
         assert_eq!(u.app.compose.input, "Unsent");
         press(&mut u, Key::K, cmd());
@@ -160,7 +160,7 @@ fn map_composer_typing_owns_shift_enter_and_enter_saves() {
 }
 
 #[test]
-fn shift_cmd_p_toggles_the_palette_and_cmd_p_opens_the_page_tree() {
+fn shift_cmd_p_toggles_the_palette_and_cmd_p_shows_the_page_tree() {
     crate::with_map_mode(|| {
         let (mut u, _, _) = setup();
         press(&mut u, Key::P, cmd() | Modifiers::SHIFT);
@@ -168,8 +168,9 @@ fn shift_cmd_p_toggles_the_palette_and_cmd_p_opens_the_page_tree() {
         assert!(!u.app.page_tree.open);
         press(&mut u, Key::P, cmd() | Modifiers::SHIFT);
         assert!(u.app.ui.palette.is_none(), "the same chord closes it");
+        u.app.ws.pane_open = false;
         press(&mut u, Key::P, cmd());
-        assert!(u.app.page_tree.open);
+        assert!(u.app.ws.pane_open, "the page tree is docked: Cmd+P shows the sidebar");
         assert!(u.app.ui.palette.is_none());
     });
 }

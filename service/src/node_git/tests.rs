@@ -630,3 +630,191 @@ fn without_an_earlier_record_the_page_as_found_is_recorded() {
     assert!(!record.had_record);
     assert_eq!(names(&record.document), names(&doc));
 }
+
+/// A page with three cards (one with inner layers), recorded by the caller.
+fn cards_design() -> (Document, NodeId, [NodeId; 5]) {
+    let mut doc = Document::new("Design");
+    let page = doc.first_page().unwrap();
+    let tabs = doc
+        .create(
+            page,
+            NodeKind::Frame,
+            "Widget Page tabs states",
+            0.0,
+            0.0,
+            200.0,
+            100.0,
+        )
+        .unwrap();
+    let tab = doc
+        .create(tabs, NodeKind::Frame, "tab Mindmap", 0.0, 0.0, 50.0, 20.0)
+        .unwrap();
+    let underline = doc
+        .create(tab, NodeKind::Rectangle, "underline", 0.0, 18.0, 50.0, 2.0)
+        .unwrap();
+    let old_note = doc
+        .create(
+            page,
+            NodeKind::Frame,
+            "Old onboarding note",
+            300.0,
+            0.0,
+            80.0,
+            40.0,
+        )
+        .unwrap();
+    let rules = doc
+        .create(page, NodeKind::Frame, "Rules", 400.0, 0.0, 80.0, 40.0)
+        .unwrap();
+    (doc, page, [tabs, tab, underline, old_note, rules])
+}
+
+#[test]
+fn waiting_layers_group_under_their_cards_with_counts_and_fields() {
+    let repo = Repo::new();
+    let (mut doc, page, [tabs, tab, underline, old_note, rules]) = cards_design();
+    repo.marker(&doc, &format!("page={} job=a", page.0));
+    // A new card with two layers, edits deep inside a card plus a new layer in it, a removed card
+    // and a loose caption.
+    let ide = doc
+        .create(page, NodeKind::Frame, "IDE panes", 0.0, 200.0, 100.0, 50.0)
+        .unwrap();
+    doc.create(ide, NodeKind::Rectangle, "pane", 0.0, 0.0, 10.0, 10.0)
+        .unwrap();
+    doc.get_mut(tab).unwrap().height = 24.0;
+    doc.get_mut(underline).unwrap().opacity = 0.5;
+    doc.create(tabs, NodeKind::Rectangle, "separator", 60.0, 0.0, 1.0, 20.0)
+        .unwrap();
+    doc.remove(old_note).unwrap();
+    let caption = doc
+        .create(
+            page,
+            NodeKind::Text(figcraft_doc::TextData::new("A legend")),
+            "Legend",
+            0.0,
+            300.0,
+            50.0,
+            10.0,
+        )
+        .unwrap();
+    let drift = design_drift(&repo.0, &doc, Some(page.0)).unwrap();
+    let cards = &drift.cards;
+    let by_id = |id: NodeId| cards.iter().find(|c| c["id"] == id.0).unwrap();
+    assert_eq!(cards.len(), 4, "{cards:#?}");
+    assert!(
+        cards.iter().all(|c| c["id"] != rules.0),
+        "an untouched card is not listed"
+    );
+    let changed = by_id(tabs);
+    assert_eq!(changed["state"], "changed");
+    assert_eq!(changed["page_id"], page.0);
+    let layers: Vec<(&str, &str)> = changed["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["name"].as_str().unwrap(), c["state"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        layers,
+        [
+            ("tab Mindmap", "changed"),
+            ("underline", "changed"),
+            ("separator", "added")
+        ]
+    );
+    assert_eq!(changed["changes"][0]["fields"], json!(["height"]));
+    let new = by_id(ide);
+    assert_eq!(
+        (new["state"].as_str(), new["layers"].as_u64()),
+        (Some("added"), Some(2))
+    );
+    assert_eq!(new["changes"], json!([]));
+    let gone = by_id(old_note);
+    assert_eq!(
+        (gone["state"].as_str(), gone["name"].as_str()),
+        (Some("removed"), Some("Old onboarding note"))
+    );
+    assert_eq!(by_id(caption)["kind"], "text");
+    let delta = diff(&repo.0, &doc, Some(page.0)).unwrap();
+    assert_eq!(delta["map"]["cards"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn a_left_out_card_keeps_waiting_and_the_frozen_map_has_only_included_edits() {
+    let repo = Repo::new();
+    let (mut doc, page, [tabs, tab, _, old_note, _]) = cards_design();
+    repo.marker(&doc, &format!("page={} job=a", page.0));
+    let ide = doc
+        .create(page, NodeKind::Frame, "IDE panes", 0.0, 200.0, 100.0, 50.0)
+        .unwrap();
+    doc.create(ide, NodeKind::Rectangle, "pane", 0.0, 0.0, 10.0, 10.0)
+        .unwrap();
+    doc.get_mut(tab).unwrap().height = 24.0;
+    doc.remove(old_note).unwrap();
+    let elsewhere = doc.add_page("Elsewhere");
+    doc.create(
+        elsewhere,
+        NodeKind::Frame,
+        "Other page card",
+        0.0,
+        0.0,
+        5.0,
+        5.0,
+    )
+    .unwrap();
+    // Leave out the new IDE panes card and the old note's deletion.
+    let excluded = BTreeSet::from([ide.0, old_note.0]);
+    let included = leave_out(&repo.0, &doc, Some(page.0), &excluded).unwrap();
+    assert!(
+        included.node(ide).is_none(),
+        "a new left-out card is not frozen"
+    );
+    assert_eq!(included.node(old_note).unwrap().name, "Old onboarding note");
+    assert_eq!(
+        included.node(tab).unwrap().height,
+        24.0,
+        "included edits are frozen"
+    );
+    assert!(
+        names(&included).contains("Other page card"),
+        "outside the scope stays live"
+    );
+    let frozen = freeze(&repo.0, &included, Some(page.0)).unwrap();
+    let work = design_drift(&repo.0, &frozen_document(&frozen).unwrap(), Some(page.0)).unwrap();
+    let ids: Vec<u64> = work
+        .cards
+        .iter()
+        .map(|c| c["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        [tabs.0],
+        "the frozen blob carries only the included card"
+    );
+    // The agent commits through the usual gate; the integrity checks still hold.
+    repo.write_design(&frozen_document(&frozen).unwrap());
+    prepare_commit(&repo.0, &frozen).unwrap();
+    git(
+        &repo.0,
+        &["commit", "-m", &format!("Sync tabs\n\n{}", frozen.trailer)],
+    )
+    .unwrap();
+    let done = find_completed(&repo.0, &frozen).unwrap().unwrap();
+    assert_eq!(
+        baseline(&repo.0, Some(page.0)).unwrap().unwrap().commit,
+        done.commit
+    );
+    // The next Sync sees exactly the two left-out cards still waiting.
+    let next = design_drift(&repo.0, &doc, Some(page.0)).unwrap();
+    let waiting: BTreeSet<u64> = next
+        .cards
+        .iter()
+        .map(|c| c["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(waiting, BTreeSet::from([ide.0, old_note.0]));
+    // Nothing left out: the live map is frozen as it is.
+    assert_eq!(
+        names(&leave_out(&repo.0, &doc, Some(page.0), &BTreeSet::new()).unwrap()),
+        names(&doc)
+    );
+}

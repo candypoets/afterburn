@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use figcraft_collab::{merge, Change, Entry, Replica};
-use figcraft_doc::{Document, NodeId};
+use figcraft_doc::{Document, NodeId, NodeKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -426,13 +426,15 @@ fn with_parent(mut card: Value, doc: &Document, id: NodeId) -> Value {
 }
 
 /// The design waiting since the last record: FigCraft's changes from the recorded map to `live`,
-/// scoped to the page, and the cards added, changed and removed.
+/// scoped to the page, and the layers added, changed and removed.
 pub struct Drift {
     pub last: Option<Baseline>,
     pub changes: Vec<Change>,
     pub added: Vec<Value>,
     pub changed: Vec<Value>,
     pub removed: Vec<Value>,
+    /// The same layers grouped under their cards (see [`cards`]): the list a person reads.
+    pub cards: Vec<Value>,
 }
 
 impl Drift {
@@ -486,6 +488,7 @@ pub fn design_drift(path: &Path, live: &Document, page: Option<u64>) -> Result<D
             }
         }
     }
+    let cards = cards(&old, live, &before, &after, &fields);
     let changed: Vec<Value> = fields.into_iter().map(|(id, fields)| {
         json!({"id": id.0, "name": live.node(id).map(|n| n.name.as_str()).unwrap_or(""), "fields": fields})
     }).collect();
@@ -495,7 +498,177 @@ pub fn design_drift(path: &Path, live: &Document, page: Option<u64>) -> Result<D
         added,
         changed,
         removed,
+        cards,
     })
+}
+
+/// The card a layer belongs to: its top-level ancestor on its page (a direct child of the page).
+/// A page has none; neither has a layer whose ancestry is broken or deeper than any real map.
+pub fn card_of(doc: &Document, id: NodeId) -> Option<NodeId> {
+    let mut current = id;
+    for _ in 0..4096 {
+        let node = doc.node(current)?;
+        if node.is_page() {
+            return None;
+        }
+        let parent = node.parent?;
+        if doc.node(parent).is_some_and(|p| p.is_page()) {
+            return Some(current);
+        }
+        current = parent;
+    }
+    None
+}
+
+/// The card a waiting layer is listed under: its card on the live map, else on the recorded one
+/// (a removed layer has only the latter).
+fn card_in(old: &Document, live: &Document, id: NodeId) -> Option<NodeId> {
+    if live.contains(id) {
+        card_of(live, id)
+    } else {
+        card_of(old, id)
+    }
+}
+
+/// The short kind name the Sync pane shows: a top-level `text` card is a caption or legend.
+fn kind_name(doc: &Document, id: NodeId) -> &'static str {
+    match doc.node(id).map(|n| &n.kind) {
+        Some(NodeKind::Text(_)) => "text",
+        Some(NodeKind::Frame) => "frame",
+        Some(NodeKind::Group) => "group",
+        Some(NodeKind::Section { .. }) => "section",
+        Some(NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) => "component",
+        Some(NodeKind::Instance { .. }) => "instance",
+        Some(_) => "shape",
+        None => "",
+    }
+}
+
+/// Every added, changed and removed layer grouped under its card, in page order then the cards'
+/// order on their page. Each card says whether it is new (`added`), edited (`changed`) or gone
+/// (`removed`, read from the recorded map), how many layers it has (`layers`), and for an edited
+/// card each layer that changed, with its fields.
+fn cards(
+    old: &Document,
+    live: &Document,
+    before: &BTreeSet<NodeId>,
+    after: &BTreeSet<NodeId>,
+    fields: &BTreeMap<NodeId, BTreeSet<String>>,
+) -> Vec<Value> {
+    let mut layers: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
+    let touched = after
+        .difference(before)
+        .chain(before.difference(after))
+        .chain(fields.keys());
+    for id in touched {
+        if let Some(card) = card_in(old, live, *id) {
+            layers.entry(card).or_default().insert(*id);
+        }
+    }
+    let mut out: Vec<((usize, usize), Value)> = Vec::new();
+    for (card, touched) in layers {
+        let (doc, state) = match (before.contains(&card), after.contains(&card)) {
+            (false, true) => (live, "added"),
+            (true, false) => (old, "removed"),
+            _ => (live, "changed"),
+        };
+        let Some(node) = doc.node(card) else { continue };
+        let page = doc.page_of(card);
+        let order = (
+            page.and_then(|p| doc.pages.iter().position(|q| *q == p))
+                .unwrap_or(usize::MAX),
+            page.and_then(|p| doc.node(p))
+                .and_then(|p| p.children.iter().position(|c| *c == card))
+                .unwrap_or(usize::MAX),
+        );
+        let subtree = doc.subtree(card);
+        let changes: Vec<Value> = if state == "changed" {
+            // The card's layers in document order, then its removed ones from the recorded map.
+            let removed = old.subtree(card);
+            subtree
+                .iter()
+                .chain(removed.iter().filter(|id| !live.contains(**id)))
+                .filter(|id| touched.contains(id))
+                .map(|id| {
+                    let (layer, state) = if !before.contains(id) {
+                        (live, "added")
+                    } else if !after.contains(id) {
+                        (old, "removed")
+                    } else {
+                        (live, "changed")
+                    };
+                    json!({
+                        "id": id.0,
+                        "name": layer.node(*id).map(|n| n.name.as_str()).unwrap_or(""),
+                        "state": state,
+                        "parent": layer.node(*id).and_then(|n| n.parent).map(|p| p.0),
+                        "fields": fields.get(id).cloned().unwrap_or_default(),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        out.push((
+            order,
+            json!({
+                "id": card.0,
+                "name": node.name,
+                "page": page.and_then(|p| doc.node(p)).map(|p| p.name.as_str()).unwrap_or(""),
+                "page_id": page.map(|p| p.0),
+                "state": state,
+                "kind": kind_name(doc, card),
+                "layers": subtree.len(),
+                "changes": changes,
+            }),
+        ));
+    }
+    out.sort_by_key(|(order, _)| *order);
+    out.into_iter().map(|(_, card)| card).collect()
+}
+
+/// The map to freeze for a Sync that leaves `excluded` cards out: the last recorded map plus only
+/// the included cards' waiting edits. It is `live` with the left-out cards' edits taken back out,
+/// the same Replica take-out [`record_document`] uses for earlier waiting edits: the changes from
+/// `live` back to the recorded map are kept only for layers of a left-out card, and applied
+/// strictly. Outside the scope the map stays as it is live, as in any freeze. The left-out cards
+/// never reach the committed map, so they keep waiting for the next Sync.
+pub fn leave_out(
+    path: &Path,
+    live: &Document,
+    page: Option<u64>,
+    excluded: &BTreeSet<u64>,
+) -> Result<Document> {
+    validate_page(page)?;
+    if excluded.is_empty() {
+        return Ok(live.clone());
+    }
+    let root = repository(path)?;
+    let old = match baseline(&root, page)? {
+        Some(last) => load_design(&root, &last.commit)?,
+        None => Document::without_pages(live.name.clone()),
+    };
+    let ids: BTreeSet<NodeId> = scope_nodes(&old, page)
+        .union(&scope_nodes(live, page))
+        .copied()
+        .collect();
+    let left_out = |id: NodeId| {
+        ids.contains(&id)
+            && card_in(&old, live, id)
+                .or_else(|| card_of(&old, id))
+                .is_some_and(|card| excluded.contains(&card.0))
+    };
+    let mut replica = Replica::new(live.clone());
+    let back: Vec<Change> = figcraft_collab::diff(&replica, &old)
+        .map_err(|e| Error::new(format!("leave out diff: {e}")))?
+        .changes
+        .into_iter()
+        .filter(|c| c.node().is_some_and(left_out))
+        .collect();
+    replica
+        .apply(&back, figcraft_collab::replica::Mode::Strict)
+        .map_err(|e| Error::new(format!("leave cards out: {e}")))?;
+    Ok(replica.document().clone())
 }
 
 /// Complete property changes plus the old UI's `{last,map:{added,changed,removed},code:{...}}`.
@@ -510,7 +683,7 @@ pub fn diff(path: &Path, live: &Document, page: Option<u64>) -> Result<Value> {
     Ok(json!({
         "last": drift.last.as_ref().map(Baseline::last_json).unwrap_or_else(|| json!({"exists": false})),
         "last_sync": last_sync.as_ref().map(Baseline::last_json).unwrap_or_else(|| json!({"exists": false})),
-        "map": {"added": drift.added, "changed": drift.changed, "removed": drift.removed},
+        "map": {"added": drift.added, "changed": drift.changed, "removed": drift.removed, "cards": drift.cards},
         "changes": drift.changes, "global_changes": global_count, "page": page,
         "code": code_diff(&root, last_sync.as_ref().map(|b| b.commit.as_str()))?,
     }))

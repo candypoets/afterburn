@@ -709,11 +709,28 @@ impl Node {
             ));
         }
         let scope = page(req)?;
-        let frozen = node_git::freeze(&metadata.worktree, &document, scope)?;
+        // Cards the human left out keep waiting: the frozen map is the last record plus only the
+        // included cards' edits, and the prompt's work list is that map's drift.
+        let excluded = excluded_cards(req)?;
+        let waiting = node_git::design_drift(&metadata.worktree, &document, scope)?;
+        let left_out: Vec<String> = waiting
+            .cards
+            .iter()
+            .filter(|card| card["id"].as_u64().is_some_and(|id| excluded.contains(&id)))
+            .map(|card| {
+                format!(
+                    "{} (id {})",
+                    card["name"].as_str().unwrap_or(""),
+                    card["id"]
+                )
+            })
+            .collect();
+        let included = node_git::leave_out(&metadata.worktree, &document, scope, &excluded)?;
+        let frozen = node_git::freeze(&metadata.worktree, &included, scope)?;
         let id = frozen.id.clone();
         // What to build is the design waiting since the last record of any kind; the code since
         // the last Sync is context. Both go in the prompt so the agent starts without searching.
-        let drift = node_git::design_drift(&metadata.worktree, &document, scope)?;
+        let drift = node_git::design_drift(&metadata.worktree, &included, scope)?;
         let last_sync = node_git::sync_baseline(&metadata.worktree, scope)?;
         let code = node_git::code_since_sync(&metadata.worktree, scope)?;
         let page_name = scope.and_then(|p| {
@@ -728,6 +745,7 @@ impl Node {
             page_name: page_name.as_deref(),
             context: &self.context(&session, req, &[])?,
             drift: &drift,
+            left_out: &left_out,
             last_sync: last_sync.as_ref(),
             code: &code,
             trailer: &frozen.trailer,
@@ -1309,6 +1327,45 @@ fn page(value: &Value) -> Result<Option<u64>> {
             .ok_or_else(|| Error::new("page must be a positive id")),
     }
 }
+/// The cards a Sync leaves out (`exclude`: card ids from the diff's `map.cards`); none by default.
+fn excluded_cards(value: &Value) -> Result<std::collections::BTreeSet<u64>> {
+    match value.get("exclude") {
+        None | Some(Value::Null) => Ok(Default::default()),
+        Some(Value::Array(ids)) if ids.len() <= 5_000 => ids
+            .iter()
+            .map(|id| {
+                id.as_u64()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| Error::new("exclude must list positive card ids"))
+            })
+            .collect(),
+        Some(_) => Err(Error::new(
+            "exclude must be a list of at most 5000 card ids",
+        )),
+    }
+}
 fn job_view(job: &Job) -> Value {
     json!({"id":job.frozen.id,"kind":job.kind,"state":job.state,"started":job.frozen.started.to_string(),"agent":job.agent,"reason":job.reason,"commit":job.commit,"prepared":job.prepared})
+}
+
+#[cfg(test)]
+mod exclude_tests {
+    use super::*;
+
+    #[test]
+    fn a_sync_request_names_the_cards_it_leaves_out() {
+        assert!(excluded_cards(&json!({})).unwrap().is_empty());
+        assert!(excluded_cards(&json!({"exclude": null}))
+            .unwrap()
+            .is_empty());
+        let ids = excluded_cards(&json!({"exclude": [7, 3, 7]})).unwrap();
+        assert_eq!(ids.into_iter().collect::<Vec<_>>(), [3, 7]);
+        for bad in [
+            json!({"exclude": [0]}),
+            json!({"exclude": ["7"]}),
+            json!({"exclude": 7}),
+        ] {
+            assert!(excluded_cards(&bad).is_err(), "{bad}");
+        }
+    }
 }

@@ -51,6 +51,17 @@ fn map_registry_has_exact_agreed_ids_and_parseable_platform_bindings() {
         "switchWorktree",
         "focusComposer",
         "syncReview",
+        "closeTab",
+        "switchWorkspace",
+        "workspace1",
+        "workspace2",
+        "workspace3",
+        "workspace4",
+        "workspace5",
+        "workspace6",
+        "workspace7",
+        "workspace8",
+        "workspace9",
     ]
     .into_iter()
     .map(|id| format!("map.{id}"))

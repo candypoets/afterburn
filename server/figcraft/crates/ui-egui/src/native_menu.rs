@@ -7,8 +7,10 @@
 //! enabled state come from there. The bar offers only the bindings a human can use in the map
 //! (the shortcuts page's list); the field-only ones (typing undo/redo, the composer's keys) and
 //! the drawing editor's bindings (tools, text edit, history) are not offered. The app's own
-//! workspace actions get File entries; the app menu's Hide and Quit and the Window menu are
-//! AppKit's.
+//! workspace actions get the Workspace menu after File (design: `Sidebar pages · switcher`): the
+//! listed workspaces ([`workspace_items`], ⌃⌘1…⌃⌘9) and the open one's worktrees
+//! ([`worktree_items`]) follow the listing, so the platform code rebuilds them when they change.
+//! The app menu's Hide and Quit and the Window menu are AppKit's.
 //!
 //! Key equivalents: only shortcuts with ⌘ become native key equivalents. AppKit takes those keys
 //! before the window sees them, so they run once, through the menu; while a text field has the
@@ -22,8 +24,22 @@ use figcraft_engine::keymap::{Platform, parse};
 use crate::FigApp;
 use crate::map_action_catalog::{self, Action};
 
-/// File › Add machine…: the Workspaces sidebar's command, not a keyboard action.
+/// Workspace › Add machine…: the Workspaces sidebar's command, not a keyboard action.
 pub const ADD_MACHINE: &str = "map.addMachine";
+/// The prefix of a listed workspace's or worktree's item id: `workspace.choose:<address>\t<id>`.
+pub const CHOOSE: &str = "workspace.choose:";
+/// The catalog actions behind ⌃⌘1…⌃⌘9: the Workspace menu's first nine workspaces carry them.
+pub const WORKSPACE_KEYS: [&str; 9] = [
+    "map.workspace1",
+    "map.workspace2",
+    "map.workspace3",
+    "map.workspace4",
+    "map.workspace5",
+    "map.workspace6",
+    "map.workspace7",
+    "map.workspace8",
+    "map.workspace9",
+];
 /// App menu › Check for Updates…; runs once the map catalog knows it, disabled until then.
 pub const CHECK_FOR_UPDATES: &str = "app.checkForUpdates";
 /// Help › Docs; disabled until the map catalog has a docs action.
@@ -40,6 +56,58 @@ pub enum Entry {
     /// One of AppKit's own items.
     Native(Native),
     Separator,
+    /// Where the listed workspaces go ([`workspace_items`]); they change with the listing.
+    Workspaces,
+    /// The Worktree ▸ submenu: the open workspace's worktrees ([`worktree_items`]).
+    Worktrees,
+}
+
+/// An item that follows the workspace listing (a workspace, or a worktree of the open one).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DynItem {
+    /// The id [`run`] takes: `map.workspace<n>` for the first nine, else [`CHOOSE`]`…`.
+    pub id: String,
+    pub label: String,
+    /// The open workspace (or worktree) wears a check.
+    pub checked: bool,
+    pub enabled: bool,
+    /// ⌃⌘1…⌃⌘9 on the first nine workspaces.
+    pub keys: Option<&'static str>,
+}
+
+fn choose_id(row: &crate::switcher::Row) -> String {
+    format!("{CHOOSE}{}\t{}", row.address, row.id)
+}
+
+/// Workspace's listed workspaces: this machine's first, then the remote ones (`alzette · befree`),
+/// the open one checked, the first nine on ⌃⌘1…⌃⌘9. With none listed, one disabled line says so.
+pub fn workspace_items(app: &FigApp) -> Vec<DynItem> {
+    let rows = crate::switcher::menu_rows(app);
+    if rows.is_empty() {
+        return vec![DynItem { id: format!("{CHOOSE}none"), label: "No workspaces listed".into(), checked: false, enabled: false, keys: None }];
+    }
+    rows.iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let numbered = WORKSPACE_KEYS.get(i).copied();
+            DynItem {
+                id: numbered.map(str::to_string).unwrap_or_else(|| choose_id(row)),
+                label: row.menu_label(),
+                checked: row.open,
+                enabled: true,
+                keys: numbered.and_then(key_equivalent),
+            }
+        })
+        .collect()
+}
+
+/// Workspace › Worktree: the open workspace's checkouts, the open one checked.
+pub fn worktree_items(app: &FigApp) -> Vec<DynItem> {
+    let rows = crate::switcher::worktree_rows(app);
+    if rows.is_empty() {
+        return vec![DynItem { id: format!("{CHOOSE}none"), label: "No workspace open".into(), checked: false, enabled: false, keys: None }];
+    }
+    rows.iter().map(|row| DynItem { id: choose_id(row), label: row.name.clone(), checked: row.open, enabled: true, keys: None }).collect()
 }
 
 /// AppKit's standard items: they act through its own selectors, never through the app.
@@ -119,15 +187,27 @@ pub fn menus() -> Vec<Menu> {
             title: "File",
             role: Role::Plain,
             entries: vec![
-                titled("map.newWorkspace", "New workspace…"),
-                titled("map.openWorkspace", "Open workspace…"),
+                titled("map.closeTab", "Close tab"),
                 titled("map.close", "Close map"),
                 Sep,
                 titled("map.syncReview", "Sync…"),
-                titled(ADD_MACHINE, "Add machine…"),
                 Sep,
                 titled("map.save", "Save"),
                 titled("map.export", "Export…"),
+            ],
+        },
+        Menu {
+            title: "Workspace",
+            role: Role::Plain,
+            entries: vec![
+                Entry::Workspaces,
+                Sep,
+                titled("map.switchWorkspace", "Switch workspace…"),
+                Entry::Worktrees,
+                Sep,
+                titled("map.openWorkspace", "All workspaces…"),
+                titled("map.newWorkspace", "New workspace…"),
+                titled(ADD_MACHINE, "Add machine…"),
             ],
         },
         Menu {
@@ -208,6 +288,9 @@ pub fn enabled(app: &FigApp, id: &str) -> bool {
     if id == ADD_MACHINE {
         return true;
     }
+    if let Some(rest) = id.strip_prefix(CHOOSE) {
+        return rest.contains('\t');
+    }
     catalog(id).is_some_and(|action| map_action_catalog::enabled(app, action))
 }
 
@@ -219,6 +302,12 @@ pub fn run(app: &mut FigApp, id: &str) {
             app.ws.pane_open = true;
         }
         crate::machine_modal::open(app);
+        return;
+    }
+    if let Some((address, workspace)) = id.strip_prefix(CHOOSE).and_then(|rest| rest.split_once('\t')) {
+        if let Some(ctx) = app.ui_context.clone() {
+            crate::switcher::choose_id(app, &ctx, address, workspace);
+        }
         return;
     }
     if enabled(app, id) {

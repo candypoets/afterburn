@@ -274,6 +274,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         crate::selection_spacing::draw(app, &painter);
     }
     crate::comments::draw(app, &painter);
+    // While the Sync pane is open: the waiting cards' badges, the current card's outline and chip.
+    crate::sync::canvas_marks(app, &painter);
     crate::live_text::draw(app, &painter);
     crate::live::draw(app, &painter, &ctx);
     crate::live::chat_box(app, &ctx);

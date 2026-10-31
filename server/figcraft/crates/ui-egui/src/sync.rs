@@ -5,8 +5,13 @@
 //! cards cite; the service keeps one baseline per page.
 //!
 //! The button is a floating pill at the map's top right, never a mode: it opens a widget with the
-//! design changes the agent is about to implement, the code that changed since the last sync, an
-//! agent target and an optional note. A sync runs on the node; while it is in flight the
+//! cards waiting (cards, not layers: the node groups every changed layer under its card), the code
+//! that changed since the last sync folded to one line, and a sticky footer with the agent target,
+//! an optional note and the action. Every row takes you there: a click, its → or `[` / `]` opens
+//! the card's page and fits the card in the view, outlined, while every waiting card on the canvas
+//! wears its `+` / `~` badge. A row's checkbox leaves the card out: the node freezes the last
+//! recorded map plus only the included cards' edits, and the rest keep waiting for the next Sync.
+//! A sync runs on the node; while it is in flight the
 //! widget (and the button, when the widget is closed) shows the flight, the map stays editable, and
 //! a thread polls `sync_status` once a second until the service reports `done` or `failed`.
 //!
@@ -43,8 +48,7 @@ const MAX_NOTE_CHARS: usize = 2_000;
 const WIDGET_W: f32 = 376.0;
 /// The widget's inner padding.
 const PAD: f32 = 19.0;
-/// How many names and files each list shows before `+N more`.
-const NAMES: usize = 4;
+/// How many scope paths and files the code section shows before `+N more`.
 const FILES: usize = 4;
 
 /// The warm map palette, shared with the composer and the map bar.
@@ -58,6 +62,15 @@ const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
 const ACCENT_HOVER: Color32 = Color32::from_rgb(0xC2, 0x55, 0x3E);
 const MAP_INK: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
 const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
+/// A changed card's mark and the current card's outline: the agent menu's working amber.
+const AMBER: Color32 = Color32::from_rgb(0xA8, 0x6B, 0x12);
+/// The current row's fill.
+const ROW_HOT: Color32 = Color32::from_rgb(0xF1, 0xEF, 0xEC);
+/// A row's height, and one detail line's under the current row.
+const ROW_H: f32 = 42.0;
+const DETAIL_H: f32 = 18.0;
+/// The most detail lines the current row lists before `+N more`.
+const DETAILS: usize = 8;
 
 /// A diff runs `git` on the project host and may read a large repository.
 #[cfg(not(target_arch = "wasm32"))]
@@ -248,6 +261,9 @@ pub struct MapCard {
     pub name: String,
     #[serde(default)]
     pub page: String,
+    /// The layer's parent, so only the top-most of new or removed layers stands for a card.
+    #[serde(default)]
+    pub parent: Option<u64>,
 }
 
 /// One changed card in the design diff.
@@ -261,6 +277,49 @@ pub struct MapChange {
     pub fields: Vec<String>,
 }
 
+/// One changed layer inside an edited card.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct LayerChange {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    /// `added`, `changed` or `removed`.
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub parent: Option<u64>,
+    #[serde(default)]
+    pub fields: Vec<String>,
+}
+
+/// One waiting card: a top-level layer on its page with every added, changed or removed layer
+/// inside it, as the node groups them.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct WaitingCard {
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    /// The page's name.
+    #[serde(default)]
+    pub page: String,
+    #[serde(default)]
+    pub page_id: Option<u64>,
+    /// `added`, `changed` or `removed`.
+    #[serde(default)]
+    pub state: String,
+    /// `text` for a loose caption or legend; `frame`, `group`… otherwise.
+    #[serde(default)]
+    pub kind: String,
+    /// How many layers the card has (itself included).
+    #[serde(default)]
+    pub layers: u64,
+    /// An edited card's changed layers, in document order.
+    #[serde(default)]
+    pub changes: Vec<LayerChange>,
+}
+
 /// The design half of the diff.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct MapDiff {
@@ -270,13 +329,265 @@ pub struct MapDiff {
     pub removed: Vec<MapCard>,
     #[serde(default)]
     pub changed: Vec<MapChange>,
+    /// The same changes grouped under their cards: the list the widget shows.
+    #[serde(default)]
+    pub cards: Vec<WaitingCard>,
 }
 
 impl MapDiff {
-    /// The changes the widget counts and the button badges.
+    /// The layer changes the node found.
     pub fn total(&self) -> usize {
         self.added.len().saturating_add(self.removed.len()).saturating_add(self.changed.len())
     }
+
+    /// The widget's rows: one per card, the loose captions and legends folded into one.
+    pub fn rows(&self) -> Vec<Row> {
+        if self.cards.is_empty() && self.total() > 0 {
+            // A node without card grouping: its layers stand for cards.
+            return rows(&self.legacy_cards());
+        }
+        rows(&self.cards)
+    }
+
+    /// The layer lists of a node that does not group them, as cards (top-most new and removed).
+    fn legacy_cards(&self) -> Vec<WaitingCard> {
+        let added: HashSet<u64> = self.added.iter().map(|card| card.id).collect();
+        let removed: HashSet<u64> = self.removed.iter().map(|card| card.id).collect();
+        let card = |card: &MapCard, state: &str| WaitingCard {
+            id: card.id,
+            name: card.name.clone(),
+            page: card.page.clone(),
+            state: state.to_string(),
+            layers: 1,
+            ..WaitingCard::default()
+        };
+        let mut out: Vec<WaitingCard> =
+            self.added.iter().filter(|c| c.parent.is_none_or(|p| !added.contains(&p))).map(|c| card(c, "added")).collect();
+        out.extend(self.changed.iter().map(|change| WaitingCard {
+            id: change.id,
+            name: change.name.clone(),
+            state: "changed".to_string(),
+            layers: 1,
+            changes: vec![LayerChange {
+                id: change.id,
+                name: change.name.clone(),
+                state: "changed".to_string(),
+                parent: None,
+                fields: change.fields.clone(),
+            }],
+            ..WaitingCard::default()
+        }));
+        out.extend(self.removed.iter().filter(|c| c.parent.is_none_or(|p| !removed.contains(&p))).map(|c| card(c, "removed")));
+        out
+    }
+}
+
+/// What a row's mark says: `+` new, `~` changed, `−` deleted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    Added,
+    Changed,
+    Removed,
+}
+
+impl Mark {
+    fn of(state: &str) -> Mark {
+        match state.trim() {
+            "added" => Mark::Added,
+            "removed" => Mark::Removed,
+            _ => Mark::Changed,
+        }
+    }
+
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Mark::Added => "+",
+            Mark::Changed => "~",
+            Mark::Removed => "−",
+        }
+    }
+
+    fn color(self) -> Color32 {
+        match self {
+            Mark::Added => MAP_INK,
+            Mark::Changed => AMBER,
+            Mark::Removed => DANGER,
+        }
+    }
+
+    fn word(self) -> &'static str {
+        match self {
+            Mark::Added => "new",
+            Mark::Changed => "changed",
+            Mark::Removed => "deleted",
+        }
+    }
+}
+
+/// One row of the widget: a waiting card, or every loose caption and legend folded together.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Row {
+    /// The cards the row stands for (one, or every folded caption).
+    pub cards: Vec<u64>,
+    pub name: String,
+    pub mark: Mark,
+    /// `new · 75 layers`, `38 layers changed`, `deleted · nowhere to go`.
+    pub sub: String,
+    /// The page the canvas opens to show the row (the first card still on the map).
+    pub page: Option<u64>,
+    /// The cards still on the map, which the canvas flies to and badges.
+    pub shown: Vec<u64>,
+    /// An edited card's changes: a layer (or `+ 6 separators`) and what changed.
+    pub details: Vec<(String, String)>,
+}
+
+impl Row {
+    /// A row the canvas can show: a deleted card has no place left.
+    pub fn navigable(&self) -> bool {
+        !self.shown.is_empty()
+    }
+
+    /// The row's key: its first card (the folded captions' row keeps its first caption's).
+    pub fn key(&self) -> u64 {
+        self.cards.first().copied().unwrap_or(0)
+    }
+
+    /// Whether the human left every card of this row out.
+    pub fn left_out(&self, excluded: &HashSet<u64>) -> bool {
+        !self.cards.is_empty() && self.cards.iter().all(|id| excluded.contains(id))
+    }
+}
+
+/// The rows for `cards`: one per card in the node's order, then the loose one-line text cards
+/// (captions, legends) folded into one row.
+pub fn rows(cards: &[WaitingCard]) -> Vec<Row> {
+    let mut out = Vec::new();
+    let mut captions: Vec<&WaitingCard> = Vec::new();
+    for card in cards {
+        if card.kind.trim() == "text" {
+            captions.push(card);
+            continue;
+        }
+        let mark = Mark::of(&card.state);
+        let shown = if mark == Mark::Removed { Vec::new() } else { vec![card.id] };
+        let name = if card.name.trim().is_empty() { "Unnamed card".to_string() } else { card.name.trim().to_string() };
+        out.push(Row {
+            cards: vec![card.id],
+            name,
+            mark,
+            sub: card_sub(card, mark),
+            page: if mark == Mark::Removed { None } else { card.page_id },
+            shown,
+            details: if mark == Mark::Changed { details(&card.changes) } else { Vec::new() },
+        });
+    }
+    if !captions.is_empty() {
+        let marks: Vec<Mark> = captions.iter().map(|card| Mark::of(&card.state)).collect();
+        let mark = if marks.iter().all(|m| *m == Mark::Added) {
+            Mark::Added
+        } else if marks.iter().all(|m| *m == Mark::Removed) {
+            Mark::Removed
+        } else {
+            Mark::Changed
+        };
+        let count = |wanted: Mark| marks.iter().filter(|m| **m == wanted).count();
+        let sub = [(Mark::Added, "new"), (Mark::Changed, "changed"), (Mark::Removed, "deleted")]
+            .into_iter()
+            .filter_map(|(m, label)| match count(m) {
+                0 => None,
+                n => Some(format!("{n} {label}")),
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let still: Vec<&&WaitingCard> = captions.iter().filter(|card| Mark::of(&card.state) != Mark::Removed).collect();
+        let page = still.first().and_then(|card| card.page_id);
+        out.push(Row {
+            cards: captions.iter().map(|card| card.id).collect(),
+            name: if captions.len() == 1 { "1 caption or legend".to_string() } else { format!("{} captions and legends", captions.len()) },
+            mark,
+            sub: if mark == Mark::Removed { "deleted · nowhere to go".to_string() } else { sub },
+            page,
+            // Only the captions on the page the row opens: the canvas shows one page at a time.
+            shown: still.iter().filter(|card| card.page_id == page).map(|card| card.id).collect(),
+            details: captions.iter().map(|card| (card.name.trim().to_string(), Mark::of(&card.state).word().to_string())).collect(),
+        });
+    }
+    out
+}
+
+/// A card row's sub line.
+fn card_sub(card: &WaitingCard, mark: Mark) -> String {
+    match mark {
+        Mark::Added => format!("new · {}", plural(card.layers as usize, "layer")),
+        Mark::Removed => "deleted · nowhere to go".to_string(),
+        Mark::Changed => match card.changes.len() {
+            0 => "changed".to_string(),
+            n => format!("{} changed", plural(n, "layer")),
+        },
+    }
+}
+
+/// `1 layer`, `75 layers`.
+fn plural(n: usize, word: &str) -> String {
+    if n == 1 { format!("1 {word}") } else { format!("{n} {}", plural_word(word)) }
+}
+
+/// `separator` → `separators`; a name that already ends in `s` stays.
+fn plural_word(word: &str) -> String {
+    if word.ends_with('s') { word.to_string() } else { format!("{word}s") }
+}
+
+/// An edited card's changes as the expanded row lists them: each changed layer with its fields,
+/// then the new layers (top-most only, the same name counted once: `+ 6 separators`), then the
+/// removed ones.
+fn details(changes: &[LayerChange]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for change in changes.iter().filter(|c| c.state == "changed") {
+        out.push((layer_name(&change.name), field_words(&change.fields)));
+    }
+    for (state, sign, word) in [("added", "+", "new"), ("removed", "−", "removed")] {
+        let ids: HashSet<u64> = changes.iter().filter(|c| c.state == state).map(|c| c.id).collect();
+        let mut names: Vec<(String, usize)> = Vec::new();
+        for change in changes.iter().filter(|c| c.state == state && c.parent.is_none_or(|p| !ids.contains(&p))) {
+            let name = layer_name(&change.name);
+            match names.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, count)) => *count += 1,
+                None => names.push((name, 1)),
+            }
+        }
+        for (name, count) in names {
+            let label = if count == 1 { format!("{sign} {name}") } else { format!("{sign} {count} {}", plural_word(&name)) };
+            out.push((label, word.to_string()));
+        }
+    }
+    out
+}
+
+fn layer_name(name: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() { "unnamed layer".to_string() } else { name.to_string() }
+}
+
+/// The node's property names as a person reads them: `corners · fills`, `height · layout`.
+fn field_words(fields: &[String]) -> String {
+    let mut words: Vec<&str> = Vec::new();
+    for field in fields {
+        let word = match field.as_str() {
+            "transform" => "position",
+            "parent" | "position" => "moved",
+            "kind" => "content",
+            "childLayout" | "layout" => "layout",
+            "corners" => "corners",
+            "pluginData" => "data",
+            "isMask" | "maskType" => "mask",
+            "boolOp" => "shape",
+            other => other,
+        };
+        if !words.contains(&word) {
+            words.push(word);
+        }
+    }
+    if words.is_empty() { "changed".to_string() } else { words.join(" · ") }
 }
 
 /// One changed file in the code diff.
@@ -482,6 +793,15 @@ pub struct State {
     /// A cancel of an open record is on its thread.
     cancelling: bool,
     cancel_rx: Option<Receiver<Result<(), String>>>,
+    /// The cards the human left out of the next Sync: they keep waiting. Kept across diffs, so a
+    /// refresh does not tick a card the human unticked.
+    pub excluded: HashSet<u64>,
+    /// The current row (its key, see [`Row::key`]): expanded, outlined on the canvas.
+    pub current: Option<u64>,
+    /// The code section is unfolded.
+    pub(crate) code_open: bool,
+    /// The sticky footer's height last frame, so the list scrolls above it.
+    footer_h: f32,
 }
 
 impl State {
@@ -502,14 +822,74 @@ impl State {
         self.diff.as_ref()?.open.as_ref().filter(|job| job.in_flight() && Some(job.id.as_str()) != own)
     }
 
-    /// The design changes the button badges, when a diff is loaded.
+    /// The waiting cards the button badges, when a diff is loaded.
     fn changes(&self) -> Option<usize> {
-        self.diff.as_ref().map(|diff| diff.map.total())
+        self.diff.as_ref().map(|diff| diff.map.rows().len())
     }
 
-    /// Whether a sync has something to do: a design or code change, or a note.
+    /// The widget's rows, from the diff last read.
+    pub fn rows(&self) -> Vec<Row> {
+        self.diff.as_ref().map(|diff| diff.map.rows()).unwrap_or_default()
+    }
+
+    /// How many of `rows` go in the next Sync.
+    fn included(&self, rows: &[Row]) -> usize {
+        rows.iter().filter(|row| !row.left_out(&self.excluded)).count()
+    }
+
+    /// The card ids the next Sync leaves out: only those the diff still lists.
+    fn excluded_ids(&self, rows: &[Row]) -> Vec<u64> {
+        let mut ids: Vec<u64> = rows.iter().flat_map(|row| row.cards.iter().copied()).filter(|id| self.excluded.contains(id)).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Whether a sync has something to do: an included card, a code change, or a note.
     fn has_work(&self) -> bool {
-        !self.note.trim().is_empty() || self.diff.as_ref().is_some_and(DiffReply::has_work)
+        if !self.note.trim().is_empty() {
+            return true;
+        }
+        let Some(diff) = self.diff.as_ref() else { return false };
+        let rows = diff.map.rows();
+        if rows.is_empty() {
+            return diff.has_work();
+        }
+        self.included(&rows) > 0
+    }
+
+    /// Whether the Sync button (and ⌘↵) can start a Sync now.
+    fn can_sync(&self, compose: &crate::compose::State) -> bool {
+        let ready = self.diff.as_ref().is_some_and(|diff| diff.ok);
+        !self.locked() && compose.target.is_some() && ready && self.has_work()
+    }
+
+    /// Step the current row by `delta` (`[` is −1, `]` is +1), stopping at the ends. With no
+    /// current row the first step lands on the first (or last) row. Returns the new current row.
+    pub fn step(&mut self, rows: &[Row], delta: i32) -> Option<usize> {
+        if rows.is_empty() {
+            self.current = None;
+            return None;
+        }
+        let last = rows.len() - 1;
+        let index = match self.current.and_then(|key| rows.iter().position(|row| row.key() == key)) {
+            Some(at) if delta < 0 => at.saturating_sub(1),
+            Some(at) => (at + 1).min(last),
+            None if delta < 0 => last,
+            None => 0,
+        };
+        self.current = rows.get(index).map(Row::key);
+        Some(index)
+    }
+
+    /// Tick or untick every card of `row`.
+    fn toggle(&mut self, row: &Row) {
+        if row.left_out(&self.excluded) {
+            for id in &row.cards {
+                self.excluded.remove(id);
+            }
+        } else {
+            self.excluded.extend(row.cards.iter().copied());
+        }
     }
 
     /// Forget everything about the previous workspace or document, keeping nothing in flight.
@@ -619,10 +999,15 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         app.sync.menu_open = false;
     }
 
-    // A page sync's diff belongs to the page it was read on: moving to another page reads that
-    // page's diff instead. A job in flight keeps polling.
+    // A page sync's diff belongs to the page it was read on and its subpages: moving to another
+    // page reads that page's diff instead (a row opening one of its subpages keeps it). A job in
+    // flight keeps polling.
     let current_page = app.session.page().ok().map(|page| page.0);
-    if !app.sync.all_pages && !app.sync.busy && app.sync.page.is_some() && app.sync.page != current_page {
+    let in_scope = match (app.sync.page, current_page, app.session.doc().ok()) {
+        (Some(scope), Some(page), Some(doc)) => scope == page || crate::page_tree::descendants(doc, NodeId(scope)).contains(&NodeId(page)),
+        _ => false,
+    };
+    if !app.sync.all_pages && !app.sync.busy && app.sync.page.is_some() && !in_scope {
         app.sync.diff = None;
         app.sync.snapshot = None;
         app.sync.page = None;
@@ -660,6 +1045,27 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
 
     let scope = scope_label(app);
+    let rows = app.sync.rows();
+    if app.sync.current.is_some_and(|key| !rows.iter().any(|row| row.key() == key)) {
+        app.sync.current = None;
+    }
+    // The pane's keys, before the map's shortcuts see them: `[` and `]` step through the rows
+    // (unless a field is typing), ⌘↵ syncs (also from the note).
+    let mut keys = WidgetOut::default();
+    let typing = ctx.egui_wants_keyboard_input();
+    let note_focused = ctx.memory(|memory| memory.has_focus(Id::new(NOTE_ID)));
+    if (!typing || note_focused) && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::Enter)) {
+        keys.sync = true;
+    }
+    if !typing {
+        for (key, delta) in [(Key::OpenBracket, -1), (Key::CloseBracket, 1)] {
+            if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key))
+                && let Some(index) = app.sync.step(&rows, delta)
+            {
+                keys.go = rows.get(index).map(Row::key);
+            }
+        }
+    }
     // Under the header (the macOS toolbar band is taller), at the Sync button's right edge.
     let header_h = if app.ui.mac_inset() { crate::MAC_BAND } else { 44.0 };
     let menu_was_open = app.sync.menu_open;
@@ -667,13 +1073,9 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     // The anchored area takes its first frame's size from `default_size`; without it the
     // scroll area inherits egui's 400-point default and the widget stops halfway down.
     let max_h = (ctx.content_rect().height() - 140.0).max(220.0);
-    // The flight (or failure) card stays above the scroll area so it is visible even when the
-    // human had scrolled to the agent and note.
-    let job_card = app.sync.job.as_ref().is_some_and(|job| job.in_flight() || job.failed()) || app.sync.blocker().is_some();
     // A fixed, bounded viewport: an anchored Area that grows with its scrollable content would
     // chase its own height, and shrinking to measured content lets egui's clipping hide the rest.
-    let widget_h = max_h.min(620.0);
-    let scroll_h = (widget_h - 96.0 - if job_card { 86.0 } else { 0.0 }).max(140.0);
+    let widget_h = max_h.min(680.0);
     let area = egui::Area::new(Id::new("sync_widget"))
         .anchor(Align2::RIGHT_TOP, vec2(-8.0, header_h + 8.0))
         .default_size(vec2(WIDGET_W, widget_h))
@@ -688,9 +1090,16 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     ui.set_width(WIDGET_W - 2.0 * PAD);
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    out = widget_body(ui, &mut app.sync, &mut app.compose, &scope, scroll_h);
+                    out = widget_body(ui, &mut app.sync, &mut app.compose, &scope, &rows, widget_h - 34.0);
                 });
         });
+    out.sync |= keys.sync && app.sync.can_sync(&app.compose);
+    out.go = out.go.or(keys.go);
+    if let Some(key) = out.go
+        && let Some(row) = rows.iter().find(|row| row.key() == key)
+    {
+        fly_to(app, row);
+    }
 
     let escape = ctx.input(|input| input.key_pressed(Key::Escape));
     if escape {
@@ -759,11 +1168,19 @@ struct WidgetOut {
     scope: Option<bool>,
     /// Cancel this open record.
     cancel: Option<String>,
+    /// Show this row's card on the canvas (its key).
+    go: Option<u64>,
 }
 
-/// The widget's frame contents: header, last sync, the diffs, agent, note and action.
-fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, scope: &str, scroll_h: f32) -> WidgetOut {
+/// The note field's id, so ⌘↵ syncs from it.
+const NOTE_ID: &str = "sync_note";
+
+/// The widget's frame contents: the header (scope, cards waiting, stepper), the cards and the
+/// folded code in a scroll area, and the sticky footer (agent, note, action) that stays in view
+/// while the list scrolls.
+fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, scope: &str, rows: &[Row], widget_h: f32) -> WidgetOut {
     let mut out = WidgetOut::default();
+    let top = ui.cursor().top();
 
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
@@ -782,15 +1199,10 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
             }
         });
     });
-    ui.add_space(7.0);
-    let covers = if state.all_pages { "every page".to_string() } else { scope.to_string() };
-    ui.label(egui::RichText::new(covers).font(regular(11.0)).color(INK));
-    ui.add_space(6.0);
-    let last_line = match &state.last {
-        Some(last) => last_line(last),
-        None => "first sync".to_string(),
-    };
-    ui.label(egui::RichText::new(last_line).font(mono(9.0)).color(MUTED));
+    ui.add_space(12.0);
+    if let Some(go) = header(ui, state, rows) {
+        out.go = Some(go);
+    }
     if state.dirty {
         ui.add_space(7.0);
         ui.label(egui::RichText::new("the map changed since this diff").font(mono(8.5)).color(ACCENT));
@@ -817,26 +1229,66 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
     }
     ui.add_space(if carded { 9.0 } else { 7.0 });
     divider(ui);
-    ui.add_space(7.0);
 
-    // The widget hugs its content, as the design draws it: the viewport takes the height the
-    // content measured last frame and scrolls only past the window's height.
+    // The list scrolls between the header and the footer; it hugs its content, as the design
+    // draws it, and scrolls only past the window's height.
+    let footer_h = if state.footer_h > 0.0 { state.footer_h } else { 150.0 };
+    let scroll_h = (widget_h - (ui.cursor().top() - top) - footer_h).max(120.0);
     let fit = if state.content_h > 0.0 { state.content_h.min(scroll_h) } else { scroll_h };
     let scrolled =
         egui::ScrollArea::vertical().id_salt("sync_widget_body").max_height(fit).min_scrolled_height(fit).auto_shrink([false, false]).show(
             ui,
             |ui| {
                 ui.set_width(ui.available_width());
+                ui.add_space(5.0);
                 if let Some(error) = state.error.clone() {
                     error_block(ui, &error);
                     ui.add_space(10.0);
                 }
-
-                match state.diff.as_ref() {
-                    Some(diff) => {
-                        design_section(ui, &diff.map);
-                        ui.add_space(7.0);
-                        code_section(ui, state.last.as_ref(), &diff.code);
+                match state.diff.as_ref().map(|diff| diff.code.clone()) {
+                    Some(code) => {
+                        let covers = if state.all_pages { "every page" } else { scope };
+                        if let Some(include) = include_line(ui, covers, !rows.is_empty()) {
+                            if include {
+                                state.excluded.clear();
+                            } else {
+                                state.excluded.extend(rows.iter().flat_map(|row| row.cards.iter().copied()));
+                            }
+                        }
+                        if rows.is_empty() {
+                            ui.add_space(7.0);
+                            ui.label(egui::RichText::new("No design changes since the last sync.").font(regular(10.5)).color(MUTED));
+                            ui.add_space(7.0);
+                        }
+                        let mut clicked = None;
+                        let mut toggled = None;
+                        for row in rows {
+                            let current = state.current == Some(row.key());
+                            let row_out = row_ui(ui, row, current, row.left_out(&state.excluded));
+                            if row_out.toggle {
+                                toggled = Some(row.clone());
+                            } else if row_out.go {
+                                clicked = Some(row.key());
+                            }
+                        }
+                        if let Some(row) = toggled {
+                            state.toggle(&row);
+                        }
+                        if let Some(key) = clicked {
+                            state.current = Some(key);
+                            out.go = Some(key);
+                        }
+                        ui.add_space(4.0);
+                        divider(ui);
+                        ui.add_space(9.0);
+                        if code_line(ui, state.last.as_ref(), &code, state.code_open) {
+                            state.code_open = !state.code_open;
+                        }
+                        if state.code_open {
+                            ui.add_space(4.0);
+                            code_section(ui, state.last.as_ref(), &code);
+                        }
+                        ui.add_space(9.0);
                     }
                     None => {
                         ui.add_space(5.0);
@@ -849,58 +1301,9 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
                                 ui.label(egui::RichText::new("No diff read yet.").font(regular(11.0)).color(MUTED));
                             }
                         });
+                        ui.add_space(9.0);
                     }
                 }
-
-                ui.add_space(7.0);
-                divider(ui);
-                ui.add_space(7.0);
-                ui.label(egui::RichText::new("AGENT").font(mono(8.5)).color(MUTED));
-                ui.add_space(7.0);
-                // The composer's agent button and menu: the same agent, chosen the same way.
-                if let Some(target) = agent_button(ui, state, compose) {
-                    compose.choose(target);
-                }
-
-                ui.add_space(7.0);
-                ui.label(egui::RichText::new("NOTE FOR THIS SYNC").font(mono(8.5)).color(MUTED));
-                ui.add_space(7.0);
-                note_field(ui, &mut state.note);
-
-                ui.add_space(7.0);
-                let syncing = state.starting || state.in_flight();
-                let locked = state.locked();
-                let target = compose.target.as_ref();
-                let ready = state.diff.as_ref().is_some_and(|diff| diff.ok);
-                let enabled = !locked && target.is_some() && ready && state.has_work();
-                let label = if syncing {
-                    "Syncing…".to_string()
-                } else {
-                    match target {
-                        Some(target) => format!("Sync with {}", kind_label(target.kind())),
-                        None => "Sync".to_string(),
-                    }
-                };
-                if action_button(ui, &label, enabled, syncing) {
-                    out.sync = true;
-                }
-                ui.add_space(7.0);
-                let hint = if state.blocker().is_some() {
-                    "Sync waits until the open record is committed or cancelled."
-                } else if target.is_none() {
-                    if compose.targets.is_empty() { "No agent is available in this workspace yet." } else { "Choose an agent to sync." }
-                } else if syncing {
-                    "The map stays editable while the sync runs."
-                } else if state.busy {
-                    "Reading the diff…"
-                } else if !ready {
-                    "Refresh the diff to sync."
-                } else if !state.has_work() {
-                    "Change the map or add a note to sync."
-                } else {
-                    "The map stays editable."
-                };
-                ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
             },
         );
     let measured = scrolled.content_size.y;
@@ -908,7 +1311,328 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
         state.content_h = measured;
         ui.ctx().request_repaint();
     }
+
+    if footer(ui, state, compose, rows) {
+        out.sync = true;
+    }
     out
+}
+
+/// `14 cards waiting`, `12 in this Sync · 2 keep waiting · since 519ac2f`, and the stepper
+/// `‹ 3 / 14 ›` with its `[ ] step` hint. Returns the row a stepper arrow moved to.
+fn header(ui: &mut Ui, state: &mut State, rows: &[Row]) -> Option<u64> {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
+    let total = rows.len();
+    let title = match (&state.diff, total) {
+        (None, _) if state.busy => "Reading the diff…".to_string(),
+        (None, _) => "Sync".to_string(),
+        (Some(_), 0) => "Nothing waiting".to_string(),
+        (Some(_), 1) => "1 card waiting".to_string(),
+        (Some(_), n) => format!("{n} cards waiting"),
+    };
+    let stepper_w = 84.0;
+    let room = (rect.width() - if total > 0 { stepper_w + 12.0 } else { 0.0 }).max(40.0);
+    let shown = widgets::elide_font(ui, &title, room, semibold(16.0));
+    ui.painter().text(pos2(rect.left(), rect.top() + 11.0), Align2::LEFT_CENTER, shown, semibold(16.0), INK);
+    let line = widgets::elide_font(ui, &header_line(state, rows), room, mono(8.0));
+    ui.painter().text(pos2(rect.left(), rect.top() + 33.0), Align2::LEFT_CENTER, line, mono(8.0), MUTED);
+    if total == 0 {
+        return None;
+    }
+    let pill = Rect::from_min_size(pos2(rect.right() - stepper_w, rect.top()), vec2(stepper_w, 24.0));
+    ui.painter().rect_filled(pill, CornerRadius::same(12), PANEL);
+    ui.painter().rect_stroke(pill, CornerRadius::same(12), Stroke::new(1.0, BORDER), StrokeKind::Inside);
+    let at = state.current.and_then(|key| rows.iter().position(|row| row.key() == key));
+    let count = match at {
+        Some(at) => format!("{} / {total}", at + 1),
+        None => format!("– / {total}"),
+    };
+    ui.painter().text(pill.center(), Align2::CENTER_CENTER, count, regular(11.0), INK);
+    ui.painter().text(pos2(pill.center().x, pill.bottom() + 11.0), Align2::CENTER_CENTER, "[ ]  step", mono(8.0), FAINT);
+    let mut moved = None;
+    for (delta, glyph, zone, label) in [
+        (-1, "‹", Rect::from_min_size(pill.min, vec2(26.0, pill.height())), "Previous waiting card"),
+        (1, "›", Rect::from_min_size(pos2(pill.right() - 26.0, pill.top()), vec2(26.0, pill.height())), "Next waiting card"),
+    ] {
+        let response = ui.interact(zone, Id::new(("sync_step", delta)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        a11y::button(&response, label);
+        let response = response.on_hover_text(format!("{label}  {}", if delta < 0 { "[" } else { "]" }));
+        ui.painter().text(zone.center(), Align2::CENTER_CENTER, glyph, regular(13.0), if response.hovered() { ACCENT } else { MUTED });
+        if response.clicked()
+            && let Some(index) = state.step(rows, delta)
+        {
+            moved = rows.get(index).map(Row::key);
+        }
+    }
+    moved
+}
+
+/// `12 in this Sync · 2 keep waiting · since 519ac2f`.
+fn header_line(state: &State, rows: &[Row]) -> String {
+    let since = match state.last.as_ref().map(|last| short_commit(&last.commit)).filter(|commit| !commit.is_empty()) {
+        Some(commit) => format!("since {commit}"),
+        None if state.last.is_some() => "since the last sync".to_string(),
+        None => "first sync".to_string(),
+    };
+    if state.diff.is_none() || rows.is_empty() {
+        return since;
+    }
+    let included = state.included(rows);
+    let waiting = rows.len() - included;
+    match waiting {
+        0 => format!("{included} in this Sync · {since}"),
+        1 => format!("{included} in this Sync · 1 keeps waiting · {since}"),
+        n => format!("{included} in this Sync · {n} keep waiting · {since}"),
+    }
+}
+
+/// The line above the list: what the scope covers, and `include: all · none`. Returns `Some(true)`
+/// for all, `Some(false)` for none.
+fn include_line(ui: &mut Ui, covers: &str, rows: bool) -> Option<bool> {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+    let mut picked = None;
+    let mut x = rect.right() - 4.0;
+    if rows {
+        // Right to left: `none`, ` · `, `all`, `include: `.
+        for (label, value) in [("none", false), ("all", true)] {
+            let w = text_width(ui, label, mono(8.5));
+            let zone = Rect::from_min_size(pos2(x - w, rect.top()), vec2(w, rect.height()));
+            let response =
+                ui.interact(zone.expand(2.0), Id::new(("sync_include", value)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+            a11y::button(&response, if value { "Include every card" } else { "Leave every card out" });
+            let ink = if response.hovered() { ACCENT } else { MUTED };
+            ui.painter().text(pos2(zone.left(), rect.center().y), Align2::LEFT_CENTER, label, mono(8.5), ink);
+            if response.clicked() {
+                picked = Some(value);
+            }
+            x = zone.left() - text_width(ui, " · ", mono(8.5));
+            if value {
+                x = zone.left();
+            } else {
+                ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, " · ", mono(8.5), FAINT);
+            }
+        }
+        let label = "include: ";
+        x -= text_width(ui, label, mono(8.5));
+        ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, label, mono(8.5), FAINT);
+    }
+    let room = (x - rect.left() - 10.0).max(30.0);
+    let covers = widgets::elide_font(ui, covers, room, mono(8.5));
+    ui.painter().text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, covers, mono(8.5), FAINT);
+    picked
+}
+
+/// What a row asked for.
+#[derive(Default)]
+struct RowOut {
+    /// The row, or its →, was clicked: make it current and show its card.
+    go: bool,
+    /// Its checkbox was clicked.
+    toggle: bool,
+}
+
+/// One waiting card: mark, name and sub line, the include checkbox and →; the current row is
+/// filled, barred in amber and lists its changed layers.
+fn row_ui(ui: &mut Ui, row: &Row, current: bool, left_out: bool) -> RowOut {
+    let width = ui.available_width();
+    let listed = if current { row.details.len().min(DETAILS) + usize::from(row.details.len() > DETAILS) } else { 0 };
+    let height = ROW_H + if listed > 0 { 4.0 + listed as f32 * DETAIL_H } else { 0.0 };
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    let id = Id::new(("sync_row", row.key()));
+    let arrow = Rect::from_min_size(pos2(rect.right() - 26.0, rect.top() + 9.0), vec2(26.0, 22.0));
+    let check = Rect::from_min_size(pos2(arrow.left() - 16.0 - 18.0, rect.top() + 11.0), vec2(18.0, 18.0));
+    let check_response = ui.interact(check.expand(3.0), id.with("check"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let include = if left_out { format!("Include {}", row.name) } else { format!("Leave {} out", row.name) };
+    a11y::button(&check_response, &include);
+    let arrow_response = row.navigable().then(|| {
+        let response = ui.interact(arrow, id.with("go"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+        a11y::button(&response, &format!("Show {} on the map", row.name));
+        response.on_hover_text("Show it on the map")
+    });
+    let response = if row.navigable() { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
+    a11y::button(&response, &row.name);
+    let painter = ui.painter();
+    // The current row reaches into the widget's padding, with an amber bar on its left.
+    let band = Rect::from_min_max(pos2(rect.left() - 12.0, rect.top()), pos2(rect.right() + 6.0, rect.bottom()));
+    if current {
+        painter.rect_filled(band, CornerRadius::ZERO, ROW_HOT);
+        painter.rect_filled(Rect::from_min_size(band.min, vec2(3.0, band.height())), CornerRadius::ZERO, AMBER);
+    } else if response.hovered() {
+        painter.rect_filled(band, CornerRadius::ZERO, SOFT);
+    }
+    let dim = |color: Color32| if left_out { color.gamma_multiply(0.55) } else { color };
+    painter.text(pos2(rect.left() + 4.0, rect.top() + 15.0), Align2::CENTER_CENTER, row.mark.glyph(), mono(13.0), dim(row.mark.color()));
+    let x = rect.left() + 18.0;
+    let room = (check.left() - 10.0 - x).max(30.0);
+    let removed = row.mark == Mark::Removed;
+    let ink = if left_out {
+        FAINT
+    } else if removed {
+        MUTED
+    } else {
+        INK
+    };
+    let name = widgets::elide_font(ui, &row.name, room, regular(12.0));
+    let galley = painter.layout_no_wrap(name, regular(12.0), ink);
+    let name_at = pos2(x, rect.top() + 15.0 - galley.size().y / 2.0);
+    let name_w = galley.size().x;
+    painter.galley(name_at, galley, ink);
+    if removed {
+        let y = rect.top() + 15.5;
+        painter.line_segment([pos2(x, y), pos2(x + name_w, y)], Stroke::new(1.0, ink));
+    }
+    let (sub, sub_ink) = if left_out {
+        ("left out · keeps waiting", AMBER)
+    } else if removed {
+        (row.sub.as_str(), DANGER)
+    } else {
+        (row.sub.as_str(), MUTED)
+    };
+    let sub = widgets::elide_font(ui, sub, room, mono(8.5));
+    painter.text(pos2(x, rect.top() + 31.0), Align2::LEFT_CENTER, sub, mono(8.5), sub_ink);
+    // The include checkbox: ticked in the accent, empty and outlined when left out.
+    let hot = check_response.hovered();
+    if left_out {
+        painter.rect_filled(check, CornerRadius::same(4), PANEL);
+        painter.rect_stroke(check, CornerRadius::same(4), Stroke::new(1.2, if hot { ACCENT } else { FAINT }), StrokeKind::Inside);
+    } else {
+        painter.rect_filled(check, CornerRadius::same(4), if hot { ACCENT_HOVER } else { ACCENT });
+        let tick = [
+            pos2(check.left() + 4.5, check.center().y),
+            pos2(check.left() + 7.8, check.bottom() - 5.0),
+            pos2(check.right() - 4.0, check.top() + 5.0),
+        ];
+        painter.add(egui::Shape::line(tick.to_vec(), Stroke::new(1.6, Color32::WHITE)));
+    }
+    if let Some(arrow_response) = arrow_response.as_ref() {
+        let fill = if arrow_response.hovered() { SOFT } else { PANEL };
+        painter.rect_filled(arrow, CornerRadius::same(5), fill);
+        painter.rect_stroke(arrow, CornerRadius::same(5), Stroke::new(1.0, BORDER), StrokeKind::Inside);
+        painter.text(arrow.center(), Align2::CENTER_CENTER, "→", regular(11.0), MAP_INK);
+    }
+    if listed > 0 {
+        let column = x + 18.0;
+        let fields_x = column + ((rect.right() - column) * 0.48).max(80.0);
+        let shown = row.details.iter().take(DETAILS).map(|(layer, what)| (layer.clone(), what.clone()));
+        let more = (row.details.len() > DETAILS).then(|| (format!("+{} more", row.details.len() - DETAILS), String::new()));
+        for (index, (layer, what)) in shown.chain(more).enumerate() {
+            let y = rect.top() + ROW_H + 2.0 + (index as f32 + 0.5) * DETAIL_H;
+            let layer = widgets::elide_font(ui, &layer, (fields_x - column - 8.0).max(30.0), mono(9.0));
+            painter.text(pos2(column, y), Align2::LEFT_CENTER, layer, mono(9.0), INK);
+            let what = widgets::elide_font(ui, &what, (rect.right() - fields_x).max(30.0), mono(9.0));
+            painter.text(pos2(fields_x, y), Align2::LEFT_CENTER, what, mono(9.0), MUTED);
+        }
+    }
+    let toggle = check_response.clicked();
+    let arrow_clicked = arrow_response.is_some_and(|response| response.clicked());
+    RowOut { go: !toggle && (response.clicked() || arrow_clicked), toggle }
+}
+
+/// `▸  Code since 519ac2f   11 files · 5 commits`: the code section folded to one line. Returns
+/// whether it was clicked (to fold or unfold).
+fn code_line(ui: &mut Ui, last: Option<&Last>, code: &CodeDiff, open: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let title = match code_since(last, code) {
+        Some(commit) => format!("Code since {}", short_commit(&commit)),
+        None if last.is_none() => "Code · first sync".to_string(),
+        None => "Code since the last sync".to_string(),
+    };
+    a11y::button(&response, &if open { format!("Fold {title}") } else { format!("Unfold {title}") });
+    let hot = response.hovered();
+    let glyph = if open { "▾" } else { "▸" };
+    ui.painter().text(pos2(rect.left() + 4.0, rect.center().y), Align2::CENTER_CENTER, glyph, regular(10.0), if hot { ACCENT } else { MUTED });
+    let x = rect.left() + 18.0;
+    let galley = ui.painter().layout_no_wrap(title, regular(11.0), if hot { ACCENT } else { INK });
+    let title_w = galley.size().x;
+    ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, INK);
+    let files = code.files.len();
+    let commits = code.commits.len();
+    let counts = if last.is_none() {
+        "the map is the baseline".to_string()
+    } else if files == 0 && commits == 0 {
+        "no changes".to_string()
+    } else {
+        format!("{} · {}", plural(files, "file"), plural(commits, "commit"))
+    };
+    let room = (rect.right() - x - title_w - 12.0).max(30.0);
+    let counts = widgets::elide_font(ui, &counts, room, mono(8.5));
+    ui.painter().text(pos2(x + title_w + 12.0, rect.center().y), Align2::LEFT_CENTER, counts, mono(8.5), MUTED);
+    response.clicked()
+}
+
+/// The commit the code is compared with: the last sync's, or the one the node names.
+fn code_since(last: Option<&Last>, code: &CodeDiff) -> Option<String> {
+    last.map(|last| last.commit.trim().to_string())
+        .filter(|commit| !commit.is_empty())
+        .or_else(|| code.from.as_deref().map(str::trim).filter(|commit| !commit.is_empty()).map(str::to_string))
+}
+
+/// The sticky footer on its soft band: the agent button, the note, and the full-width action
+/// `Sync 12 of 14 cards with codex  ⌘↵`. Returns whether the action was clicked.
+fn footer(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, rows: &[Row]) -> bool {
+    let band = ui.painter().add(egui::Shape::Noop);
+    let top = ui.cursor().top();
+    ui.add_space(13.0);
+    // The composer's agent button and menu: the same agent, chosen the same way.
+    if let Some(target) = agent_button(ui, state, compose) {
+        compose.choose(target);
+    }
+    ui.add_space(8.0);
+    note_field(ui, &mut state.note);
+    ui.add_space(10.0);
+    let syncing = state.starting || state.in_flight();
+    let target = compose.target.as_ref();
+    let ready = state.diff.as_ref().is_some_and(|diff| diff.ok);
+    let enabled = state.can_sync(compose);
+    let label =
+        if syncing { "Syncing…".to_string() } else { sync_label(state.included(rows), rows.len(), target.map(|target| kind_label(target.kind()))) };
+    let clicked = action_button(ui, &label, enabled, syncing);
+    let hint = if state.blocker().is_some() {
+        Some("Sync waits until the open record is committed or cancelled.")
+    } else if target.is_none() {
+        Some(if compose.targets.is_empty() { "No agent is available in this workspace yet." } else { "Choose an agent to sync." })
+    } else if syncing {
+        Some("The map stays editable while the sync runs.")
+    } else if state.busy {
+        Some("Reading the diff…")
+    } else if !ready {
+        Some("Refresh the diff to sync.")
+    } else if !state.has_work() {
+        Some(if rows.is_empty() { "Change the map or add a note to sync." } else { "Include a card or add a note to sync." })
+    } else {
+        None
+    };
+    if let Some(hint) = hint {
+        ui.add_space(7.0);
+        ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
+    }
+    let bottom = ui.cursor().top();
+    // The band reaches the widget's edges, under the frame's padding.
+    let max = ui.max_rect();
+    let rect = Rect::from_min_max(pos2(max.left() - 19.0, top), pos2(max.right() + 17.0, bottom + 17.0));
+    ui.painter().set(band, egui::Shape::rect_filled(rect, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, SOFT));
+    ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, BORDER));
+    let measured = bottom - top + 2.0;
+    if (measured - state.footer_h).abs() > 0.5 {
+        state.footer_h = measured;
+        ui.ctx().request_repaint();
+    }
+    clicked
+}
+
+/// `Sync 12 of 14 cards with codex`, `Sync 14 cards with codex`, or `Sync with codex` when no
+/// card waits.
+fn sync_label(included: usize, total: usize, kind: Option<&str>) -> String {
+    let cards = match (included, total) {
+        (_, 0) => String::new(),
+        (included, total) if included == total => format!(" {}", plural(total, "card")),
+        (included, total) => format!(" {included} of {}", plural(total, "card")),
+    };
+    match kind {
+        Some(kind) => format!("Sync{cards} with {kind}"),
+        None => format!("Sync{cards}"),
+    }
 }
 
 /// The header's ×.
@@ -1120,69 +1844,10 @@ fn error_block(ui: &mut Ui, error: &str) {
         });
 }
 
-/// `DESIGN CHANGES`: the counts, then up to four names of each kind.
-fn design_section(ui: &mut Ui, map: &MapDiff) {
-    ui.label(egui::RichText::new("DESIGN CHANGES").font(mono(9.0)).color(ACCENT));
-    if map.total() == 0 {
-        ui.add_space(7.0);
-        ui.label(egui::RichText::new("No design changes since the last sync.").font(regular(10.5)).color(MUTED));
-        return;
-    }
-    if !map.added.is_empty() {
-        change_group(ui, "+", "added", MAP_INK, map.added.iter().map(|card| card.name.as_str()));
-    }
-    if !map.changed.is_empty() {
-        change_group(ui, "~", "changed", ACCENT, map.changed.iter().map(|change| change.name.as_str()));
-    }
-    if !map.removed.is_empty() {
-        change_group(ui, "−", "removed", DANGER, map.removed.iter().map(|card| card.name.as_str()));
-    }
-}
-
-/// `+  3 added` in the group's colour, then its names on one muted line (`A · B · C`).
-fn change_group<'a>(ui: &mut Ui, marker: &str, label: &str, color: Color32, names: impl Iterator<Item = &'a str>) {
-    let names: Vec<&str> = names.collect();
-    ui.add_space(7.0);
-    ui.label(egui::RichText::new(format!("{marker}  {} {label}", names.len())).font(regular(10.5)).color(color));
-    if names.is_empty() {
-        return;
-    }
-    ui.add_space(7.0);
-    indented_name(ui, &names_line(&names), MUTED);
-}
-
-/// Up to [`NAMES`] names joined by ` · `, then `+N more`.
-fn names_line(names: &[&str]) -> String {
-    let mut line = names.iter().take(NAMES).copied().collect::<Vec<_>>().join(" · ");
-    if names.len() > NAMES {
-        line.push_str(&format!(" · +{} more", names.len() - NAMES));
-    }
-    line
-}
-
-/// A line under a count, indented under its label and elided to the widget's width.
-fn indented_name(ui: &mut Ui, name: &str, color: Color32) {
-    ui.horizontal(|ui| {
-        ui.add_space(14.0);
-        let room = ui.available_width().max(40.0);
-        let shown = widgets::elide_font(ui, name, room, regular(10.5));
-        ui.label(egui::RichText::new(shown).font(regular(10.5)).color(color));
-    });
-}
-
-/// `CODE SINCE <commit>`: file and commit counts, their lists, and the service's note.
+/// The unfolded code section: the scope it is limited to, file and commit counts, the files, and
+/// the service's note.
 fn code_section(ui: &mut Ui, last: Option<&Last>, code: &CodeDiff) {
     let first = last.is_none();
-    let since = last
-        .map(|last| last.commit.trim().to_string())
-        .filter(|commit| !commit.is_empty())
-        .or_else(|| code.from.as_deref().map(str::trim).filter(|commit| !commit.is_empty()).map(str::to_string));
-    let title = match (first, since) {
-        (true, _) => "CODE SINCE FIRST SYNC".to_string(),
-        (false, Some(commit)) => format!("CODE SINCE {}", short_commit(&commit)),
-        (false, None) => "CODE SINCE THE LAST SYNC".to_string(),
-    };
-    ui.label(egui::RichText::new(title).font(mono(9.0)).color(MUTED));
     if !code.scope.is_empty() {
         let shown: Vec<&str> = code.scope.iter().take(FILES).map(String::as_str).collect();
         let mut line = format!("in {}", shown.join(", "));
@@ -1195,15 +1860,8 @@ fn code_section(ui: &mut Ui, last: Option<&Last>, code: &CodeDiff) {
     ui.add_space(7.0);
     if first {
         ui.label(egui::RichText::new("first sync: the map is the baseline.").font(regular(10.5)).color(MUTED));
-    } else {
-        let files = code.files.len();
-        let commits = code.commits.len();
-        if files == 0 && commits == 0 && code.note.as_deref().unwrap_or("").trim().is_empty() {
-            ui.label(egui::RichText::new("No code changes since the last sync.").font(regular(10.5)).color(MUTED));
-        } else {
-            let counts = format!("{files} file{} · {commits} commit{}", if files == 1 { "" } else { "s" }, if commits == 1 { "" } else { "s" });
-            ui.label(egui::RichText::new(counts).font(regular(9.5)).color(MUTED));
-        }
+    } else if code.files.is_empty() && code.commits.is_empty() && code.note.as_deref().unwrap_or("").trim().is_empty() {
+        ui.label(egui::RichText::new("No code changes since the last sync.").font(regular(10.5)).color(MUTED));
     }
     for file in code.files.iter().take(FILES) {
         ui.add_space(7.0);
@@ -1230,7 +1888,8 @@ fn file_row(ui: &mut Ui, file: &FileDelta) {
 /// The agent button and its menu, shared with the composer; the pick, if any.
 fn agent_button(ui: &mut Ui, state: &mut State, compose: &crate::compose::State) -> Option<Target> {
     let label = agent_menu::button_label(&compose.targets, compose.target.as_ref(), "Choose an agent");
-    let width = agent_menu::button_width(ui, &label, 120.0, ui.available_width().min(280.0));
+    // Full width in the footer, as the design draws it.
+    let width = ui.available_width();
     let response =
         agent_menu::button(ui, Id::new("sync_agent_button"), &compose.targets, compose.target.as_ref(), &label, vec2(width, 28.0), state.menu_open);
     if response.clicked() {
@@ -1288,11 +1947,12 @@ fn note_field(ui: &mut Ui, note: &mut String) {
             ui.set_width(ui.available_width());
             ui.add(
                 egui::TextEdit::multiline(note)
+                    .id(Id::new(NOTE_ID))
                     .frame(egui::Frame::NONE)
                     .font(regular(10.5))
                     .desired_width(f32::INFINITY)
                     .desired_rows(1)
-                    .hint_text(egui::RichText::new("Add a note for the agent…").font(regular(10.5)).color(FAINT)),
+                    .hint_text(egui::RichText::new("Note for this Sync…").font(regular(10.5)).color(FAINT)),
             );
         });
     if note.chars().count() > MAX_NOTE_CHARS {
@@ -1300,19 +1960,104 @@ fn note_field(ui: &mut Ui, note: &mut String) {
     }
 }
 
-/// The widget's one action: accent when it can run, soft while it cannot.
+/// The widget's one action, full width with its ⌘↵ at the right: accent when it can run, soft
+/// while it cannot.
 fn action_button(ui: &mut Ui, label: &str, enabled: bool, busy: bool) -> bool {
-    // As wide as its label with 16 pt either side, 26 pt tall.
-    let width = text_width(ui, label, semibold(10.5)) + 32.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 26.0), if enabled { Sense::click() } else { Sense::hover() });
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), if enabled { Sense::click() } else { Sense::hover() });
     let response = response.on_hover_cursor(if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default });
     a11y::button(&response, label);
     let fill = if enabled { if response.hovered() { ACCENT_HOVER } else { ACCENT } } else { Color32::from_rgb(0xE8, 0xE5, 0xE0) };
-    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
     let ink = if enabled { Color32::WHITE } else { FAINT };
-    let _ = busy;
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(10.5), ink);
+    let room = (rect.width() - 80.0).max(40.0);
+    let shown = widgets::elide_font(ui, label, room, regular(13.0));
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, shown, regular(13.0), ink);
+    if !busy {
+        let hint = format!("{}↵", if crate::shortcuts::platform() == figcraft_engine::keymap::Platform::Mac { "⌘" } else { "Ctrl+" });
+        ui.painter().text(pos2(rect.right() - 14.0, rect.center().y), Align2::RIGHT_CENTER, hint, mono(8.5), ink.gamma_multiply(0.7));
+    }
     response.clicked() && enabled
+}
+
+/// Show `row`'s card: open its page if another one is open, then fit the card (and room for its
+/// chip) in the view. A deleted card has nowhere to go.
+fn fly_to(app: &mut FigApp, row: &Row) {
+    let Some(page) = row.page else { return };
+    if row.shown.is_empty() {
+        return;
+    }
+    let exists = app.session.doc().is_ok_and(|doc| doc.node(NodeId(page)).is_some_and(|node| node.is_page()));
+    if !exists {
+        return;
+    }
+    if app.session.page().ok().map(|page| page.0) != Some(page) && app.run("page.select", json!({"id": page})).is_none() {
+        return;
+    }
+    let ids: Vec<NodeId> = row.shown.iter().map(|id| NodeId(*id)).collect();
+    let Ok(ds) = app.session.ds_mut() else { return };
+    let Some(bounds) = ds.doc.bounds_of(&ids) else { return };
+    // A margin around the card, more below it for its chip, so the cards beside it stay in view.
+    let pad = (bounds.width().max(bounds.height()) * 0.15).max(24.0);
+    let fit = figcraft_doc::geom::Rect::new(bounds.x0 - pad, bounds.y0 - pad, bounds.x1 + pad, bounds.y1 + pad * 2.0);
+    ds.view.fit(fit, 1.0);
+}
+
+/// The canvas hook while the pane is open: each waiting card on the open page wears its `+` / `~`
+/// badge at its top-right corner, and the current card an amber outline with a dark chip under it
+/// (`~ 3 / 14 · tabs · tab Mindmap · 6 separators`). Drawn by `canvas::show` on the canvas painter.
+pub(crate) fn canvas_marks(app: &FigApp, painter: &egui::Painter) {
+    if !app.sync.open {
+        return;
+    }
+    let rows = app.sync.rows();
+    let (Ok(doc), Ok(page)) = (app.session.doc(), app.session.page()) else { return };
+    let total = rows.len();
+    for (index, row) in rows.iter().enumerate() {
+        let current = app.sync.current == Some(row.key());
+        let left_out = row.left_out(&app.sync.excluded);
+        let mut union: Option<Rect> = None;
+        for id in &row.shown {
+            let id = NodeId(*id);
+            if doc.page_of(id) != Some(page) {
+                continue;
+            }
+            let Some(quad) = crate::canvas::node_quad(app, doc, id) else { continue };
+            let bounds = Rect::from_points(&quad);
+            if !bounds.is_finite() {
+                continue;
+            }
+            union = Some(union.map_or(bounds, |u| u.union(bounds)));
+            if current {
+                let ring = bounds.expand(5.0);
+                painter.rect_stroke(ring, CornerRadius::same(6), Stroke::new(7.0, AMBER.gamma_multiply(0.28)), StrokeKind::Outside);
+                painter.rect_stroke(ring, CornerRadius::same(4), Stroke::new(2.5, AMBER), StrokeKind::Inside);
+            }
+            let color = if left_out { row.mark.color().gamma_multiply(0.5) } else { row.mark.color() };
+            let at = bounds.right_top();
+            painter.circle_filled(at, 8.0, color);
+            painter.circle_stroke(at, 8.0, Stroke::new(1.5, Color32::WHITE));
+            painter.text(at, Align2::CENTER_CENTER, row.mark.glyph(), mono(10.0), Color32::WHITE);
+        }
+        if let (true, Some(union)) = (current, union) {
+            let text = chip_text(row, index, total);
+            let galley = painter.layout_no_wrap(text, mono(9.0), Color32::WHITE);
+            let chip = Rect::from_min_size(pos2(union.left(), union.bottom() + 14.0), galley.size() + vec2(20.0, 12.0));
+            painter.rect_filled(chip, CornerRadius::same(5), INK);
+            painter.galley(chip.min + vec2(10.0, 6.0), galley, Color32::WHITE);
+        }
+    }
+}
+
+/// The current card's chip: `~ 3 / 14 · tabs · tab Mindmap · 6 separators`, or the row's sub line
+/// when it lists no layers.
+pub fn chip_text(row: &Row, index: usize, total: usize) -> String {
+    let mut parts = vec![format!("{} {} / {total}", row.mark.glyph(), index + 1)];
+    if row.details.is_empty() {
+        parts.push(row.sub.clone());
+    } else {
+        parts.extend(row.details.iter().take(3).map(|(layer, _)| layer.trim_start_matches(['+', '−', ' ']).to_string()));
+    }
+    parts.join(" · ")
 }
 
 /// Read the current document's snapshot and the page it is limited to (`None` for every page). The
@@ -1408,6 +2153,8 @@ fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, _snapsho
     };
     let note = app.sync.note.chars().take(MAX_NOTE_CHARS).collect::<String>();
     app.sync.node = Some(node.clone());
+    // The unticked cards stay out of the frozen map and the agent's work: they keep waiting.
+    let rows = app.sync.rows();
     let request = json!({
         "id": 1,
         "method": "sync",
@@ -1416,6 +2163,7 @@ fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, _snapsho
         "prompt": note,
         "session": node.session,
         "page": page,
+        "exclude": app.sync.excluded_ids(&rows),
     })
     .to_string();
     let (tx, rx) = mpsc::channel();
@@ -1423,7 +2171,7 @@ fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, _snapsho
     app.sync.busy = true;
     app.sync.starting = true;
     app.sync.error = None;
-    app.sync.applied = app.sync.diff.as_ref().map(|diff| diff.map.total()).unwrap_or(0);
+    app.sync.applied = app.sync.included(&rows);
     let address = node.address;
     let context = ctx.clone();
     let spawned = std::thread::Builder::new().name("figcraft-sync-start".into()).spawn(move || {
@@ -1623,18 +2371,15 @@ fn apply_job(app: &mut FigApp, ctx: &egui::Context, received: JobMsg) {
                 app.sync.job = Some(job);
                 match state.as_str() {
                     "done" => {
-                        // The applied changes are gone from the new baseline: start the next diff
-                        // from the map as it is now.
+                        // The applied cards are gone from the new baseline: start the next diff
+                        // from the map as it is now (the left-out cards still wait, still unticked).
                         app.sync.diff = None;
                         app.sync.snapshot = None;
                         app.sync.refresh = true;
                         app.sync.error = None;
-                        let changes = app.sync.applied;
-                        app.toast(if changes == 0 {
-                            "Synced".to_string()
-                        } else {
-                            format!("Synced · {changes} change{}", if changes == 1 { "" } else { "s" })
-                        });
+                        app.sync.current = None;
+                        let cards = app.sync.applied;
+                        app.toast(if cards == 0 { "Synced".to_string() } else { format!("Synced · {}", plural(cards, "card")) });
                     }
                     "failed" => {
                         let reason = app.sync.job.as_ref().and_then(|job| job.reason.clone()).unwrap_or_else(|| "The sync failed.".to_string());
@@ -1706,18 +2451,6 @@ fn ask(address: &str, request: &str, timeout: Duration) -> Result<String, String
     crate::node::ask(address, request, timeout)
 }
 
-/// `v<short commit> · <at>`, or what the service did say.
-fn last_line(last: &Last) -> String {
-    let commit = short_commit(&last.commit);
-    let at = last.at.trim();
-    match (commit.is_empty(), at.is_empty()) {
-        (false, false) => format!("v{commit} · {at}"),
-        (false, true) => format!("v{commit}"),
-        (true, false) => format!("synced {at}"),
-        (true, true) => "synced".to_string(),
-    }
-}
-
 /// The first seven characters of a commit hash.
 fn short_commit(commit: &str) -> String {
     commit.trim().chars().take(7).collect()
@@ -1744,3 +2477,7 @@ fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
 fn mono(size: f32) -> FontId {
     FontId::monospace(size)
 }
+
+#[cfg(test)]
+#[path = "sync_cards_tests.rs"]
+mod cards_tests;

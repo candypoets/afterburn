@@ -59,6 +59,8 @@ pub struct SyncPrompt<'a> {
     pub page_name: Option<&'a str>,
     pub context: &'a str,
     pub drift: &'a Drift,
+    /// Cards the human left out of this Sync (`Name (id N)`): they keep waiting.
+    pub left_out: &'a [String],
     pub last_sync: Option<&'a Baseline>,
     /// `{files, commits}` since the last Sync.
     pub code: &'a Value,
@@ -89,6 +91,24 @@ pub fn sync_prompt(sync: &SyncPrompt<'_>) -> String {
     } else {
         out.push_str("Design changes waiting since then (implement these):\n");
         out.push_str(&cards(sync.drift));
+    }
+    if !sync.left_out.is_empty() {
+        let shown: Vec<&str> = sync
+            .left_out
+            .iter()
+            .take(MAX_LISTED)
+            .map(String::as_str)
+            .collect();
+        let more = sync.left_out.len().saturating_sub(MAX_LISTED);
+        let tail = if more > 0 {
+            format!(" … and {more} more")
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "Left out of this Sync by the user (they keep waiting for the next one; do not build them): {}{tail}\n",
+            shown.join("; ")
+        ));
     }
     let page = sync
         .page
@@ -254,6 +274,7 @@ mod tests {
                 .collect(),
             changed: vec![json!({"id": 3, "name": "Status", "fields": ["characters", "fills"]})],
             removed: Vec::new(),
+            cards: Vec::new(),
         }
     }
 
@@ -303,6 +324,7 @@ mod tests {
             page_name: Some("Overview"),
             context: "MINDMAP CONTEXT",
             drift: &d,
+            left_out: &["IDE panes (id 40)".to_owned()],
             last_sync: Some(&sync),
             code: &code,
             trailer: "Mindmap-Sync: page=7 job=j1",
@@ -317,6 +339,10 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("Added: Retry (id 10)"), "{text}");
+        assert!(
+            text.contains("Left out of this Sync by the user (they keep waiting for the next one; do not build them): IDE panes (id 40)\n"),
+            "{text}"
+        );
         assert!(
             text.contains("(context only, already done): 1 commit, 1 file changed."),
             "{text}"
@@ -333,6 +359,7 @@ mod tests {
             added: Vec::new(),
             changed: Vec::new(),
             removed: Vec::new(),
+            cards: Vec::new(),
         };
         let text = sync_prompt(&SyncPrompt {
             drift: &empty,
@@ -344,6 +371,7 @@ mod tests {
                 page_name: None,
                 context: "",
                 drift: &d,
+                left_out: &[],
                 last_sync: None,
                 code: &json!({}),
                 trailer: "t",
@@ -351,6 +379,7 @@ mod tests {
             }
         });
         assert!(text.contains("Nothing is waiting"), "{text}");
+        assert!(!text.contains("Left out"), "{text}");
         assert!(!text.contains("NOTE FROM THE USER"), "{text}");
     }
 }

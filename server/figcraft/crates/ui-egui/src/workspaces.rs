@@ -26,9 +26,8 @@ const DEFAULT_SERVICE: &str = "127.0.0.1:47822";
 
 /// The list's width (the detail gets the rest of the window).
 const SIDEBAR: f32 = 300.0;
-/// One workspace row in the sidebar, and in the map's pane.
+/// One workspace row in the browser's sidebar.
 const ROW_H: f32 = 54.0;
-const PANE_ROW_H: f32 = 64.0;
 /// A machine row, and the quiet "+ New workspace" / "+ Add machine" rows.
 #[cfg(not(target_arch = "wasm32"))]
 const MACHINE_H: f32 = 30.0;
@@ -215,7 +214,7 @@ impl Workspace {
         MapState::of(&self.map)
     }
 
-    fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         if self.label.trim().is_empty() { &self.id } else { &self.label }
     }
 }
@@ -732,28 +731,28 @@ fn list_reply(address: &str) -> Result<ServiceReply, String> {
 
 /// A compact monitor-ish palette over the app's tokens: warm paper for the map client, the same
 /// accent as the map bar. Dark mode keeps the tokens' surfaces and lightens the inks.
-struct Skin {
-    bg: Color32,
-    panel: Color32,
-    border: Color32,
-    text: Color32,
-    muted: Color32,
-    faint: Color32,
-    accent: Color32,
-    accent_hover: Color32,
-    selected: Color32,
-    soft: Color32,
-    map_ink: Color32,
-    danger: Color32,
-    danger_bg: Color32,
+pub(crate) struct Skin {
+    pub(crate) bg: Color32,
+    pub(crate) panel: Color32,
+    pub(crate) border: Color32,
+    pub(crate) text: Color32,
+    pub(crate) muted: Color32,
+    pub(crate) faint: Color32,
+    pub(crate) accent: Color32,
+    pub(crate) accent_hover: Color32,
+    pub(crate) selected: Color32,
+    pub(crate) soft: Color32,
+    pub(crate) map_ink: Color32,
+    pub(crate) danger: Color32,
+    pub(crate) danger_bg: Color32,
     /// The dark Open map button and its label.
-    primary: Color32,
-    primary_hover: Color32,
-    on_primary: Color32,
+    pub(crate) primary: Color32,
+    pub(crate) primary_hover: Color32,
+    pub(crate) on_primary: Color32,
 }
 
 impl Skin {
-    fn of(t: &Tokens) -> Skin {
+    pub(crate) fn of(t: &Tokens) -> Skin {
         if t.dark {
             let danger = Color32::from_rgb(0xE8, 0x9A, 0x8A);
             Skin {
@@ -841,13 +840,18 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         detail(app, ui, &skin, detail_rect, band);
         ui.painter().line_segment([pos2(list.max.x, body.min.y), pos2(list.max.x, body.max.y)], Stroke::new(1.0, skin.border));
     });
+    // ⌃⌘O (or the palette) over the browser: the switcher hangs from its top left.
+    let anchor = Rect::from_min_size(ui.max_rect().min + vec2(10.0, band + 4.0), vec2(SIDEBAR - 20.0, 0.0));
+    crate::switcher::show(app, ui, anchor);
     // The New workspace modal first, so the Add machine modal it opens draws above it.
     crate::new_workspace::show(app, ui);
     crate::machine_modal::show(app, ui);
 }
 
-/// The togglable workspace pane beside an open map. It lists the selected machine's workspaces;
-/// clicking one with a map switches the map in place, the others open the browser for Init.
+/// The map's sidebar (design: `Sidebar pages · window`): the workspace switcher's head at the top,
+/// then the docked page tree. The head names the open workspace and where it runs; a click (or
+/// ⌃⌘O) opens the switcher under it. Clicking a workspace with a map there switches the map in
+/// place; the others open the browser for Init.
 pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     app.ws.poll();
@@ -865,97 +869,70 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     if let Some(host) = crate::node_hosts::poll(&mut app.ws.hosts) {
         use_host(app, &ctx, &host);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    app.ws.poll_lists();
     let skin = Skin::of(&Tokens::get(&ctx));
     let s = &skin;
     let area = ui.max_rect();
     ui.painter().rect_filled(area, CornerRadius::ZERO, s.panel);
-    let rows = app.ws.rows.clone();
-    let groups = grouped(&rows);
 
-    // WORKSPACES 6 and Refresh share one 32 pt head.
-    let head = format!("WORKSPACES {}", groups.len());
-    ui.painter().text(pos2(area.min.x + 14.0, area.min.y + 14.0), Align2::LEFT_TOP, head, mono(9.0), s.muted);
-    let refresh = Rect::from_min_size(pos2(area.min.x + 232.0, area.min.y + 8.0), vec2(56.0, 24.0));
-    let refresh_resp = ui.interact(refresh, Id::new("workspace_pane_refresh"), Sense::click());
-    a11y::button(&refresh_resp, "Refresh");
-    let ink = if refresh_resp.hovered() { s.text } else { s.muted };
-    ui.painter().text(pos2(refresh.min.x + 6.0, area.min.y + 14.0), Align2::LEFT_TOP, "Refresh", regular(10.0), ink);
-    if refresh_resp.clicked() {
-        app.ws.refresh(&ctx);
+    let head = Rect::from_min_size(area.min + vec2(10.0, 10.0), vec2(area.width() - 20.0, HEAD_H));
+    let (name, sub) = head_lines(app);
+    if head_ui(ui, s, head, &name, &sub, app.status.switcher_open) {
+        crate::switcher::toggle(app);
     }
 
-    let foot_h = 52.0;
-    let list = Rect::from_min_max(pos2(area.min.x, area.min.y + 32.0), pos2(area.max.x, area.max.y - foot_h));
-    let active = app.active_workspace.clone();
-    let mut chosen: Option<Workspace> = None;
-    ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
-        ui.set_clip_rect(list.intersect(ui.clip_rect()));
-        egui::ScrollArea::vertical().id_salt("workspace_pane_scroll").auto_shrink([false, false]).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            for (base, branches) in &groups {
-                let selected = active.as_deref().is_some_and(|id| branches.iter().any(|b| b.id == id));
-                if pane_row(ui, s, base, selected) {
-                    chosen = Some(base.clone());
-                }
-            }
-            if rows.is_empty() {
-                let (error, busy, started) = (app.ws.error.clone(), app.ws.busy.is_some(), app.ws.started);
-                empty_list(app, ui, s, &ctx, error.as_deref(), busy, started);
-            }
-        });
-    });
-    if let Some(w) = chosen {
-        if w.map_state() == MapState::Map {
-            if active.as_deref() != Some(w.id.as_str()) {
-                app.ws.act(&ctx, &w.id, false);
-            }
-        } else {
-            // Init happens in the browser, where the agent can be chosen.
-            app.ws.select(&w.id);
-            app.ui.home = true;
-        }
-    }
+    let tree = Rect::from_min_max(pos2(area.min.x, head.max.y + 24.0), area.max);
+    crate::page_tree::docked(app, ui, tree);
 
-    let foot = Rect::from_min_max(pos2(area.min.x, area.max.y - foot_h), area.max);
-    if app.ws.error.is_some() && !rows.is_empty() {
-        ui.painter().text(pos2(foot.min.x + 14.0, foot.min.y + 2.0), Align2::LEFT_TOP, "Could not reach the node.", mono(8.5), s.danger);
-    }
-    let all = Rect::from_min_size(pos2(foot.min.x + 8.0, foot.min.y + 14.0), vec2(120.0, 24.0));
-    let all_resp = ui.interact(all, Id::new("workspace_pane_all"), Sense::click());
-    a11y::button(&all_resp, "All workspaces");
-    let ink = if all_resp.hovered() { s.text } else { s.muted };
-    ui.painter().text(pos2(all.min.x + 6.0, all.center().y), Align2::LEFT_CENTER, "All workspaces", regular(10.5), ink);
-    if all_resp.clicked() {
-        app.ui.home = true;
-    }
+    crate::switcher::show(app, ui, head);
     crate::new_workspace::show(app, ui);
     crate::machine_modal::show(app, ui);
 }
 
-/// One workspace in the map's pane: name, path, agents, and the map state on the right.
-fn pane_row(ui: &mut Ui, s: &Skin, w: &Workspace, selected: bool) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), PANE_ROW_H), Sense::click());
-    let kind = w.map_state();
-    a11y::button(&resp, &format!("{} · {} · {}", w.name(), kind.badge(), agents_line(w)));
-    if selected {
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.selected);
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, s.soft);
+/// The switcher head's height.
+const HEAD_H: f32 = 46.0;
+
+/// The head's two lines: the open workspace's name, and `This computer · main · 3 agents`.
+fn head_lines(app: &FigApp) -> (String, String) {
+    let rows = &app.ws.rows;
+    let active = app.active_workspace.as_deref().and_then(|id| rows.iter().find(|w| w.id == id));
+    #[cfg(not(target_arch = "wasm32"))]
+    let machine = app.ws.hosts.selected.as_ref().map(|host| host.name.clone()).unwrap_or_else(|| "This computer".to_string());
+    #[cfg(target_arch = "wasm32")]
+    let machine = "This computer".to_string();
+    match active {
+        Some(w) => {
+            let base = grouped(rows).into_iter().find(|(_, members)| members.iter().any(|m| m.id == w.id)).map(|(base, _)| base);
+            let name = base.as_ref().unwrap_or(w).name().to_string();
+            (name, format!("{machine}  ·  {}  ·  {}", branch_label(w), pane_agents(w)))
+        }
+        None if app.ws.busy.is_some() || (rows.is_empty() && app.ws.error.is_none()) => ("Workspaces".to_string(), "Listing…".to_string()),
+        None => ("Choose a workspace".to_string(), machine),
     }
-    focus_ring(ui, s, rect.shrink(1.0), &resp, 0);
-    let badge_x = rect.min.x + 236.0;
-    ui.painter().text(pos2(badge_x, rect.min.y + 10.0), Align2::LEFT_TOP, kind.badge(), mono(9.0), badge_tint(s, kind));
-    let room = (badge_x - 12.0 - (rect.min.x + 16.0)).max(40.0);
-    let name = widgets::elide_font(ui, w.name(), room, semibold(13.0));
-    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 10.0), Align2::LEFT_TOP, name, semibold(13.0), s.text);
-    let path = w.path.as_deref().or(w.repo.as_deref()).unwrap_or("no folder");
-    let path = widgets::elide_start_font(ui, path, rect.width() - 32.0, mono(9.0));
-    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 28.0), Align2::LEFT_TOP, path, mono(9.0), s.muted);
-    ui.painter().text(pos2(rect.min.x + 16.0, rect.min.y + 44.0), Align2::LEFT_TOP, pane_agents(w), mono(9.0), s.muted);
-    resp.clicked()
 }
 
-/// The pane's agent line: just the count, as the design draws it.
+/// The switcher's head: a bordered box with the name, the mono line under it and a chevron.
+fn head_ui(ui: &mut Ui, s: &Skin, rect: Rect, name: &str, sub: &str, open: bool) -> bool {
+    let resp = ui.interact(rect, Id::new("workspace_switcher_head"), Sense::click());
+    a11y::button(&resp, &format!("{name} · switch workspace"));
+    let fill = if open || resp.hovered() { s.selected } else { s.panel };
+    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
+    ui.painter().rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, if open { s.accent } else { s.border }), StrokeKind::Inside);
+    focus_ring(ui, s, rect, &resp, 7);
+    let room = rect.width() - 46.0;
+    let name = widgets::elide_font(ui, name, room, semibold(13.0));
+    ui.painter().text(pos2(rect.min.x + 12.0, rect.min.y + 8.0), Align2::LEFT_TOP, name, semibold(13.0), s.text);
+    let sub = widgets::elide_font(ui, sub, room, mono(8.5));
+    ui.painter().text(pos2(rect.min.x + 12.0, rect.min.y + 28.0), Align2::LEFT_TOP, sub, mono(8.5), s.muted);
+    let c = pos2(rect.max.x - 16.0, rect.center().y);
+    let stroke = Stroke::new(1.2, s.muted);
+    ui.painter().line_segment([pos2(c.x - 3.5, c.y - 1.5), pos2(c.x, c.y + 2.0)], stroke);
+    ui.painter().line_segment([pos2(c.x, c.y + 2.0), pos2(c.x + 3.5, c.y - 1.5)], stroke);
+    resp.on_hover_text("Switch workspace (⌃⌘O)").clicked()
+}
+
+/// The head's agent count.
 fn pane_agents(w: &Workspace) -> String {
     match w.agents {
         0 => "no agent".to_string(),
@@ -1121,7 +1098,7 @@ pub(crate) fn open_in_herdr(address: &str, workspace: &str) {
 
 /// The sidebar row the machine in use is drawn under: its SSH address, or this computer's.
 #[cfg(not(target_arch = "wasm32"))]
-fn in_use_key(app: &FigApp) -> Option<String> {
+pub(crate) fn in_use_key(app: &FigApp) -> Option<String> {
     match app.ws.hosts.selected.as_ref() {
         Some(host) if host.ssh.is_some() => Some(host.address.clone()),
         _ => crate::node_hosts::hosts(&app.ws.hosts).first().map(|host| host.address.clone()),
@@ -1146,7 +1123,7 @@ fn stash_rows(app: &mut FigApp) {
 /// Make `host` the machine in use with the workspaces already listed for it, then select `id`.
 /// Its node answered that listing, so no setup runs; Open and Init now go to it.
 #[cfg(not(target_arch = "wasm32"))]
-fn switch_to(app: &mut FigApp, host: &crate::node_hosts::Host, id: Option<&str>) {
+pub(crate) fn switch_to(app: &mut FigApp, host: &crate::node_hosts::Host, id: Option<&str>) {
     if app.ws.busy.is_some() {
         return;
     }
@@ -1172,7 +1149,7 @@ fn repo_key(w: &Workspace) -> String {
 }
 
 /// One row per repository: the base checkout and its linked worktrees as branches.
-fn grouped(rows: &[Workspace]) -> Vec<(Workspace, Vec<Workspace>)> {
+pub(crate) fn grouped(rows: &[Workspace]) -> Vec<(Workspace, Vec<Workspace>)> {
     let mut buckets: BTreeMap<String, Vec<&Workspace>> = BTreeMap::new();
     for w in rows {
         buckets.entry(repo_key(w)).or_default().push(w);
@@ -1188,7 +1165,7 @@ fn grouped(rows: &[Workspace]) -> Vec<(Workspace, Vec<Workspace>)> {
 }
 
 /// The branch a workspace represents: git's branch name, else the worktree's short name.
-fn branch_label(w: &Workspace) -> String {
+pub(crate) fn branch_label(w: &Workspace) -> String {
     w.branch
         .clone()
         .filter(|branch| !branch.trim().is_empty())
@@ -1479,7 +1456,7 @@ enum Chosen {
 }
 
 /// MAP and EMPTY in the map ink, INIT in the accent.
-fn badge_tint(s: &Skin, kind: MapState) -> Color32 {
+pub(crate) fn badge_tint(s: &Skin, kind: MapState) -> Color32 {
     match kind {
         MapState::Map | MapState::Empty => s.map_ink,
         MapState::None => s.accent,
@@ -1685,7 +1662,7 @@ fn workspace_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
 }
 
 /// The worktrees of `w`'s repository: the main checkout first, then the linked ones by branch.
-fn worktrees_of(rows: &[Workspace], w: &Workspace) -> Vec<Workspace> {
+pub(crate) fn worktrees_of(rows: &[Workspace], w: &Workspace) -> Vec<Workspace> {
     let key = repo_key(w);
     let mut all: Vec<Workspace> = rows.iter().filter(|row| repo_key(row) == key).cloned().collect();
     all.sort_by(|a, b| a.worktree.cmp(&b.worktree).then_with(|| branch_label(a).cmp(&branch_label(b))));
@@ -2355,7 +2332,7 @@ fn divider(ui: &mut Ui, s: &Skin) {
     ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, s.border));
 }
 
-fn secondary_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
+pub(crate) fn secondary_button(ui: &mut Ui, s: &Skin, id: Id, rect: Rect, label: &str, enabled: bool) -> bool {
     let resp = ui.interact(rect, id, if enabled { Sense::click() } else { Sense::hover() });
     a11y::button(&resp, label);
     let hot = enabled && resp.hovered();
@@ -2376,7 +2353,7 @@ fn secondary_button_alloc(ui: &mut Ui, s: &Skin, id: Id, label: &str, enabled: b
     secondary_button(ui, s, id, rect, label, enabled)
 }
 
-fn focus_ring(ui: &Ui, s: &Skin, rect: Rect, resp: &Response, radius: u8) {
+pub(crate) fn focus_ring(ui: &Ui, s: &Skin, rect: Rect, resp: &Response, radius: u8) {
     if resp.has_focus() {
         ui.painter().rect_stroke(rect, CornerRadius::same(radius), Stroke::new(2.0, s.accent), StrokeKind::Outside);
     }

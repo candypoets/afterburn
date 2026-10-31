@@ -132,10 +132,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, header_h: f32) {
     if let Some(drawing) = app.first_map.drawing.clone() {
         let cards = page_cards(app);
         let kind = drawing_kind(app).unwrap_or_else(|| "The agent".to_string());
-        let pane = if app.ws.pane_open { 300.0 } else { 0.0 };
-        let width = BANNER_W.min((ctx.content_rect().width() - pane - 48.0).max(240.0));
+        // Centred over the canvas, between the sidebar and the comments pane.
+        let (pane, right) = crate::map_panes::canvas_insets(app, ctx);
+        let width = BANNER_W.min((ctx.content_rect().width() - pane - right - 48.0).max(240.0));
         egui::Area::new(Id::new("first_map_banner"))
-            .anchor(Align2::CENTER_TOP, vec2(pane / 2.0, header_h + 20.0))
+            .anchor(Align2::CENTER_TOP, vec2((pane - right) / 2.0, header_h + 20.0))
             .order(egui::Order::Foreground)
             .interactable(false)
             .show(ctx, |ui| {

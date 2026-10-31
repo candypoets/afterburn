@@ -37,11 +37,13 @@ fn global_action(id: &str) -> bool {
             | "map.newWorkspace"
             | "map.save"
             | "map.close"
+            | "map.closeTab"
             | "map.focusMode"
             | "map.workspacePane"
             | "map.pageTree"
             | "map.search"
-    )
+            | "map.switchWorkspace"
+    ) || crate::map_action_catalog::workspace_number(id).is_some()
 }
 
 pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
@@ -66,6 +68,14 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
             app.run("view.toggleUi", json!({}));
         }
         "map.workspacePane" => app.ws.pane_open = !app.ws.pane_open,
+        // Closes the tab, never the page; the last tab stays.
+        "map.closeTab" => {
+            crate::map_tabs::close_active(app);
+        }
+        "map.switchWorkspace" => crate::switcher::toggle(app),
+        id if crate::map_action_catalog::workspace_number(id).is_some() => {
+            crate::switcher::open_nth(app, ctx, crate::map_action_catalog::workspace_number(id).unwrap_or(0));
+        }
         "map.comments" => {
             app.run("view.comments", json!({}));
         }

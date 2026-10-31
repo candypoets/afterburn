@@ -23,19 +23,27 @@ pub const ACTIONS: &[Action] = &[
     action!("map.search", "Search this map", "Workspaces + app", "Cmd+F", "Ctrl+F", "Map: find card text and names; open a result."),
     action!(
         "map.openWorkspace",
-        "Open workspace / worktree",
+        "All workspaces",
         "Workspaces + app",
-        "Cmd+O",
-        "Ctrl+O",
-        "Workspace: choose a project and worktree before opening."
+        "Shift+Cmd+O",
+        "Ctrl+Shift+O",
+        "Workspace: browse every workspace on every machine; Init the ones without a map."
     ),
     action!("map.newWorkspace", "New workspace", "Workspaces + app", "Cmd+N", "Ctrl+N", "Workspace: open workspace creation."),
     action!("map.save", "Save map", "Workspaces + app", "Cmd+S", "Ctrl+S", "Map: ask the node to persist; show saving, saved or error."),
-    action!("map.close", "Close map", "Workspaces + app", "Cmd+W", "Ctrl+W", "Map: return to workspaces; keep agents and drafts alive."),
+    action!(
+        "map.closeTab",
+        "Close tab",
+        "Pages + navigation",
+        "Cmd+W",
+        "Ctrl+W",
+        "Map: close the active page tab and open its neighbour; the page stays, and so does the last tab."
+    ),
+    action!("map.close", "Close map", "Workspaces + app", "Shift+Cmd+W", "Ctrl+Shift+W", "Map: return to workspaces; keep agents and drafts alive."),
     action!("map.preferences", "Preferences", "Workspaces + app", "Cmd+,", "Ctrl+,", "App: open settings."),
     action!("map.focusMode", "Focus mode", "Workspaces + app", "Cmd+\\", "Ctrl+\\", "App: toggle workspace chrome around the canvas."),
     action!("map.fullscreen", "Full screen", "Workspaces + app", "Ctrl+Cmd+F", "F11", "App: toggle the native window's fullscreen state."),
-    action!("map.pageTree", "Page tree", "Pages + navigation", "Cmd+P", "Ctrl+P", "Map: open the tree; search and choose a page."),
+    action!("map.pageTree", "Page tree", "Pages + navigation", "Cmd+P", "Ctrl+P", "Map: show the page tree in the sidebar; choose a page."),
     action!("map.previousPage", "Previous page", "Pages + navigation", "PageUp", "PageUp", "Canvas: previous page in visible tree order."),
     action!("map.nextPage", "Next page", "Pages + navigation", "PageDown", "PageDown", "Canvas: next page in visible tree order."),
     action!("map.workspacePane", "Workspace pane", "Pages + navigation", "Shift+Cmd+\\", "Ctrl+Shift+\\", "App: show or hide workspace navigation."),
@@ -166,11 +174,91 @@ pub const ACTIONS: &[Action] = &[
         "",
         "App: look for a new Mindmap release; install the app and its node together."
     ),
+    action!(
+        "map.switchWorkspace",
+        "Switch workspace",
+        "Workspaces + app",
+        "Ctrl+Cmd+O",
+        "Ctrl+Alt+O",
+        "Workspace: search the workspaces and worktrees of every machine; open one."
+    ),
+    action!(
+        "map.workspace1",
+        "Open workspace 1",
+        "Workspaces + app",
+        "Ctrl+Cmd+1",
+        "Ctrl+Alt+1",
+        "Workspace: open the first workspace of the Workspace menu."
+    ),
+    action!(
+        "map.workspace2",
+        "Open workspace 2",
+        "Workspaces + app",
+        "Ctrl+Cmd+2",
+        "Ctrl+Alt+2",
+        "Workspace: open the second workspace of the Workspace menu."
+    ),
+    action!(
+        "map.workspace3",
+        "Open workspace 3",
+        "Workspaces + app",
+        "Ctrl+Cmd+3",
+        "Ctrl+Alt+3",
+        "Workspace: open the third workspace of the Workspace menu."
+    ),
+    action!(
+        "map.workspace4",
+        "Open workspace 4",
+        "Workspaces + app",
+        "Ctrl+Cmd+4",
+        "Ctrl+Alt+4",
+        "Workspace: open the fourth workspace of the Workspace menu."
+    ),
+    action!(
+        "map.workspace5",
+        "Open workspace 5",
+        "Workspaces + app",
+        "Ctrl+Cmd+5",
+        "Ctrl+Alt+5",
+        "Workspace: open the fifth workspace of the Workspace menu."
+    ),
+    action!(
+        "map.workspace6",
+        "Open workspace 6",
+        "Workspaces + app",
+        "Ctrl+Cmd+6",
+        "Ctrl+Alt+6",
+        "Workspace: open the sixth workspace of the Workspace menu."
+    ),
+    action!(
+        "map.workspace7",
+        "Open workspace 7",
+        "Workspaces + app",
+        "Ctrl+Cmd+7",
+        "Ctrl+Alt+7",
+        "Workspace: open the seventh workspace of the Workspace menu."
+    ),
+    action!(
+        "map.workspace8",
+        "Open workspace 8",
+        "Workspaces + app",
+        "Ctrl+Cmd+8",
+        "Ctrl+Alt+8",
+        "Workspace: open the eighth workspace of the Workspace menu."
+    ),
+    action!(
+        "map.workspace9",
+        "Open workspace 9",
+        "Workspaces + app",
+        "Ctrl+Cmd+9",
+        "Ctrl+Alt+9",
+        "Workspace: open the ninth workspace of the Workspace menu."
+    ),
 ];
 
 /// Second bindings that run an action without being its primary shortcut: ⌘K, the palette's
-/// earlier key, keeps opening it. Help shows them after the primary binding.
-pub const ALIASES: &[(&str, &str, &str)] = &[("map.actions", "Cmd+K", "Ctrl+K")];
+/// earlier key, keeps opening it; ⌘O, once Open workspace, opens the workspace switcher. Help shows them after the primary binding.
+pub const ALIASES: &[(&str, &str, &str)] = &[("map.actions", "Cmd+K", "Ctrl+K"), ("map.switchWorkspace", "Cmd+O", "Ctrl+O")];
 
 pub fn find(id: &str) -> Option<&'static Action> {
     ACTIONS.iter().find(|action| action.id == id)
@@ -271,6 +359,7 @@ pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static 
         | "map.fullscreen"
         | "map.focusMode"
         | "map.workspacePane"
+        | "map.switchWorkspace"
         | "map.nextRegion"
         | "map.previousRegion"
         | "app.checkForUpdates" => None,
@@ -285,8 +374,16 @@ pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static 
                 None
             }
         }
+        id if workspace_number(id).is_some() => {
+            workspace_number(id).and_then(|n| crate::switcher::nth(app, n)).is_none().then_some("No workspace listed there")
+        }
         _ => no_map.then_some("Open a map first"),
     }
+}
+
+/// `n` for `map.workspace<n>` (⌃⌘1…⌃⌘9: the Workspace menu's `n`th workspace).
+pub fn workspace_number(id: &str) -> Option<usize> {
+    id.strip_prefix("map.workspace").and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=9).contains(n))
 }
 
 /// A toggle's current state as the palette shows it at the right of its row ("Shown"/"Hidden",

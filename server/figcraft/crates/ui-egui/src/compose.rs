@@ -439,10 +439,10 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     if app.session.ds().is_ok_and(|ds| ds.view.comments) {
         draft_glow(app, ctx, page);
     }
-    // The workspace pane takes the left edge; the composer belongs to the canvas, not the pane.
-    let pane = if app.ws.pane_open && app.session.ds().is_ok_and(|ds| !ds.view.ui_hidden) { 300.0 } else { 0.0 };
+    // The sidebar and the comments pane take the edges; the composer belongs to the canvas.
+    let (pane, right) = crate::map_panes::canvas_insets(app, ctx);
     // Docked: the full canvas width, flush on the status bar, with no gap, rounding or shadow.
-    let width = (ctx.content_rect().width() - pane).max(PANEL_MIN_W);
+    let width = (ctx.content_rect().width() - pane - right).max(PANEL_MIN_W);
 
     let mut send = false;
     let mut clear = false;

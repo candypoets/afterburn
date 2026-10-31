@@ -44,9 +44,12 @@ pub mod live;
 pub mod live_text;
 pub mod map_action_catalog;
 pub mod map_actions;
+pub mod map_comments;
 pub mod map_navigation;
 pub mod map_palette;
+pub mod map_panes;
 pub mod map_shell;
+pub mod map_tabs;
 pub mod measure_overlay;
 /// The read-only map client: no layers panel, no design panels, no tools.
 static MAP_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -121,44 +124,6 @@ fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
     resp.on_hover_text(if open { "Hide sidebar" } else { "Show sidebar" })
 }
 
-/// A root page's tab: the active one sits on a soft fill with the accent underline, inset 6 pt;
-/// the others are plain muted text. Delete lives behind a × that shows only on hover.
-fn page_tab(ui: &mut egui::Ui, name: &str, active: bool) -> (egui::Response, bool) {
-    let font = if active { crate::theme::semibold(11.5) } else { crate::theme::regular(11.5) };
-    let text_w = ui.painter().layout_no_wrap(name.to_string(), font.clone(), egui::Color32::WHITE).size().x;
-    let width = text_w + 24.0;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
-    let close_rect = egui::Rect::from_center_size(egui::pos2(rect.right() - 2.0, rect.top() + 6.0), egui::vec2(14.0, 14.0));
-    let close = ui.interact(close_rect, ui.id().with(("close_page", name)), egui::Sense::click()).on_hover_text("Delete page");
-    let hot = resp.hovered() || close.hovered();
-    let p = ui.painter();
-    if active {
-        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF1, 0xF0, 0xED));
-        p.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(rect.left() + 6.0, rect.bottom() - 2.0), egui::pos2(rect.right() - 6.0, rect.bottom())),
-            egui::CornerRadius::ZERO,
-            egui::Color32::from_rgb(0xB5, 0x45, 0x2F),
-        );
-    } else if hot {
-        p.rect_filled(rect, egui::CornerRadius::same(6), egui::Color32::from_rgb(0xF7, 0xF6, 0xF3));
-    }
-    let color = if active { egui::Color32::from_rgb(0x1A, 0x1A, 0x1A) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
-    p.text(egui::pos2(rect.left() + 12.0, rect.center().y - 1.0), egui::Align2::LEFT_CENTER, name, font, color);
-    a11y::button(&resp, &format!("Open page {name}"));
-    if hot {
-        p.circle_filled(close_rect.center(), 6.5, egui::Color32::WHITE);
-        p.circle_stroke(close_rect.center(), 6.5, egui::Stroke::new(1.0, egui::Color32::from_rgb(0xE3, 0xE2, 0xDF)));
-        p.text(
-            close_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "×",
-            crate::theme::regular(10.0),
-            if close.hovered() { egui::Color32::from_rgb(0x9E, 0x3B, 0x2C) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) },
-        );
-    }
-    (resp, close.clicked())
-}
-
 pub mod machine_modal;
 pub mod menus;
 pub mod missing_fonts;
@@ -189,6 +154,7 @@ pub mod shortcuts;
 pub mod shortcuts_panel;
 pub mod status_bar;
 pub mod style_picker;
+pub mod switcher;
 pub mod sync;
 pub mod tabs;
 pub mod theme;
@@ -286,6 +252,8 @@ mod live_text_tests;
 mod map_shortcut_tests;
 #[cfg(test)]
 mod map_surfaces_tests;
+#[cfg(test)]
+mod map_tabs_tests;
 #[cfg(test)]
 mod menu_aim_tests;
 #[cfg(test)]
@@ -875,6 +843,10 @@ pub struct FigApp {
     pub active_workspace: Option<String>,
     /// The bottom comment composer in map mode.
     pub compose: compose::State,
+    /// The title row's tabs: the open pages of each map opened this session.
+    pub page_tabs: map_tabs::State,
+    /// The comments pane's own state (when each saved comment was first seen).
+    pub map_comments: map_comments::State,
     pub map_shell: map_shell::State,
     /// The Sync button and widget in map mode.
     pub sync: sync::State,
@@ -942,6 +914,8 @@ impl FigApp {
             first_map: first_map::State::default(),
             new_page: new_page::State::default(),
             compose: compose::State::default(),
+            page_tabs: map_tabs::State::default(),
+            map_comments: map_comments::State::default(),
             map_shell: map_shell::State::default(),
             sync: sync::State::default(),
             status: status_bar::State::default(),
@@ -1788,154 +1762,64 @@ impl FigApp {
                     right::right_panel(self, ui)
                 });
         }
+        // The map's panes beside the canvas: the sidebar and the comments pane, as wide as dragged
+        // (less in a small window).
+        let (sidebar_w, comments_w) = if map_mode { map_panes::widths(self, ui.available_width()) } else { (0.0, 0.0) };
         if map_mode && !hidden {
-            let all_pages: Vec<(figcraft_doc::NodeId, String)> =
-                self.session.doc().map(|d| d.pages.iter().filter_map(|p| d.node(*p).map(|n| (*p, n.name.clone()))).collect()).unwrap_or_default();
-            let current = self.session.page().ok();
-            let (pages, current_root) = match self.session.doc() {
-                Ok(doc) => {
-                    let main: Vec<(figcraft_doc::NodeId, String)> =
-                        all_pages.iter().filter(|(id, _)| page_tree::parent(doc, *id).is_none()).cloned().collect();
-                    (main, current.map(|page| page_tree::root(doc, page)))
-                }
-                Err(_) => (all_pages.clone(), current),
-            };
-            let (people, joined) = {
-                let live = self.session.live();
-                (live.peers.len() + 1, matches!(live.status, figcraft_engine::live::Status::Live))
-            };
-            let muted = egui::Color32::from_rgb(0x6E, 0x6C, 0x68);
             // On macOS the header is the toolbar band the window buttons sit centred in.
             let inset = self.ui.mac_inset();
             let header_h = if inset { MAC_BAND } else { 44.0 };
-            egui::Panel::top("map_header").exact_size(header_h).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
-                a11y::region(&mut self.ui.nav, ui, a11y::Region::Toolbar, egui::accesskit::Role::Navigation, "Pages");
-                let rect = ui.max_rect();
-                ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
-                if self.ui.title_bar != TitleBar::Native {
-                    titlebar_drag(ui, rect);
-                }
-                ui.horizontal_centered(|ui| {
-                    ui.add_space(if inset { MAC_BUTTONS_W } else { 8.0 });
-                    if sidebar_toggle(ui, self.ws.pane_open).clicked() {
+            egui::Panel::top("map_header")
+                .exact_size(header_h)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::NONE.fill(map_tabs::ROW))
+                .show(ui, |ui| {
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Toolbar, egui::accesskit::Role::Navigation, "Pages");
+                    let rect = ui.max_rect();
+                    if self.ui.title_bar != TitleBar::Native {
+                        titlebar_drag(ui, rect);
+                    }
+                    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
+                    // The window buttons, the sidebar toggle, then the open pages' tabs from there
+                    // (above the sidebar), and Sync at the right end: all on the row's centre line.
+                    let toggle_left = rect.left() + if inset { MAC_BUTTONS_W - 10.0 } else { 8.0 };
+                    let toggle = egui::Rect::from_x_y_ranges(toggle_left..=toggle_left + 28.0, rect.y_range());
+                    let centred = |r: egui::Rect, layout: egui::Layout| egui::UiBuilder::new().max_rect(r).layout(layout);
+                    let mut cell = ui.new_child(centred(toggle, egui::Layout::left_to_right(egui::Align::Center)));
+                    if sidebar_toggle(&mut cell, self.ws.pane_open).clicked() {
                         self.ws.pane_open = !self.ws.pane_open;
                         if self.ws.pane_open {
                             self.ws.refresh(&ctx);
                         }
                     }
-                    ui.add_space(8.0);
-                    for (id, name) in &pages {
-                        let (response, close) = page_tab(ui, name, Some(*id) == current_root);
-                        if close {
-                            self.page_delete = Some(*id);
-                        } else if response.secondary_clicked() {
-                            self.page_tree.open = true;
-                            self.page_tree.just_opened = true;
-                        } else if response.clicked() {
-                            if Some(*id) == current_root {
-                                self.page_tree.open = true;
-                                self.page_tree.just_opened = true;
-                            } else {
-                                self.run("page.select", serde_json::json!({"id": id}));
-                            }
-                        }
-                        ui.add_space(4.0);
-                    }
-                    ui.add_space(2.0);
-                    if ui
-                        .add(egui::Button::new(egui::RichText::new("+ Page").font(crate::theme::regular(10.5)).color(muted)).frame(false))
-                        .on_hover_text("New page")
-                        .clicked()
-                    {
-                        self.new_page.start(all_pages.len() + 1);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(8.0);
-                        sync::header_button(self, ui, &ctx);
-                        ui.add_space(30.0);
-                        ui.label(
-                            egui::RichText::new(if joined { format!("{people} live") } else { "offline".to_string() })
-                                .font(egui::FontId::monospace(10.0))
-                                .color(if joined { egui::Color32::from_rgb(0x2F, 0x6F, 0x6A) } else { muted }),
-                        );
-                        let (summary, color) = agents::summary(&self.compose.targets, self.compose.targets_error.as_deref());
-                        ui.add_space(6.0);
-                        let response =
-                            ui.add(egui::Button::new(egui::RichText::new(summary).font(egui::FontId::monospace(9.5)).color(color)).frame(false));
-                        a11y::button(&response, "Agent breakdown");
-                        if response.on_hover_text("Agent breakdown").clicked() {
-                            self.agents_modal.open = true;
-                            self.agents_modal.just_opened = true;
-                        }
-                        ui.add_space(4.0);
-                    });
+                    let mut end = ui.new_child(centred(rect, egui::Layout::right_to_left(egui::Align::Center)));
+                    end.add_space(8.0);
+                    sync::header_button(self, &mut end, &ctx);
+                    let tabs_left = toggle.right() + if inset { 0.0 } else { 4.0 };
+                    let tabs_right = (end.min_rect().left() - 12.0).max(tabs_left);
+                    map_tabs::strip(self, ui, egui::Rect::from_x_y_ranges(tabs_left..=tabs_right, rect.y_range()));
                 });
-            });
         }
-        if map_mode && !hidden {
-            // A root page has no path to show: the strip exists only while a subpage is open.
-            let breadcrumb: Vec<(figcraft_doc::NodeId, String)> = self
-                .session
-                .doc()
-                .ok()
-                .zip(self.session.page().ok())
-                .map(|(doc, page)| page_tree::path(doc, page).into_iter().filter_map(|id| doc.node(id).map(|node| (id, node.name.clone()))).collect())
-                .unwrap_or_default();
-            if breadcrumb.len() > 1 {
-                // The path under the tabs: every crumb before the last is a link to that page.
-                let faint = egui::Color32::from_rgb(0x9A, 0x97, 0x91);
-                let ink = egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
-                let accent = egui::Color32::from_rgb(0xB5, 0x45, 0x2F);
-                let last = breadcrumb.len() - 1;
-                let path = breadcrumb.clone();
-                let strip = egui::Color32::from_rgb(0xF8, 0xF6, 0xF3);
-                let mut open = None;
-                egui::Panel::top("map_breadcrumb").exact_size(22.0).resizable(false).frame(egui::Frame::NONE.fill(strip)).show(ui, |ui| {
-                    let rect = ui.max_rect();
-                    ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
-                    let font = crate::theme::regular(10.0);
-                    let mut x = rect.left() + 12.0;
-                    for (index, (id, name)) in path.iter().enumerate() {
-                        if index > 0 {
-                            ui.painter().text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, "›", font.clone(), faint);
-                            x += 14.0;
-                        }
-                        let current = index == last;
-                        let galley = ui.painter().layout_no_wrap(name.clone(), font.clone(), ink);
-                        let crumb = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(galley.size().x, rect.height()));
-                        let color = if current { ink } else { accent };
-                        ui.painter().text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, name, font.clone(), color);
-                        if !current {
-                            let response = ui
-                                .interact(crumb, ui.id().with(("crumb", id.0)), egui::Sense::click())
-                                .on_hover_cursor(egui::CursorIcon::PointingHand);
-                            a11y::button(&response, &format!("Open {name}"));
-                            if response.hovered() {
-                                let y = rect.center().y + 6.5;
-                                ui.painter()
-                                    .line_segment([egui::pos2(crumb.left(), y), egui::pos2(crumb.right(), y)], egui::Stroke::new(1.0, accent));
-                            }
-                            if response.on_hover_text(format!("Open {name}")).clicked() {
-                                open = Some(*id);
-                            }
-                        }
-                        x = crumb.right() + 6.0;
-                    }
-                });
-                if let Some(id) = open {
-                    self.run("page.select", serde_json::json!({"id": id}));
-                }
-            }
-        }
+        // Where the panes' inner edges are dragged: below the header, beside the canvas.
+        let pane_area = ui.available_rect_before_wrap();
         if map_mode && !hidden && self.ws.pane_open {
             egui::Panel::left("workspace_pane")
-                .exact_size(300.0)
+                .exact_size(sidebar_w)
                 .resizable(false)
                 .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
                 .show(ui, |ui| {
-                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspaces");
+                    // The sidebar: the workspace switcher's head over the docked page tree.
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspace and pages");
                     workspaces::pane(self, ui);
                 });
+        }
+        if map_mode && comments_w > 0.0 {
+            egui::Panel::right("map_comments")
+                .exact_size(comments_w)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.panel))
+                .show(ui, |ui| map_comments::show(self, ui));
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             let worker = self.worker.take();
@@ -1965,6 +1849,21 @@ impl FigApp {
             page_tree::show(self, &ctx);
             page_tree::maintain(self, &ctx);
             map_navigation::show(self, &ctx);
+        }
+        // The map panes' inner edges: dragging one sizes its pane (kept once the drag is over).
+        if map_mode && sidebar_w > 0.0 {
+            let x = pane_area.left() + sidebar_w;
+            if let Some(w) = map_panes::splitter(ui, "sidebar", x, pane_area.y_range(), sidebar_w, 1.0, map_panes::SIDEBAR_DEFAULT) {
+                map_panes::set_sidebar_width(self, w);
+                self.panels_unsaved = true;
+            }
+        }
+        if map_mode && comments_w > map_panes::RAIL {
+            let x = pane_area.right() - comments_w;
+            if let Some(w) = map_panes::splitter(ui, "comments", x, pane_area.y_range(), comments_w, -1.0, map_panes::COMMENTS_DEFAULT) {
+                map_panes::set_comments_width(self, w);
+                self.panels_unsaved = true;
+            }
         }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
@@ -2121,6 +2020,11 @@ impl FigApp {
         state["homeSearch"] = json!(self.ui.home_view.file_query);
         state["pendingOpens"] = json!(self.ui.pending_opens.len());
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
+        if map_mode() {
+            state["mapTabs"] = map_tabs::inspect(self);
+            state["mapComments"] = map_comments::inspect(self);
+            state["mapPanes"] = json!({"sidebar": map_panes::sidebar_width(self), "comments": map_panes::comments_width(self)});
+        }
         state
     }
 }
