@@ -628,7 +628,7 @@ impl Node {
     fn send(&self, req: &Value) -> Result<Value> {
         let workspace = self.herdr.find_workspace(required(req, "workspace")?)?;
         let target = crate::agent::parse_target(req["target"].as_str())?;
-        let comments = crate::comments::parse_comments(req.get("comments"))?;
+        let mut comments = crate::comments::parse_comments(req.get("comments"))?;
         let initial = required(req, "method")? == "init";
         let prompt=req["prompt"].as_str().unwrap_or(if initial {"Create the project map in the live session. Read the code, plan and implement the requested map; source every claim."} else {""});
         let session = self.session(req)?;
@@ -654,6 +654,12 @@ impl Node {
         let document = docs.document(&session)?;
         drop(docs);
         let request = node_git::save_request(&metadata.worktree, &document)?;
+        // Each comment names its own card; the context names no card twice.
+        for comment in &mut comments {
+            comment.card = comment
+                .node_id
+                .and_then(|id| crate::node_context::card_line(&document, figcraft_doc::NodeId(id)));
+        }
         // The prompt carries the commented cards, not the page's other cards or what waits for
         // Sync: the agent reads more with get_node or diff, and record leaves waiting edits out.
         let prompt = crate::comments::format_prompt(

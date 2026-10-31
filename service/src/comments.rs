@@ -35,6 +35,9 @@ pub struct Comment {
     pub node_id: Option<u64>,
     /// Live document page id the comment belongs to.
     pub page_id: Option<u64>,
+    /// The card it is on, as the node names it (`name (id N) · path`); filled by the node, never
+    /// by the client.
+    pub card: Option<String>,
 }
 
 /// Parse the `comments` request field.
@@ -85,6 +88,7 @@ pub fn parse_comments(raw: Option<&Value>) -> Result<Vec<Comment>> {
             page: optional_label(object, index, "page")?,
             node_id: optional_id(object, index, "node_id")?,
             page_id: optional_id(object, index, "page_id")?,
+            card: None,
         });
     }
     validate_comments(&comments)?;
@@ -202,19 +206,24 @@ pub fn format_prompt(
         out.push_str(prompt);
         return Ok(out);
     }
+    // With context the scope already names the page: each comment names only its card.
     if context.is_some() {
         out.push_str("COMMENTS\n");
-    }
-    out.push_str("Mindmap comments for ");
-    out.push_str(&inline(label));
-    if let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) {
-        out.push_str(" (");
-        out.push_str(&inline(path));
-        out.push(')');
-    }
-    out.push_str(":\n\n");
-    for (index, comment) in comments.iter().enumerate() {
-        let _ = writeln!(out, "{}. {}", index + 1, entry(comment));
+        for (index, comment) in comments.iter().enumerate() {
+            let _ = writeln!(out, "{}. {}", index + 1, entry_on(comment));
+        }
+    } else {
+        out.push_str("Mindmap comments for ");
+        out.push_str(&inline(label));
+        if let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) {
+            out.push_str(" (");
+            out.push_str(&inline(path));
+            out.push(')');
+        }
+        out.push_str(":\n\n");
+        for (index, comment) in comments.iter().enumerate() {
+            let _ = writeln!(out, "{}. {}", index + 1, entry(comment));
+        }
     }
 
     out.push('\n');
@@ -263,6 +272,19 @@ fn entry(comment: &Comment) -> String {
     out
 }
 
+/// `On Card (id 7) · Parent › Card` and the text on the next line; `On the page: …` without a
+/// card.
+fn entry_on(comment: &Comment) -> String {
+    let text = inline(&comment.text);
+    if let Some(card) = label(comment.card.as_deref()) {
+        return format!("On {card}\n   {text}");
+    }
+    match label(comment.node.as_deref()) {
+        Some(node) => format!("On {node}: {text}"),
+        None => format!("On the page: {text}"),
+    }
+}
+
 fn label(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -298,6 +320,7 @@ mod tests {
             page: page.map(str::to_owned),
             node_id: None,
             page_id: None,
+            card: None,
         }
     }
 
@@ -493,7 +516,7 @@ mod tests {
             Some("MINDMAP CONTEXT\nPage: Mindmap"),
         )
         .unwrap_or_default();
-        assert!(formatted.starts_with("MINDMAP CONTEXT\nPage: Mindmap\n\nCOMMENTS\n"));
+        assert!(formatted.starts_with("MINDMAP CONTEXT\nPage: Mindmap\n\nCOMMENTS\n1. On Components: Make this clearer.\n"), "{formatted}");
         assert!(formatted.ends_with("Keep the tree."));
         let page_prompt = format_prompt(
             "Mindmap",
@@ -513,5 +536,25 @@ mod tests {
     fn rejects_an_oversized_prompt() {
         assert!(validate_prompt(&"x".repeat(MAX_PROMPT_CHARS)).is_ok());
         assert!(validate_prompt(&"x".repeat(MAX_PROMPT_CHARS + 1)).is_err());
+    }
+
+    #[test]
+    fn with_context_each_comment_names_its_card_once() {
+        let mut on_card = comment("Explain the merge.", Some("l"), Some("Design to code"));
+        on_card.card = Some("Proposed Show (id 7) · Anatomy › Proposed Show".into());
+        let comments = vec![
+            comment("Show how prompts are built.", None, Some("Design to code")),
+            on_card,
+        ];
+        let formatted = format_prompt("Mindmap", None, &comments, "", Some("MINDMAP CONTEXT"))
+            .unwrap_or_default();
+        assert_eq!(
+            formatted,
+            "MINDMAP CONTEXT\n\nCOMMENTS\n\
+             1. On the page: Show how prompts are built.\n\
+             2. On Proposed Show (id 7) · Anatomy › Proposed Show\n   Explain the merge.\n\
+             \n\
+             Address these comments in the project document."
+        );
     }
 }

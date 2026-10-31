@@ -1,8 +1,8 @@
 //! The context packet an agent receives with comments, new pages and Sync.
 //!
-//! It names the worktree, branch, node and session, then summarizes what the request points at:
-//! the page and its subpages, the page's top-level cards, and each commented card with its path
-//! and text. It never dumps raw document JSON; agents read details with `get_node`.
+//! It names the worktree, branch, node and session, the page in scope, and any selected card that
+//! no comment names; each comment names its own card ([`card_line`]). It lists no other cards and
+//! never dumps raw document JSON: agents read the page and its cards with `get_node`.
 
 use figcraft_doc::{Document, NodeId, NodeKind};
 
@@ -10,8 +10,6 @@ use figcraft_doc::{Document, NodeId, NodeKind};
 pub const MAX_CONTEXT_CHARS: usize = 8_000;
 /// The most characters of one card's text.
 const MAX_CARD_TEXT: usize = 600;
-/// Plugin data key a subpage stores its parent page under (set by the client's page tree).
-const PARENT_KEY: &str = "mindmap.parent_page";
 
 /// What the caller knows about the request.
 pub struct Request<'a> {
@@ -53,19 +51,11 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
                 .find_map(|id| page_of(doc, *id))
         });
     if let Some(page) = page {
-        let subpages = subpages(doc, page);
         out.push_str(&format!(
-            "Scope: page {} and its subpages only. Other pages are out of scope.\n",
+            "Scope: page {} (id {}) and its subpages only.\n",
+            name(doc, page),
             page.0
         ));
-        out.push_str(&format!("\nPage: {} (id {})\n", name(doc, page), page.0));
-        if !subpages.is_empty() {
-            let names: Vec<String> = subpages
-                .iter()
-                .map(|id| format!("{} (id {})", name(doc, *id), id.0))
-                .collect();
-            out.push_str(&format!("Subpages: {}\n", names.join(", ")));
-        }
         if request.new_page {
             out.push_str("This page was just created for the prompt below.\n");
         }
@@ -76,28 +66,15 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
         out.push_str("\nMade from this card:\n");
         out.push_str(&card(doc, source));
     }
-    let selected: Vec<NodeId> = request
-        .selected
-        .iter()
-        .copied()
-        .filter(|id| doc.node(*id).is_some())
-        .collect();
-    if !selected.is_empty() {
-        out.push_str("\nSelected cards (the task is about these):\n");
-        for id in selected {
-            out.push_str(&card(doc, id));
+    // A commented card is named with its comment; a selected one without a comment here, once.
+    let mut seen: Vec<NodeId> = request.commented.to_vec();
+    for id in request.selected {
+        if seen.contains(id) {
+            continue;
         }
-    }
-    let commented: Vec<NodeId> = request
-        .commented
-        .iter()
-        .copied()
-        .filter(|id| doc.node(*id).is_some())
-        .collect();
-    if !commented.is_empty() {
-        out.push_str("\nCommented cards:\n");
-        for id in commented {
-            out.push_str(&card(doc, id));
+        seen.push(*id);
+        if let Some(line) = card_line(doc, *id) {
+            out.push_str(&format!("Selected: {line}\n"));
         }
     }
     truncate_lines(out, MAX_CONTEXT_CHARS)
@@ -123,6 +100,19 @@ fn card(doc: &Document, id: NodeId) -> String {
         ));
     }
     out
+}
+
+/// `Card (id 7) · Parent › Card`: the card's name and id, and its path below the page when it is
+/// nested. The agent reads its content with `get_node`.
+pub fn card_line(doc: &Document, id: NodeId) -> Option<String> {
+    let node = doc.node(id)?;
+    let mut line = format!("{} (id {})", one_line(&node.name), id.0);
+    let names = path(doc, id);
+    let below_page = names.get(1..).unwrap_or_default();
+    if below_page.len() > 1 {
+        line.push_str(&format!(" · {}", below_page.join(" › ")));
+    }
+    Some(line)
 }
 
 /// Names from the page down to `id`.
@@ -158,33 +148,6 @@ fn page_of(doc: &Document, id: NodeId) -> Option<NodeId> {
         }
     }
     None
-}
-
-/// Every page below `page` in the page tree, in document order.
-fn subpages(doc: &Document, page: NodeId) -> Vec<NodeId> {
-    let parent_of = |id: NodeId| -> Option<NodeId> {
-        doc.node(id)?
-            .plugin_data
-            .get(PARENT_KEY)?
-            .parse::<u64>()
-            .ok()
-            .map(NodeId)
-    };
-    let mut found: Vec<NodeId> = vec![page];
-    loop {
-        let before = found.len();
-        for id in &doc.pages {
-            if !found.contains(id) && parent_of(*id).is_some_and(|parent| found.contains(&parent)) {
-                found.push(*id);
-            }
-        }
-        if found.len() == before {
-            break;
-        }
-    }
-    found.retain(|id| *id != page);
-    found.sort_by_key(|id| doc.pages.iter().position(|p| p == id));
-    found
 }
 
 /// Every text layer below `id`, joined.
@@ -294,7 +257,7 @@ mod tests {
         session
             .execute(
                 "node.set",
-                &json!({"id": remote.0, "pluginData": {PARENT_KEY: backend.0.to_string()}}),
+                &json!({"id": remote.0, "pluginData": {"mindmap.parent_page": backend.0.to_string()}}),
             )
             .unwrap();
         let _ = first;
@@ -316,31 +279,25 @@ mod tests {
     }
 
     #[test]
-    fn a_comment_names_its_page_card_path_and_text() {
-        let (doc, backend, card, remote) = doc();
+    fn a_comment_scopes_its_page_and_leaves_its_card_to_the_comment() {
+        let (doc, backend, card, _) = doc();
         let text = render(&doc, &request(None, &[card]));
         assert!(
-            text.contains(&format!("Scope: page {} and its subpages only.", backend.0)),
+            text.contains(&format!(
+                "Scope: page backend code (id {}) and its subpages only.\n",
+                backend.0
+            )),
             "{text}"
         );
-        assert!(
-            text.contains(&format!("Page: backend code (id {})", backend.0)),
-            "{text}"
-        );
-        assert!(
-            text.contains(&format!("Subpages: Remote setup (id {})", remote.0)),
-            "{text}"
-        );
-        assert!(!text.contains("Cards:"), "no card list: {text}");
-        assert!(
-            text.contains(&format!("- Proposed system (id {}", card.0)),
-            "{text}"
-        );
-        assert!(
-            text.contains("Path: backend code > Proposed system"),
-            "{text}"
-        );
-        assert!(text.contains("Text: The app talks to nodes"), "{text}");
+        for gone in [
+            "Page:",
+            "Subpages:",
+            "Cards:",
+            "Commented cards",
+            "Proposed system",
+        ] {
+            assert!(!text.contains(gone), "{gone:?} is gone: {text}");
+        }
         assert!(
             !text.contains("Card Overview"),
             "another page leaked in: {text}"
@@ -353,7 +310,7 @@ mod tests {
         let (doc, backend, _, _) = doc();
         let text = render(&doc, &request(Some(backend), &[]));
         assert!(
-            text.contains(&format!("Page: backend code (id {})", backend.0)),
+            text.contains(&format!("Scope: page backend code (id {})", backend.0)),
             "{text}"
         );
         assert!(!text.contains("Cards:"), "{text}");
@@ -368,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn a_prompt_names_the_selected_card_and_its_page() {
+    fn a_selected_card_is_named_once_and_a_commented_one_by_its_comment() {
         let (doc, backend, card, _) = doc();
         let selected = [card];
         let text = render(
@@ -379,23 +336,42 @@ mod tests {
             },
         );
         assert!(
-            text.contains(&format!("Scope: page {} and its subpages only.", backend.0)),
+            text.contains(&format!("Scope: page backend code (id {})", backend.0)),
             "{text}"
         );
         assert!(
-            text.contains(&format!(
-                "Selected cards (the task is about these):\n- Proposed system (id {}",
-                card.0
-            )),
+            text.contains(&format!("Selected: Proposed system (id {})\n", card.0)),
             "{text}"
         );
-        assert!(!text.contains("Commented cards"), "{text}");
+        let both = render(
+            &doc,
+            &Request {
+                selected: &selected,
+                ..request(None, &selected)
+            },
+        );
+        assert!(!both.contains("Selected:"), "the comment names it: {both}");
+    }
+
+    #[test]
+    fn a_card_line_gives_name_id_and_path_below_the_page() {
+        let (doc, _, card, _) = doc();
+        assert_eq!(
+            card_line(&doc, card),
+            Some(format!("Proposed system (id {})", card.0))
+        );
+        let title = doc.node(card).unwrap().children[0];
+        assert_eq!(
+            card_line(&doc, title),
+            Some(format!("title (id {}) · Proposed system › title", title.0))
+        );
+        assert_eq!(card_line(&doc, NodeId(999_999)), None);
     }
 
     #[test]
     fn a_named_page_wins_and_no_page_says_so() {
         let (doc, backend, _, _) = doc();
-        assert!(render(&doc, &request(Some(backend), &[])).contains("Page: backend code"));
+        assert!(render(&doc, &request(Some(backend), &[])).contains("Scope: page backend code"));
         assert!(render(&doc, &request(None, &[])).contains("Scope: the whole map"));
         // An unknown page id falls back instead of naming a page that does not exist.
         assert!(render(&doc, &request(Some(NodeId(999_999)), &[])).contains("Scope: the whole map"));

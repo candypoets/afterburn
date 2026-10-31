@@ -13,10 +13,11 @@ use crate::node_git::{Baseline, Drift};
 /// The most cards listed per group (added, changed, removed) before `… and N more`.
 const MAX_LISTED: usize = 12;
 
-/// `HOW TO SHOW IT`: the canvas is the medium, so ideas are drawn, not written.
+/// `HOW TO SHOW IT`: an explanation is drawn, not written; a design is its own picture.
 const HOW_TO_SHOW: &str = "HOW TO SHOW IT\n\
-     An image is worth a thousand words: design one. Use the canvas, rich diagrams in any form the idea needs, \
-     to carry it with as few words as possible. Words only label and source (file:line).\n";
+     Explaining: draw it. A diagram, chart, flow or before/after, with as few words as possible; \
+     words only label and source (file:line).\n\
+     Designing: the design is the picture. Don't add a diagram about it.\n";
 
 /// `HOW TO SHOW IT` and `HOW TO FINISH`: the kinds of work and their rules live in the mindmap
 /// skill; the prompt keeps the reply's first line and the exact record command. Init is one big
@@ -260,6 +261,11 @@ mod tests {
     fn the_brief_asks_for_pictures_and_keeps_the_kind_line_and_record_command() {
         let text = comment_brief("r1", Some(7), false);
         assert!(text.starts_with("HOW TO SHOW IT\n"), "{text}");
+        assert!(
+            text.contains("Explaining: draw it.")
+                && text.contains("Designing: the design is the picture."),
+            "{text}"
+        );
         for kind in ["Kind: explanation", "Kind: bug fix", "Kind: design edit"] {
             assert!(text.contains(kind), "{text}");
         }

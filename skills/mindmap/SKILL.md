@@ -38,9 +38,10 @@ request ID. After checking out another branch, reopen the worktree to use its se
 
 ## Comments and scope
 
-Context identifies the worktree, branch, session, page and the cards the request is about, with
-their ids and text. It does not list the page's other cards: read the page with
-`get_node <page>` (its cards, with ids and places) and any layer with `get_node <id>`. Read their
+Context identifies the worktree, branch, session and the page in scope. Each comment names its
+card (`On Card (id N) · path`); a selected card no comment names gets a `Selected:` line. Nothing
+else is listed: read the page with `get_node <page>` (its cards, with ids and places) and any
+layer with `get_node <id>`. Read their
 live content, then address the request there. A page-scoped job covers that page and its subpages;
 other pages are out of scope. Preserve card names and page IDs unless the task requires a
 change. Use existing components and layout conventions. Do not rebuild the whole map for a
@@ -51,7 +52,8 @@ local edit.
 The canvas is the medium. An image is worth a thousand words: design one. Carry each idea with a
 rich diagram in whatever form it needs (structure, flow, chart, comparison, several at once) and
 as few words as possible. Words only label the parts and source them (file:line). No shape is
-prescribed; a wall of text cards is the thing to avoid. Check the result with `screenshot`.
+prescribed; a wall of text cards is the thing to avoid. A design is its own picture: do not add a
+diagram that explains it. Check the result with `screenshot`.
 
 Every factual card needs a repository source. Read the implementation before claiming behavior.
 Keep one claim per card and explain it plainly. Label proposals as proposals. Do not edit
