@@ -1,6 +1,7 @@
 //! The per-machine Mindmap node. Repositories own designs; this process owns live sessions.
 
 mod agent;
+mod agent_tools;
 mod comments;
 mod config;
 mod error;
@@ -70,7 +71,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         "help" | "--help" | "-h" => {
-            println!("mindmap-node serve [--bind 127.0.0.1:47822]\nmindmap-node request '<JSON>' [--address HOST:PORT]\nmindmap-node mcp --path WORKTREE [--address HOST:PORT]\n\nOne node per machine; remote clients use one SSH tunnel to its loopback socket.\nRequest methods: hello, host.status, host.ensure, workspaces, workspace.create, workspace.focus, open, init, send, diff, sync, sync_status, sync.prepare, sync.finish, session.inspect, session.command, session.save, merge.plan, merge.apply.\nHerdr installation requires host.ensure with install_herdr:true. Designs live in .mindmap/map.figcraft; no owner link or server key is needed.");
+            println!("mindmap-node serve [--bind 127.0.0.1:47822]\nmindmap-node request '<JSON>' [--address HOST:PORT]\nmindmap-node mcp [--path WORKTREE] [--address HOST:PORT]\n\nOne node per machine; remote clients use one SSH tunnel to its loopback socket.\nRequest methods: hello, host.status, host.ensure, workspaces, workspace.create, workspace.focus, open, init, send, diff, sync, sync_status, sync.prepare, sync.finish, session.inspect, session.command, session.save, merge.plan, merge.apply.\nHerdr installation requires host.ensure with install_herdr:true. Designs live in .mindmap/map.figcraft; no owner link or server key is needed.");
             Ok(())
         }
         command => Err(Error::new(format!("unknown command {command:?}"))),
@@ -145,8 +146,12 @@ fn tool_result(tool: &str, reply: &Value) -> Result<Value> {
 }
 
 /// Small stdio MCP adapter for agents. Commands always execute inside the node's live session.
+/// Without `--path` it opens the folder it runs in: the agent's worktree, so one user-scoped MCP
+/// entry serves every worktree.
 fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
-    let path = path.ok_or_else(|| Error::new("mcp needs --path WORKTREE"))?;
+    let cwd = std::env::current_dir()?;
+    let path = path.map_or_else(|| cwd.to_string_lossy().into_owned(), str::to_owned);
+    let path = path.as_str();
     let opened = request(address, json!({"method":"open","path":path}))?;
     if opened["ok"] != true {
         return Err(Error::new(

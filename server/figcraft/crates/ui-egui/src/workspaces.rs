@@ -340,6 +340,10 @@ struct ServiceReply {
     /// The agent CLIs installed on the project host, in the service's order.
     #[serde(default)]
     clis: Vec<String>,
+    /// What Init installs first (`skill for claude`, `MCP for codex`); empty when ready, and from
+    /// a node that doesn't say.
+    #[serde(default)]
+    agent_tools_missing: Vec<String>,
     #[serde(default)]
     session: Option<String>,
     #[serde(default)]
@@ -382,6 +386,8 @@ pub struct State {
     pub busy: Option<Busy>,
     /// The agent CLIs installed on the project host, from the last list.
     pub clis: Vec<String>,
+    /// What Init installs before it starts an agent, from the last list.
+    pub agent_tools_missing: Vec<String>,
     /// The listing node's version (`0.1.0`).
     pub node_version: Option<String>,
     /// What Init should use for the selected workspace; `None` lets the service choose.
@@ -414,6 +420,7 @@ pub struct State {
 pub struct HostList {
     pub rows: Vec<Workspace>,
     pub clis: Vec<String>,
+    pub agent_tools_missing: Vec<String>,
     pub node: Option<String>,
     pub error: Option<String>,
     /// A listing has answered at least once.
@@ -466,6 +473,7 @@ impl State {
                 Ok(reply) => {
                     list.rows = reply.workspaces.unwrap_or_default();
                     list.clis = reply.clis;
+                    list.agent_tools_missing = reply.agent_tools_missing;
                     list.node = reply.node.filter(|v| !v.trim().is_empty());
                     list.error = None;
                 }
@@ -656,6 +664,7 @@ impl State {
             }
         };
         self.rx = None;
+        let init = matches!(self.busy, Some(Busy::Open { init: true, .. }));
         self.busy = None;
         let (kind, result) = received;
         match kind {
@@ -663,6 +672,7 @@ impl State {
                 Ok(reply) if reply.ok => {
                     self.rows = reply.workspaces.unwrap_or_default();
                     self.clis = reply.clis;
+                    self.agent_tools_missing = reply.agent_tools_missing;
                     self.node_version = reply.node.filter(|v| !v.trim().is_empty());
                     if self.selected.is_none() {
                         self.target = None;
@@ -697,6 +707,10 @@ impl State {
                         }
                         #[cfg(target_arch = "wasm32")]
                         let _ = session;
+                        if init {
+                            // Init installed the agent tools before it started the agent.
+                            self.agent_tools_missing.clear();
+                        }
                         self.error = None;
                         self.retry = None;
                     }
@@ -1189,6 +1203,7 @@ pub(crate) fn use_host(app: &mut FigApp, ctx: &egui::Context, host: &crate::node
     app.ws.selected = None;
     app.ws.rows.clear();
     app.ws.clis.clear();
+    app.ws.agent_tools_missing.clear();
     app.ws.target = None;
     app.ws.join = None;
     app.ws.join_workspace = None;
@@ -1221,6 +1236,7 @@ fn stash_rows(app: &mut FigApp) {
         let list = HostList {
             rows: std::mem::take(&mut app.ws.rows),
             clis: std::mem::take(&mut app.ws.clis),
+            agent_tools_missing: std::mem::take(&mut app.ws.agent_tools_missing),
             node: app.ws.node_version.take(),
             loaded: true,
             ..HostList::default()
@@ -1243,6 +1259,7 @@ pub(crate) fn switch_to(app: &mut FigApp, host: &crate::node_hosts::Host, id: Op
     app.ws.hosts.selected = Some(host.clone());
     app.ws.rows = list.rows;
     app.ws.clis = list.clis;
+    app.ws.agent_tools_missing = list.agent_tools_missing;
     app.ws.node_version = list.node;
     app.ws.error = None;
     app.ws.selected = None;
@@ -2015,7 +2032,11 @@ fn init_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
             app.ws.pick_another(w);
         }
     } else {
-        let label = action_label(w.map_state(), w, busy.as_ref());
+        let setup = !app.ws.agent_tools_missing.is_empty();
+        let label = match busy.as_ref() {
+            None if setup => "Set up agent tools & Init".to_string(),
+            _ => action_label(w.map_state(), w, busy.as_ref()),
+        };
         let enabled = busy.is_none() && !targets.is_empty() && target.is_some();
         if init_button(ui, s, Id::new(("workspace_action", &w.id)), &label, enabled) {
             app.ws.act(&ctx, &w.id, true);
@@ -2031,6 +2052,12 @@ fn init_detail(app: &mut FigApp, ui: &mut Ui, s: &Skin, w: &Workspace) {
                 }
                 _ => "the node is starting the agent; the map appears as it draws".to_string(),
             }
+        } else if setup {
+            // A running agent loaded its MCP servers when it started: the node starts a new one.
+            format!(
+                "Installs what agents need first ({}), then starts a new agent: one already running can't load them.",
+                app.ws.agent_tools_missing.join(", ")
+            )
         } else {
             "One button, one menu: busy agents are disabled in the list.".to_string()
         };
@@ -2518,6 +2545,15 @@ mod detail_tests {
 
     fn agent(pane: &str, kind: &str, status: &str) -> AgentDetail {
         AgentDetail { pane: pane.into(), kind: kind.into(), status: status.into(), ..AgentDetail::default() }
+    }
+
+    #[test]
+    fn a_listing_says_what_init_sets_up_and_an_older_node_says_nothing() {
+        let reply: ServiceReply =
+            serde_json::from_value(serde_json::json!({"ok": true, "agent_tools_missing": ["skill for claude", "MCP for codex"]})).unwrap();
+        assert_eq!(reply.agent_tools_missing, ["skill for claude", "MCP for codex"]);
+        let older: ServiceReply = serde_json::from_value(serde_json::json!({"ok": true, "clis": ["codex"]})).unwrap();
+        assert!(older.agent_tools_missing.is_empty(), "a node that doesn't say is ready");
     }
 
     #[test]

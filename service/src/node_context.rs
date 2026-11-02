@@ -33,7 +33,7 @@ pub struct Request<'a> {
 pub fn render(doc: &Document, request: &Request<'_>) -> String {
     let mut out = format!(
         "MINDMAP CONTEXT\nWorktree: {} · Branch: {} · Node: {} · Session: {}\n\
-         Use the mindmap skill (skills/mindmap/SKILL.md): it lists the tools and how each kind of work finishes. \
+         Use the mindmap skill (~/.claude/skills/mindmap/SKILL.md, or ~/.agents/skills/mindmap/SKILL.md): it lists the tools and how each kind of work finishes. \
          Only the node writes .mindmap/map.figcraft. Keep names stable and source claims.\n",
         one_line(request.worktree),
         one_line(request.branch),

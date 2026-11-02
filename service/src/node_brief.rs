@@ -29,8 +29,10 @@ pub fn comment_brief(request: &str, page: Option<u64>, init: bool) -> String {
     };
     let finish =
         "commit what it stages with the returned trailer as the last line, then node_request \
-         {\"method\":\"sync.finish\",\"job\":\"<job>\",\"commit\":\"<sha>\"}. \
-         If you cannot commit: {\"method\":\"sync.cancel\",\"job\":\"<job>\"}.";
+         {\"method\":\"sync.finish\",\"job\":\"<job>\",\"commit\":\"<sha>\"} with the job its reply names. \
+         If you cannot commit: {\"method\":\"sync.cancel\",\"job\":\"<job>\"}.\n\
+         The user started this from Mindmap: that is their go-ahead for this one commit. Commit what record \
+         stages, plus a fix's own code; no git add -A or commit -a: leave every other change in the worktree as it is.";
     if init {
         return format!(
             "{HOW_TO_SHOW}\n\
@@ -299,7 +301,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.len() < 800,
+            text.len() < 1000,
             "the rules live in the skill: {} chars",
             text.len()
         );
@@ -310,6 +312,10 @@ mod tests {
         );
         assert!(init.contains("one big explanation"), "{init}");
         assert!(init.contains("HOW TO SHOW IT"), "{init}");
+        assert!(
+            init.contains("go-ahead for this one commit") && init.contains("no git add -A"),
+            "Init says the commit is approved and narrow: {init}"
+        );
     }
 
     #[test]

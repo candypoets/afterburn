@@ -365,7 +365,7 @@ impl Node {
                     .ensure(req["install_herdr"].as_bool().unwrap_or(false))?,
             )?),
             "workspaces" => Ok(
-                json!({"workspaces":self.herdr.workspaces()?,"clis":crate::agent::installed_kinds(),"node":env!("CARGO_PKG_VERSION")}),
+                json!({"workspaces":self.herdr.workspaces()?,"clis":crate::agent::installed_kinds(),"agent_tools_missing":crate::agent_tools::missing(&self.address),"node":env!("CARGO_PKG_VERSION")}),
             ),
             "open" | "session.open" => self.open(req),
             "session.list" => Ok(json!({"sessions":lock(&self.docs)?.sessions()})),
@@ -627,9 +627,14 @@ impl Node {
 
     fn send(&self, req: &Value) -> Result<Value> {
         let workspace = self.herdr.find_workspace(required(req, "workspace")?)?;
-        let target = crate::agent::parse_target(req["target"].as_str())?;
+        let mut target = crate::agent::parse_target(req["target"].as_str())?;
         let mut comments = crate::comments::parse_comments(req.get("comments"))?;
         let initial = required(req, "method")? == "init";
+        // Init needs the skill and the node's MCP. Install what is missing; an agent already
+        // running loaded its MCP servers at start, so a new one takes the prompt instead.
+        if initial && !crate::agent_tools::ensure(&self.address)?.is_empty() {
+            target = self.herdr.fresh_target(&workspace, &target)?;
+        }
         let prompt=req["prompt"].as_str().unwrap_or(if initial {"Create the project map in the live session. Read the code, plan and implement the requested map; source every claim."} else {""});
         let session = self.session(req)?;
         self.validate_workspace(&workspace, &session)?;

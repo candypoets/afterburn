@@ -467,13 +467,44 @@ pub fn installed_kinds() -> Vec<String> {
         .collect()
 }
 
+/// A new agent in place of `target`, for when agents already running lack tools just installed:
+/// the same kind as the agent it would have prompted, else the first installed CLI.
+pub fn fresh_target(herdr: &Herdr, workspace: &WorkspaceView, target: &Target) -> Result<Target> {
+    if let Target::Kind(_) = target {
+        return Ok(target.clone());
+    }
+    let agents = herdr.agents()?;
+    let here: Vec<&Agent> = agents
+        .iter()
+        .filter(|agent| agent.workspace_id == workspace.id)
+        .collect();
+    let would_prompt = match target {
+        Target::Pane(pane) => here
+            .iter()
+            .copied()
+            .find(|agent| agent.pane_id.as_deref() == Some(pane.as_str())),
+        _ => pick_agent(&here),
+    };
+    would_prompt
+        .and_then(|agent| agent.agent.clone())
+        .filter(|kind| AGENT_ORDER.contains(&kind.as_str()) && find_in_path(kind).is_some())
+        .or_else(detect_kind)
+        .map(Target::Kind)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "no supported agent CLI found on PATH (tried {})",
+                AGENT_ORDER.join(", ")
+            ))
+        })
+}
+
 /// Find the first supported agent executable on `PATH`, in `AGENT_ORDER`.
 fn detect_kind() -> Option<String> {
     installed_kinds().into_iter().next()
 }
 
 /// A `which`-equivalent over `PATH` without spawning a process.
-fn find_in_path(program: &str) -> Option<PathBuf> {
+pub(crate) fn find_in_path(program: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
         .map(|directory| directory.join(program))

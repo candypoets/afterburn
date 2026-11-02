@@ -214,6 +214,11 @@ impl NodeHerdr {
         agent::preflight(&self.herdr()?, workspace, target)
     }
 
+    /// A new agent in place of `target` (see [`agent::fresh_target`]).
+    pub fn fresh_target(&self, workspace: &WorkspaceView, target: &Target) -> Result<Target> {
+        agent::fresh_target(&self.herdr()?, workspace, target)
+    }
+
     /// Uses the existing selection, new-tab, first-run, and prompt helpers. Prompt text is never
     /// logged here. The caller supplies node/session instructions, not legacy owner links.
     pub fn prompt(
