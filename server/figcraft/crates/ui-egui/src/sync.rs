@@ -4,7 +4,7 @@
 //! compared with each page's own last sync, and its code side is limited to the paths the page's
 //! cards cite; the service keeps one baseline per page.
 //!
-//! The button is a floating pill at the map's top right, never a mode: it opens a widget with the
+//! The header toggle opens a full-height docked sidebar with the
 //! cards waiting (cards, not layers: the node groups every changed layer under its card), the code
 //! that changed since the last sync folded to one line, and a sticky footer with the agent target,
 //! an optional note and the action. Every row takes you there: a click, its → or `[` / `]` opens
@@ -44,8 +44,6 @@ const MAX_PAGES: usize = 500;
 const MAX_NODES: usize = 5_000;
 /// The note is kept well under the service's prompt limit.
 const MAX_NOTE_CHARS: usize = 2_000;
-/// The widget's width.
-const WIDGET_W: f32 = 376.0;
 /// The widget's inner padding.
 const PAD: f32 = 19.0;
 /// How many scope paths and files the code section shows before `+N more`.
@@ -744,10 +742,6 @@ pub struct State {
     pub open: bool,
     /// Where the header's Sync button was drawn last frame (the first-map tooltip hangs under it).
     pub(crate) button_rect: Option<Rect>,
-    /// The widget body's height last frame, so the viewport hugs it.
-    content_h: f32,
-    /// The widget opened this frame: the press that opened it is not a click outside.
-    just_opened: bool,
     /// A diff or a sync request is on its thread (status polls are not "busy").
     pub busy: bool,
     /// The diff last read; replaced after a successful sync.
@@ -783,7 +777,7 @@ pub struct State {
     /// The sync request is on its thread; the job has not come back yet.
     starting: bool,
     /// The agent menu is open.
-    menu_open: bool,
+    pub(crate) menu_open: bool,
     /// The agent menu's search and arrow cursor.
     menu: crate::agent_menu::MenuState,
     /// Sync every page instead of the current page and its subpages.
@@ -800,8 +794,6 @@ pub struct State {
     pub current: Option<u64>,
     /// The code section is unfolded.
     pub(crate) code_open: bool,
-    /// The sticky footer's height last frame, so the list scrolls above it.
-    footer_h: f32,
 }
 
 impl State {
@@ -898,33 +890,47 @@ impl State {
     }
 }
 
-/// The Sync action belongs to the map header: one compact button, no floating pill.
+/// The Sync sidebar toggle, used in the canvas header when closed and its own header when open.
 pub fn header_button(app: &mut FigApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let syncing = app.sync.in_flight() || app.sync.starting;
-    let enabled = app.active_workspace.is_some();
+    let enabled = app.active_workspace.is_some() || app.sync.open;
     let look = button_look(syncing, enabled, app.sync.changes());
-    // `Sync` and, once a diff is read, the change count in a red badge; `Syncing…` in the accent.
-    let font = semibold(10.5);
+    let font = regular(13.0);
     let label_w = text_width(ui, look.label, font.clone());
     let badge = look.count.map(|count| count.to_string());
-    // An 18 pt circle, widened into a pill for longer counts.
     let badge_w = badge.as_ref().map(|count| (text_width(ui, count, mono(8.0)) + 9.0).max(18.0));
-    let width = (12.0 + label_w + badge_w.map_or(12.0, |w| 10.0 + w + 6.0)).max(52.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), if enabled { Sense::click() } else { Sense::hover() });
+    let width = if app.sync.open { ui.available_width() } else { label_w + badge_w.map_or(0.0, |w| w + 8.0) + 46.0 };
+    let (_, rect) = ui.allocate_space(vec2(width, 30.0));
+    let icon_rect = Rect::from_min_max(pos2(rect.right() - 28.0, rect.top()), rect.max);
+    let label_right = (rect.left() + label_w + badge_w.map_or(8.0, |w| w + 16.0)).min(icon_rect.left());
+    let label_rect = Rect::from_min_max(rect.min, pos2(label_right, rect.bottom()));
+    let response = ui.interact(label_rect, ui.id().with("sync_label_toggle"), if enabled { Sense::click() } else { Sense::hover() });
+    let mut cell = ui.new_child(
+        egui::UiBuilder::new().id_salt("sync_sidebar_toggle").max_rect(icon_rect).layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    if !enabled {
+        cell.disable();
+    }
+    let toggle = crate::sidebar_toggle_side(&mut cell, app.sync.open, true);
     app.sync.button_rect = Some(rect);
-    let hot = enabled && response.hovered();
-    ui.painter().rect_filled(rect, CornerRadius::same(8), if hot { SOFT } else { PANEL });
-    ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, look.stroke), StrokeKind::Inside);
-    ui.painter().text(pos2(rect.min.x + 12.0, rect.center().y), Align2::LEFT_CENTER, look.label, font, look.ink);
+    ui.painter().text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, look.label, font, look.ink);
     if let (Some(count), Some(badge_w)) = (badge, badge_w) {
-        let pill = egui::Rect::from_min_size(pos2(rect.max.x - 6.0 - badge_w, rect.center().y - 9.0), vec2(badge_w, 18.0));
+        let pill = Rect::from_min_size(pos2(rect.left() + label_w + 8.0, rect.center().y - 9.0), vec2(badge_w, 18.0));
         ui.painter().rect_filled(pill, CornerRadius::same(9), ACCENT);
         ui.painter().text(pill.center(), Align2::CENTER_CENTER, count, mono(8.0), Color32::WHITE);
     }
-    a11y::button(&response, "Sync the map with the workspace");
-    let response = response.on_hover_text("Sync the map with the workspace");
-    if response.clicked() && enabled {
-        open_panel(app, ctx);
+    let label = if app.sync.open { "Hide Sync sidebar" } else { "Show Sync sidebar" };
+    a11y::button(&response, label);
+    let response = response.on_hover_text(label);
+    if enabled && (response.clicked() || toggle.clicked()) {
+        if app.sync.open {
+            app.sync.open = false;
+            app.sync.menu_open = false;
+            ctx.memory_mut(|memory| memory.surrender_focus(Id::new(NOTE_ID)));
+            ctx.request_repaint();
+        } else {
+            open_panel(app, ctx);
+        }
     }
 }
 
@@ -935,26 +941,24 @@ struct ButtonLook {
     /// The change count badge, when a diff found changes.
     count: Option<usize>,
     ink: Color32,
-    stroke: Color32,
 }
 
 /// Idle `Sync`; Changes `Sync` with its count; Syncing `Syncing…` in the accent; Disabled grey.
 fn button_look(syncing: bool, enabled: bool, changes: Option<usize>) -> ButtonLook {
     if syncing {
-        return ButtonLook { label: "Syncing…", count: None, ink: ACCENT, stroke: ACCENT };
+        return ButtonLook { label: "Syncing…", count: None, ink: ACCENT };
     }
     if !enabled {
-        return ButtonLook { label: "Sync", count: None, ink: FAINT, stroke: BORDER };
+        return ButtonLook { label: "Sync", count: None, ink: FAINT };
     }
-    ButtonLook { label: "Sync", count: changes.filter(|n| *n > 0), ink: INK, stroke: BORDER }
+    ButtonLook { label: "Sync", count: changes.filter(|n| *n > 0), ink: INK }
 }
 
 /// Open the widget and read a fresh diff from the current map.
 pub fn open_panel(app: &mut FigApp, ctx: &egui::Context) {
     app.sync.open = true;
-    app.sync.just_opened = true;
     app.sync.menu_open = false;
-    if app.sync.busy {
+    if app.sync.busy || app.sync.starting || app.sync.in_flight() {
         return;
     }
     let Some(workspace) = app.active_workspace.clone() else {
@@ -970,8 +974,8 @@ pub fn open_panel(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
-/// Draw the Sync widget (the header button opens it).
-pub fn show(app: &mut FigApp, ctx: &egui::Context) {
+/// Poll state and network replies every map frame, before the parent sizes the panels.
+pub fn poll(app: &mut FigApp, ctx: &egui::Context) {
     let Some(workspace) = app.active_workspace.clone() else {
         if app.sync.workspace.is_some() {
             app.sync.reset();
@@ -1039,10 +1043,28 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     } else {
         app.sync.dirty = false;
     }
+}
 
+/// Fill the parent's margin-free right panel, including the window-height header and footer.
+pub fn pane(app: &mut FigApp, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let area = ui.max_rect();
+    ui.painter().rect_filled(area, CornerRadius::ZERO, PANEL);
+    ui.painter().vline(area.left() + 0.5, area.y_range(), Stroke::new(1.0, BORDER));
+    let header_h = if app.ui.mac_inset() { crate::MAC_BAND } else { 44.0 };
+    let top = Rect::from_min_size(area.min, vec2(area.width(), header_h));
+    if app.ui.title_bar != crate::TitleBar::Native {
+        crate::titlebar_drag(ui, top);
+    }
+    let controls = Rect::from_min_max(pos2(top.left() + 18.0, top.top()), pos2(top.right() - 10.0, top.bottom()));
+    let mut head =
+        ui.new_child(egui::UiBuilder::new().id_salt("sync_header").max_rect(controls).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    header_button(app, &mut head, &ctx);
+    ui.painter().hline(top.x_range(), top.bottom() - 0.5, Stroke::new(1.0, BORDER));
     if !app.sync.open {
         return;
     }
+    let Some(workspace) = app.active_workspace.clone() else { return };
 
     let scope = scope_label(app);
     let rows = app.sync.rows();
@@ -1052,12 +1074,15 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     // The pane's keys, before the map's shortcuts see them: `[` and `]` step through the rows
     // (unless a field is typing), ⌘↵ syncs (also from the note).
     let mut keys = WidgetOut::default();
-    let typing = ctx.egui_wants_keyboard_input();
+    // A focused button still allows navigation; only a text editor owns typing keys.
+    let typing = ctx.text_edit_focused();
     let note_focused = ctx.memory(|memory| memory.has_focus(Id::new(NOTE_ID)));
-    if (!typing || note_focused) && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::Enter)) {
+    let hovered = ui.rect_contains_pointer(area);
+    let owns_keys = !crate::map_actions::overlay_open(app, &ctx) && (note_focused || (hovered && !typing));
+    if owns_keys && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::Enter)) {
         keys.sync = true;
     }
-    if !typing {
+    if owns_keys && !typing {
         for (key, delta) in [(Key::OpenBracket, -1), (Key::CloseBracket, 1)] {
             if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key))
                 && let Some(index) = app.sync.step(&rows, delta)
@@ -1066,33 +1091,12 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             }
         }
     }
-    // Under the header (the macOS toolbar band is taller), at the Sync button's right edge.
-    let header_h = if app.ui.mac_inset() { crate::MAC_BAND } else { 44.0 };
     let menu_was_open = app.sync.menu_open;
-    let mut out = WidgetOut::default();
-    // The anchored area takes its first frame's size from `default_size`; without it the
-    // scroll area inherits egui's 400-point default and the widget stops halfway down.
-    let max_h = (ctx.content_rect().height() - 140.0).max(220.0);
-    // A fixed, bounded viewport: an anchored Area that grows with its scrollable content would
-    // chase its own height, and shrinking to measured content lets egui's clipping hide the rest.
-    let widget_h = max_h.min(680.0);
-    let area = egui::Area::new(Id::new("sync_widget"))
-        .anchor(Align2::RIGHT_TOP, vec2(-8.0, header_h + 8.0))
-        .default_size(vec2(WIDGET_W, widget_h))
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            egui::Frame::NONE
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER))
-                .corner_radius(CornerRadius::same(10))
-                .shadow(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(36) })
-                .inner_margin(egui::Margin { left: 19, right: 17, top: 17, bottom: 17 })
-                .show(ui, |ui| {
-                    ui.set_width(WIDGET_W - 2.0 * PAD);
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    out = widget_body(ui, &mut app.sync, &mut app.compose, &scope, &rows, widget_h - 34.0);
-                });
-        });
+    let body_rect = Rect::from_min_max(pos2(area.left(), top.bottom()), area.max);
+    let mut body = ui.new_child(egui::UiBuilder::new().id_salt("sync_body").max_rect(body_rect));
+    body.set_clip_rect(body_rect.intersect(ui.clip_rect()));
+    body.spacing_mut().item_spacing.y = 0.0;
+    let mut out = widget_body(&mut body, &mut app.sync, &mut app.compose, &scope, &rows);
     out.sync |= keys.sync && app.sync.can_sync(&app.compose);
     out.go = out.go.or(keys.go);
     if let Some(key) = out.go
@@ -1101,25 +1105,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         fly_to(app, row);
     }
 
-    let escape = ctx.input(|input| input.key_pressed(Key::Escape));
-    if escape {
-        if menu_was_open {
-            app.sync.menu_open = false;
-        } else {
-            app.sync.open = false;
-        }
-    }
-    let pressed = ctx.input(|input| input.pointer.any_pressed());
-    let pointer = ctx.input(|input| input.pointer.interact_pos());
-    let inside = pointer.is_some_and(|pos| area.response.rect.contains(pos));
-    let just_opened = std::mem::take(&mut app.sync.just_opened);
-    if pressed && !inside && !menu_was_open && !just_opened {
-        // Clicking a target in the menu is outside the widget; the popup owns that click.
-        app.sync.open = false;
-        app.sync.menu_open = false;
-    }
-    if out.close {
-        app.sync.open = false;
+    if menu_was_open && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Escape)) {
         app.sync.menu_open = false;
     }
     if let Some(all_pages) = out.scope
@@ -1133,15 +1119,15 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         app.sync.dirty = false;
         app.sync.error = None;
         if let Ok((snapshot, page)) = snapshot_now(app) {
-            start_diff(app, ctx, snapshot, page, workspace.clone());
+            start_diff(app, &ctx, snapshot, page, workspace.clone());
         }
     }
     if let Some(job) = out.cancel {
-        start_cancel(app, ctx, job);
+        start_cancel(app, &ctx, job);
     }
     if out.sync && app.sync.open {
         match snapshot_now(app) {
-            Ok((snapshot, page)) => start_sync(app, ctx, workspace, snapshot, page),
+            Ok((snapshot, page)) => start_sync(app, &ctx, workspace, snapshot, page),
             Err(message) => app.toast(message),
         }
     }
@@ -1162,7 +1148,6 @@ fn scope_label(app: &FigApp) -> String {
 /// What the widget body asked for.
 #[derive(Default)]
 struct WidgetOut {
-    close: bool,
     sync: bool,
     /// The scope the human picked: `Some(true)` for every page, `Some(false)` for this page.
     scope: Option<bool>,
@@ -1178,14 +1163,23 @@ const NOTE_ID: &str = "sync_note";
 /// The widget's frame contents: the header (scope, cards waiting, stepper), the cards and the
 /// folded code in a scroll area, and the sticky footer (agent, note, action) that stays in view
 /// while the list scrolls.
-fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, scope: &str, rows: &[Row], widget_h: f32) -> WidgetOut {
-    let mut out = WidgetOut::default();
-    let top = ui.cursor().top();
-
+fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, scope: &str, rows: &[Row]) -> WidgetOut {
+    // Reserve the footer before laying out the list, so even an empty diff fills the pane.
+    let sync = egui::Panel::bottom("sync_footer")
+        .resizable(false)
+        .default_size(170.0)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE.fill(PANEL).inner_margin(egui::Margin { left: 19, right: 19, top: 0, bottom: 17 }))
+        .show(ui, |ui| footer(ui, state, compose, rows))
+        .inner;
+    let mut out = WidgetOut { sync, ..WidgetOut::default() };
+    let content = ui.available_rect_before_wrap().shrink2(vec2(PAD, 0.0));
+    let mut list = ui.new_child(egui::UiBuilder::new().id_salt("sync_list").max_rect(content));
+    list.set_clip_rect(content.intersect(ui.clip_rect()));
+    let ui = &mut list;
+    ui.add_space(14.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-        ui.label(egui::RichText::new("SYNC").font(mono(9.5)).color(ACCENT));
-        ui.add_space(4.0);
         let enabled = !state.busy;
         if scope_chip(ui, "This page", !state.all_pages, enabled) {
             out.scope = Some(false);
@@ -1193,11 +1187,6 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
         if scope_chip(ui, "All pages", state.all_pages, enabled) {
             out.scope = Some(true);
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if close_button(ui) {
-                out.close = true;
-            }
-        });
     });
     ui.add_space(12.0);
     if let Some(go) = header(ui, state, rows) {
@@ -1230,91 +1219,78 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
     ui.add_space(if carded { 9.0 } else { 7.0 });
     divider(ui);
 
-    // The list scrolls between the header and the footer; it hugs its content, as the design
-    // draws it, and scrolls only past the window's height.
-    let footer_h = if state.footer_h > 0.0 { state.footer_h } else { 150.0 };
-    let scroll_h = (widget_h - (ui.cursor().top() - top) - footer_h).max(120.0);
-    let fit = if state.content_h > 0.0 { state.content_h.min(scroll_h) } else { scroll_h };
-    let scrolled =
-        egui::ScrollArea::vertical().id_salt("sync_widget_body").max_height(fit).min_scrolled_height(fit).auto_shrink([false, false]).show(
-            ui,
-            |ui| {
-                ui.set_width(ui.available_width());
-                ui.add_space(5.0);
-                if let Some(error) = state.error.clone() {
-                    error_block(ui, &error);
-                    ui.add_space(10.0);
-                }
-                match state.diff.as_ref().map(|diff| diff.code.clone()) {
-                    Some(code) => {
-                        let covers = if state.all_pages { "every page" } else { scope };
-                        if let Some(include) = include_line(ui, covers, !rows.is_empty()) {
-                            if include {
-                                state.excluded.clear();
-                            } else {
-                                state.excluded.extend(rows.iter().flat_map(|row| row.cards.iter().copied()));
-                            }
+    // All remaining height belongs to the list; short content must not pull the footer up.
+    let scroll_h = ui.available_height().max(0.0);
+    egui::ScrollArea::vertical().id_salt("sync_widget_body").max_height(scroll_h).min_scrolled_height(0.0).auto_shrink([false, false]).show(
+        ui,
+        |ui| {
+            ui.set_width(ui.available_width());
+            ui.add_space(5.0);
+            if let Some(error) = state.error.clone() {
+                error_block(ui, &error);
+                ui.add_space(10.0);
+            }
+            match state.diff.as_ref().map(|diff| diff.code.clone()) {
+                Some(code) => {
+                    let covers = if state.all_pages { "every page" } else { scope };
+                    if let Some(include) = include_line(ui, covers, !rows.is_empty()) {
+                        if include {
+                            state.excluded.clear();
+                        } else {
+                            state.excluded.extend(rows.iter().flat_map(|row| row.cards.iter().copied()));
                         }
-                        if rows.is_empty() {
-                            ui.add_space(7.0);
-                            ui.label(egui::RichText::new("No design changes since the last sync.").font(regular(10.5)).color(MUTED));
-                            ui.add_space(7.0);
+                    }
+                    if rows.is_empty() {
+                        ui.add_space(7.0);
+                        ui.label(egui::RichText::new("No design changes since the last sync.").font(regular(10.5)).color(MUTED));
+                        ui.add_space(7.0);
+                    }
+                    let mut clicked = None;
+                    let mut toggled = None;
+                    for row in rows {
+                        let current = state.current == Some(row.key());
+                        let row_out = row_ui(ui, row, current, row.left_out(&state.excluded));
+                        if row_out.toggle {
+                            toggled = Some(row.clone());
+                        } else if row_out.go {
+                            clicked = Some(row.key());
                         }
-                        let mut clicked = None;
-                        let mut toggled = None;
-                        for row in rows {
-                            let current = state.current == Some(row.key());
-                            let row_out = row_ui(ui, row, current, row.left_out(&state.excluded));
-                            if row_out.toggle {
-                                toggled = Some(row.clone());
-                            } else if row_out.go {
-                                clicked = Some(row.key());
-                            }
-                        }
-                        if let Some(row) = toggled {
-                            state.toggle(&row);
-                        }
-                        if let Some(key) = clicked {
-                            state.current = Some(key);
-                            out.go = Some(key);
-                        }
+                    }
+                    if let Some(row) = toggled {
+                        state.toggle(&row);
+                    }
+                    if let Some(key) = clicked {
+                        state.current = Some(key);
+                        out.go = Some(key);
+                    }
+                    ui.add_space(4.0);
+                    divider(ui);
+                    ui.add_space(9.0);
+                    if code_line(ui, state.last.as_ref(), &code, state.code_open) {
+                        state.code_open = !state.code_open;
+                    }
+                    if state.code_open {
                         ui.add_space(4.0);
-                        divider(ui);
-                        ui.add_space(9.0);
-                        if code_line(ui, state.last.as_ref(), &code, state.code_open) {
-                            state.code_open = !state.code_open;
-                        }
-                        if state.code_open {
-                            ui.add_space(4.0);
-                            code_section(ui, state.last.as_ref(), &code);
-                        }
-                        ui.add_space(9.0);
+                        code_section(ui, state.last.as_ref(), &code);
                     }
-                    None => {
-                        ui.add_space(5.0);
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(7.0, 0.0);
-                            if state.busy {
-                                ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
-                                ui.label(egui::RichText::new("Reading the diff…").font(regular(11.0)).color(MUTED));
-                            } else {
-                                ui.label(egui::RichText::new("No diff read yet.").font(regular(11.0)).color(MUTED));
-                            }
-                        });
-                        ui.add_space(9.0);
-                    }
+                    ui.add_space(9.0);
                 }
-            },
-        );
-    let measured = scrolled.content_size.y;
-    if (measured - state.content_h).abs() > 0.5 {
-        state.content_h = measured;
-        ui.ctx().request_repaint();
-    }
-
-    if footer(ui, state, compose, rows) {
-        out.sync = true;
-    }
+                None => {
+                    ui.add_space(5.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(7.0, 0.0);
+                        if state.busy {
+                            ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
+                            ui.label(egui::RichText::new("Reading the diff…").font(regular(11.0)).color(MUTED));
+                        } else {
+                            ui.label(egui::RichText::new("No diff read yet.").font(regular(11.0)).color(MUTED));
+                        }
+                    });
+                    ui.add_space(9.0);
+                }
+            }
+        },
+    );
     out
 }
 
@@ -1568,10 +1544,9 @@ fn code_since(last: Option<&Last>, code: &CodeDiff) -> Option<String> {
         .or_else(|| code.from.as_deref().map(str::trim).filter(|commit| !commit.is_empty()).map(str::to_string))
 }
 
-/// The sticky footer on its soft band: the agent button, the note, and the full-width action
+/// The pinned footer on its white band: the agent button, the note, and the full-width action
 /// `Sync 12 of 14 cards with codex  ⌘↵`. Returns whether the action was clicked.
 fn footer(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, rows: &[Row]) -> bool {
-    let band = ui.painter().add(egui::Shape::Noop);
     let top = ui.cursor().top();
     ui.add_space(13.0);
     // The composer's agent button and menu: the same agent, chosen the same way.
@@ -1607,17 +1582,8 @@ fn footer(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, r
         ui.add_space(7.0);
         ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
     }
-    let bottom = ui.cursor().top();
-    // The band reaches the widget's edges, under the frame's padding.
     let max = ui.max_rect();
-    let rect = Rect::from_min_max(pos2(max.left() - 19.0, top), pos2(max.right() + 17.0, bottom + 17.0));
-    ui.painter().set(band, egui::Shape::rect_filled(rect, CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, SOFT));
-    ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, BORDER));
-    let measured = bottom - top + 2.0;
-    if (measured - state.footer_h).abs() > 0.5 {
-        state.footer_h = measured;
-        ui.ctx().request_repaint();
-    }
+    ui.painter().hline((max.left() - PAD)..=(max.right() + PAD), top, Stroke::new(1.0, BORDER));
     clicked
 }
 
@@ -1633,19 +1599,6 @@ fn sync_label(included: usize, total: usize, kind: Option<&str>) -> String {
         Some(kind) => format!("Sync{cards} with {kind}"),
         None => format!("Sync{cards}"),
     }
-}
-
-/// The header's ×.
-fn close_button(ui: &mut Ui) -> bool {
-    let (rect, response) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
-    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    a11y::button(&response, "Close sync");
-    let hot = response.hovered();
-    if hot {
-        ui.painter().circle_filled(rect.center(), 9.0, SOFT);
-    }
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "×", mono(11.0), if hot { ACCENT } else { MUTED });
-    response.clicked()
 }
 
 /// The in-flight card: spinner, `Sync in flight · kind`, and when it started.
@@ -1945,15 +1898,17 @@ fn note_field(ui: &mut Ui, note: &mut String) {
         .inner_margin(egui::Margin::symmetric(11, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.add(
-                egui::TextEdit::multiline(note)
-                    .id(Id::new(NOTE_ID))
-                    .frame(egui::Frame::NONE)
-                    .font(regular(10.5))
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(1)
-                    .hint_text(egui::RichText::new("Note for this Sync…").font(regular(10.5)).color(FAINT)),
-            );
+            egui::ScrollArea::vertical().id_salt("sync_note_scroll").max_height(64.0).show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(note)
+                        .id(Id::new(NOTE_ID))
+                        .frame(egui::Frame::NONE)
+                        .font(regular(10.5))
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(1)
+                        .hint_text(egui::RichText::new("Note for this Sync…").font(regular(10.5)).color(FAINT)),
+                )
+            });
         });
     if note.chars().count() > MAX_NOTE_CHARS {
         *note = note.chars().take(MAX_NOTE_CHARS).collect();

@@ -88,7 +88,15 @@ fn the_widget_names_the_page_scope_and_the_code_it_covers() {
         let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(time), ..Default::default() };
         let mut out = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
-            crate::sync::show(app, &ctx);
+            crate::sync::poll(app, &ctx);
+            if app.sync.open {
+                egui::Panel::right("sync_test_pane")
+                    .exact_size(360.0)
+                    .resizable(false)
+                    .show_separator_line(false)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| crate::sync::pane(app, ui));
+            }
         });
         out.textures_delta.clear();
         texts(&out.shapes)

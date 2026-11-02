@@ -107,21 +107,42 @@ fn map_command_allowed(id: &str) -> bool {
     }
 }
 
+/// Shared sidebar control; the right-hand variant mirrors Pages' icon and hit area.
 pub(crate) fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
+    sidebar_toggle_side(ui, open, false)
+}
+
+pub(crate) fn sidebar_toggle_side(ui: &mut egui::Ui, open: bool, right: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 30.0), egui::Sense::click());
     let hot = resp.hovered();
-    let color = if hot { egui::Color32::from_rgb(0xB5, 0x45, 0x2F) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
+    let color = if open {
+        egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
+    } else if hot {
+        egui::Color32::from_rgb(0xB5, 0x45, 0x2F)
+    } else {
+        egui::Color32::from_rgb(0x6E, 0x6C, 0x68)
+    };
+    if open || hot {
+        ui.painter().rect_filled(rect.shrink(1.0), egui::CornerRadius::same(5), egui::Color32::from_rgb(0xE8, 0xEE, 0xEB));
+    }
     let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 15.0));
     let p = ui.painter();
     p.rect_stroke(icon, egui::CornerRadius::same(3), egui::Stroke::new(1.2, color), egui::StrokeKind::Inside);
-    let x = icon.left() + 6.0;
+    let x = if right { icon.right() - 6.0 } else { icon.left() + 6.0 };
     p.line_segment([egui::pos2(x, icon.top() + 2.0), egui::pos2(x, icon.bottom() - 2.0)], egui::Stroke::new(1.0, color));
+    let (from, to) = if right { (x + 2.0, icon.right() - 3.0) } else { (icon.left() + 3.0, x - 2.0) };
     for i in 0..3 {
         let y = icon.top() + 4.0 + i as f32 * 3.5;
-        p.line_segment([egui::pos2(icon.left() + 3.0, y), egui::pos2(x - 2.0, y)], egui::Stroke::new(1.0, color));
+        p.line_segment([egui::pos2(from, y), egui::pos2(to, y)], egui::Stroke::new(1.0, color));
     }
-    a11y::button(&resp, if open { "Hide sidebar" } else { "Show sidebar" });
-    resp.on_hover_text(if open { "Hide sidebar" } else { "Show sidebar" })
+    let label = match (right, open) {
+        (true, true) => "Hide Sync sidebar",
+        (true, false) => "Show Sync sidebar",
+        (false, true) => "Hide sidebar",
+        (false, false) => "Show sidebar",
+    };
+    a11y::button(&resp, label);
+    resp.on_hover_text(label)
 }
 
 pub mod machine_modal;
@@ -316,6 +337,8 @@ mod style_folder_rename_tests;
 mod sync_record_tests;
 #[cfg(test)]
 mod sync_scope_tests;
+#[cfg(test)]
+mod sync_sidebar_tests;
 #[cfg(test)]
 mod text_enter_tests;
 #[cfg(test)]
@@ -1670,8 +1693,13 @@ impl FigApp {
         // header, the canvas and the status bar share the column beside it.
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
         let map_view = map_mode && self.has_files() && !self.ui.home;
-        let sidebar_w = if map_view { map_panes::width(self, ui.available_width()) } else { 0.0 };
-        let window_rows = ui.available_rect_before_wrap().y_range();
+        if map_mode {
+            map_shell::poll(self, &ctx);
+            sync::poll(self, &ctx);
+        }
+        let window_rect = ui.available_rect_before_wrap();
+        let (sidebar_w, sync_w) = if map_view { map_panes::widths(self, window_rect.width()) } else { (0.0, 0.0) };
+        let window_rows = window_rect.y_range();
         if sidebar_w > 0.0 {
             egui::Panel::left("workspace_pane")
                 .exact_size(sidebar_w)
@@ -1681,6 +1709,17 @@ impl FigApp {
                 .show(ui, |ui| {
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspace and pages");
                     workspaces::pane(self, ui);
+                });
+        }
+        if sync_w > 0.0 {
+            egui::Panel::right("sync_sidebar")
+                .exact_size(sync_w)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::NONE.fill(t.panel))
+                .show(ui, |ui| {
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Sync, egui::accesskit::Role::Pane, "Sync");
+                    sync::pane(self, ui);
                 });
         }
         // The first-run flow has no status bar: it owns the whole window.
@@ -1808,10 +1847,14 @@ impl FigApp {
                         }
                         toggle.right() + if inset { 0.0 } else { 4.0 }
                     };
-                    let mut end = ui.new_child(centred(rect, egui::Layout::right_to_left(egui::Align::Center)));
-                    end.add_space(8.0);
-                    sync::header_button(self, &mut end, &ctx);
-                    let tabs_right = (end.min_rect().left() - 12.0).max(tabs_left);
+                    let tabs_right = if sync_w > 0.0 {
+                        rect.right()
+                    } else {
+                        let mut end = ui.new_child(centred(rect, egui::Layout::right_to_left(egui::Align::Center)));
+                        end.add_space(8.0);
+                        sync::header_button(self, &mut end, &ctx);
+                        (end.min_rect().left() - 12.0).max(tabs_left)
+                    };
                     map_tabs::strip(self, ui, egui::Rect::from_x_y_ranges(tabs_left..=tabs_right, rect.y_range()));
                 });
         }
@@ -1829,10 +1872,7 @@ impl FigApp {
         });
         if map_mode {
             // The human comment surface: one bar at the bottom of the map.
-            map_shell::poll(self, &ctx);
             compose::show(self, &ctx);
-            // The Sync button and widget, beside the map bar and above the composer.
-            sync::show(self, &ctx);
             // A map Init just opened: who is drawing it, and what Sync is for (once).
             first_map::observe(self, &ctx);
             let header_h = if self.ui.mac_inset() { MAC_BAND } else { 44.0 };
@@ -1847,9 +1887,23 @@ impl FigApp {
         // The sidebar's inner edge, down the whole window: dragging it sizes the sidebar (kept once
         // the drag is over).
         if sidebar_w > 0.0
-            && let Some(w) = map_panes::splitter(ui, "sidebar", sidebar_w, window_rows, sidebar_w, map_panes::SIDEBAR_DEFAULT)
+            && let Some(w) = map_panes::splitter(
+                ui,
+                "sidebar",
+                window_rect.left() + sidebar_w,
+                window_rows,
+                map_panes::sidebar_width(self),
+                map_panes::SIDEBAR_DEFAULT,
+            )
         {
             map_panes::set_sidebar_width(self, w);
+            self.panels_unsaved = true;
+        }
+        if sync_w > 0.0
+            && let Some(w) =
+                map_panes::splitter_right(ui, "sync", window_rect.right() - sync_w, window_rows, map_panes::sync_width(self), map_panes::SYNC_DEFAULT)
+        {
+            map_panes::set_sync_width(self, w);
             self.panels_unsaved = true;
         }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
@@ -2009,7 +2063,12 @@ impl FigApp {
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
         if map_mode() {
             state["mapTabs"] = map_tabs::inspect(self);
-            state["mapPanes"] = json!({"sidebar": map_panes::sidebar_width(self)});
+            state["mapPanes"] = json!({
+                "sidebar": map_panes::sidebar_width(self),
+                "sync": map_panes::sync_width(self),
+                "sidebarOpen": map_panes::sidebar_open(self),
+                "syncOpen": map_panes::sync_open(self),
+            });
         }
         state
     }

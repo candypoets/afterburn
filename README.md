@@ -5,6 +5,14 @@ agents, and a committed `.mindmap/map.figcraft` design. See [node operation and 
 and the [agent workflow](skills/mindmap/SKILL.md). The original generator and hosted-server notes
 below describe the migration source.
 
+## Map sidebars
+
+Pages docks on the left and Sync docks on the right. Their header controls toggle each sidebar
+independently; opening Sync does not start a job. Drag either inner divider to resize it, or
+double-click to reset its width. The app remembers each width, and the canvas and composer use
+the space between them. Closing Sync keeps its note and selected cards; its action stays at the
+bottom while the card list scrolls. The composer remains usable with Sync open.
+
 ## One build, full or headless installation
 
 The root Cargo workspace has two default packages: `figcraft` (desktop app) and `mindmap-node`

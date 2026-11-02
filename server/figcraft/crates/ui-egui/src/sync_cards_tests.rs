@@ -188,33 +188,87 @@ fn open(app: &mut FigApp, frames: &mut Frames) {
 struct Frames {
     ctx: egui::Context,
     time: f64,
+    height: f32,
+    shapes: Vec<egui::epaint::ClippedShape>,
+    remaining_keys: Vec<Key>,
+    external_text: String,
+    external_text_rect: Rect,
+    canvas_button: Option<egui::Response>,
 }
 
 impl Frames {
     fn new() -> Frames {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx, false, 0);
-        Frames { ctx, time: 0.0 }
+        Frames {
+            ctx,
+            time: 0.0,
+            height: 900.0,
+            shapes: Vec::new(),
+            remaining_keys: Vec::new(),
+            external_text: String::new(),
+            external_text_rect: Rect::NOTHING,
+            canvas_button: None,
+        }
     }
 
     /// One frame of the pane with `events`, the canvas marks painted under it.
     fn run(&mut self, app: &mut FigApp, events: Vec<Event>) -> Vec<String> {
         self.time += 1.0 / 60.0;
-        let input =
-            RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))), time: Some(self.time), events, ..Default::default() };
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, self.height))),
+            time: Some(self.time),
+            events,
+            ..Default::default()
+        };
         let mut out = self.ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
             app.canvas.rect = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0));
             canvas_marks(app, ui.painter());
-            show(app, &ctx);
+            poll(app, &ctx);
+            if app.sync.open {
+                egui::Panel::right("sync_test_pane")
+                    .exact_size(360.0)
+                    .resizable(false)
+                    .show_separator_line(false)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| pane(app, ui));
+            } else {
+                let rect = Rect::from_min_size(pos2(1300.0, 0.0), vec2(140.0, 44.0));
+                let mut header = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                header_button(app, &mut header, &ctx);
+            }
+            self.remaining_keys = ctx.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        Event::Key { key, pressed: true, .. } => Some(*key),
+                        _ => None,
+                    })
+                    .collect()
+            });
+            // Render real canvas controls after Sync, as the composer is in the full app.
+            let mut controls = ui.new_child(
+                egui::UiBuilder::new().id_salt("canvas_test_controls").max_rect(Rect::from_min_size(pos2(100.0, 400.0), vec2(300.0, 100.0))),
+            );
+            let button = controls.button("Canvas test button");
+            if button.clicked() {
+                button.request_focus();
+            }
+            self.canvas_button = Some(button);
+            self.external_text_rect =
+                controls.add(egui::TextEdit::multiline(&mut self.external_text).id(crate::compose::input_id()).desired_rows(1)).rect;
         });
         out.textures_delta.clear();
-        texts(&out.shapes)
+        let text = texts(&out.shapes);
+        self.shapes = out.shapes;
+        text
     }
 }
 
 fn press(key: Key) -> Vec<Event> {
-    vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]
+    vec![Event::PointerMoved(pos2(1200.0, 150.0)), Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]
 }
 
 #[test]
@@ -287,4 +341,250 @@ fn brackets_type_in_the_note_instead_of_stepping() {
     frames.run(&mut app, Vec::new());
     frames.run(&mut app, press(Key::CloseBracket));
     assert_eq!(app.sync.current, None);
+}
+
+fn click(frames: &mut Frames, app: &mut FigApp, pos: Pos2) {
+    frames.run(app, vec![Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        frames.run(
+            app,
+            vec![Event::PointerMoved(pos), Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE }],
+        );
+    }
+}
+
+#[test]
+fn sidebar_toggle_works_during_sync_and_preserves_draft_and_exclusions() {
+    let (mut app, ..) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    app.sync.note = "Keep this draft".into();
+    app.sync.excluded.insert(77);
+    app.sync.job = Some(Job { id: "running".into(), state: "in_flight".into(), ..Job::default() });
+    // Both the label and the right-side icon toggle; neither cancels the job.
+    for icon in [false, true] {
+        frames.run(&mut app, Vec::new());
+        let rect = app.sync.button_rect.unwrap();
+        let pos = pos2(if icon { rect.right() - 14.0 } else { rect.left() + 15.0 }, rect.center().y);
+        click(&mut frames, &mut app, pos);
+        assert!(!app.sync.open);
+        frames.run(&mut app, Vec::new());
+        let rect = app.sync.button_rect.unwrap();
+        let pos = pos2(if icon { rect.right() - 14.0 } else { rect.left() + 15.0 }, rect.center().y);
+        click(&mut frames, &mut app, pos);
+        assert!(app.sync.open);
+        assert!(app.sync.in_flight());
+        assert_eq!(app.sync.note, "Keep this draft");
+        assert!(app.sync.excluded.contains(&77));
+        assert!(app.sync.rx.is_none(), "reopening a running sync must not start a diff request");
+    }
+}
+
+#[test]
+fn canvas_click_and_escape_leave_sidebar_open_but_escape_closes_its_picker() {
+    let (mut app, ..) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    click(&mut frames, &mut app, pos2(200.0, 200.0));
+    assert!(app.sync.open);
+    frames.run(&mut app, press(Key::Escape));
+    assert!(app.sync.open);
+    app.sync.menu_open = true;
+    frames.run(&mut app, press(Key::Escape));
+    assert!(!app.sync.menu_open);
+    assert!(app.sync.open);
+}
+
+#[test]
+fn closed_sidebar_still_receives_job_status_and_diff_replies() {
+    let (mut app, ..) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    app.sync.open = false;
+    app.sync.note = "Draft while waiting".into();
+    app.sync.excluded.insert(77);
+    app.sync.job = Some(Job { id: "running".into(), state: "in_flight".into(), ..Job::default() });
+    let (job_tx, job_rx) = mpsc::channel();
+    app.sync.job_rx = Some(job_rx);
+    job_tx
+        .send(JobMsg::Status(Ok(StatusReply {
+            ok: true,
+            job: Some(Job { id: "running".into(), state: "failed".into(), reason: Some("Agent stopped".into()), ..Job::default() }),
+            ..StatusReply::default()
+        })))
+        .unwrap();
+    let (diff_tx, diff_rx) = mpsc::channel();
+    app.sync.rx = Some(diff_rx);
+    app.sync.busy = true;
+    diff_tx.send(Ok(DiffReply { ok: true, ..DiffReply::default() })).unwrap();
+    frames.run(&mut app, Vec::new());
+    assert!(!app.sync.open && !app.sync.busy && !app.sync.in_flight());
+    assert!(app.sync.job.as_ref().unwrap().failed());
+    assert!(app.sync.diff.as_ref().unwrap().ok);
+    assert!(app.sync.rx.is_none() && app.sync.job_rx.is_none());
+    assert_eq!(app.sync.note, "Draft while waiting");
+    assert!(app.sync.excluded.contains(&77));
+}
+
+fn command_enter(pos: Pos2) -> Vec<Event> {
+    vec![Event::PointerMoved(pos), Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND }]
+}
+
+#[test]
+fn sidebar_keys_require_hover_or_its_note_focus_and_leave_composer_keys_alone() {
+    let (mut app, ..) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    let canvas = pos2(200.0, 200.0);
+    let sidebar = pos2(1200.0, 150.0);
+    frames.run(&mut app, command_enter(canvas));
+    assert!(frames.remaining_keys.contains(&Key::Enter));
+    frames.run(
+        &mut app,
+        vec![
+            Event::PointerMoved(canvas),
+            Event::Key { key: Key::CloseBracket, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+        ],
+    );
+    assert!(frames.remaining_keys.contains(&Key::CloseBracket));
+    assert!(app.sync.current.is_none());
+    // A text input outside Sync retains Cmd+Enter even with the pointer over the sidebar.
+    let composer = crate::compose::input_id();
+    let text_pos = frames.external_text_rect.center();
+    click(&mut frames, &mut app, text_pos);
+    assert!(frames.ctx.text_edit_focused());
+    assert!(frames.ctx.memory(|memory| memory.has_focus(composer)));
+    frames.run(&mut app, command_enter(sidebar));
+    assert!(frames.remaining_keys.contains(&Key::Enter));
+    assert!(app.sync.current.is_none());
+    frames.run(&mut app, press(Key::CloseBracket));
+    assert!(frames.remaining_keys.contains(&Key::CloseBracket));
+    assert!(app.sync.current.is_none());
+    frames.ctx.memory_mut(|memory| memory.surrender_focus(composer));
+    frames.run(&mut app, command_enter(sidebar));
+    assert!(!frames.remaining_keys.contains(&Key::Enter));
+    frames.ctx.memory_mut(|memory| memory.request_focus(Id::new(NOTE_ID)));
+    frames.run(&mut app, command_enter(canvas));
+    assert!(!frames.remaining_keys.contains(&Key::Enter));
+    assert!(!app.sync.starting, "without an agent, the shortcut cannot dispatch Sync");
+}
+
+#[test]
+fn focused_canvas_button_does_not_block_hovered_sync_shortcuts() {
+    let (mut app, _, _, first, _) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    let button = frames.canvas_button.as_ref().unwrap().clone();
+    click(&mut frames, &mut app, button.rect.center());
+    assert!(frames.ctx.memory(|memory| memory.has_focus(button.id)));
+    assert!(frames.ctx.egui_wants_keyboard_input());
+    assert!(!frames.ctx.text_edit_focused());
+    frames.run(&mut app, press(Key::CloseBracket));
+    assert_eq!(app.sync.current, Some(first));
+    assert!(!frames.remaining_keys.contains(&Key::CloseBracket));
+    frames.run(&mut app, command_enter(pos2(1200.0, 150.0)));
+    assert!(!frames.remaining_keys.contains(&Key::Enter));
+    assert!(!app.sync.starting, "shortcut still respects Sync action eligibility");
+}
+
+#[test]
+fn overlays_keep_sync_shortcuts_for_their_own_controls_even_with_note_focus() {
+    let (mut app, ..) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    for overlay in 0..4 {
+        app.ui.preferences = overlay == 0;
+        app.ui.palette = (overlay == 1).then(String::new);
+        app.compose.menu_open = overlay == 2;
+        app.sync.menu_open = overlay == 3;
+        frames.run(&mut app, press(Key::CloseBracket));
+        assert!(frames.remaining_keys.contains(&Key::CloseBracket), "overlay {overlay}");
+        assert!(app.sync.current.is_none());
+        // Sync's popup may dismiss itself when its owner isn't focused: restore its flag
+        // before exercising the next shortcut, just as the overlay owner does on opening.
+        app.sync.menu_open = overlay == 3;
+        frames.ctx.memory_mut(|memory| memory.request_focus(Id::new(NOTE_ID)));
+        frames.run(&mut app, command_enter(pos2(1200.0, 150.0)));
+        assert!(frames.remaining_keys.contains(&Key::Enter), "overlay {overlay}");
+        assert!(!app.sync.starting);
+        frames.ctx.memory_mut(|memory| memory.surrender_focus(Id::new(NOTE_ID)));
+    }
+}
+
+fn text_rect(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Rect {
+    fn find(shape: &egui::Shape, needle: &str) -> Option<Rect> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text() == needle => Some(Rect::from_min_size(text.pos, text.galley.size())),
+            egui::Shape::Vec(shapes) => shapes.iter().rev().find_map(|shape| find(shape, needle)),
+            _ => None,
+        }
+    }
+    // The empty-list action and header both say Sync; the footer is painted last.
+    shapes.iter().rev().find_map(|shape| find(&shape.shape, needle)).unwrap_or_else(|| panic!("missing text {needle:?}"))
+}
+
+#[test]
+fn docked_shell_and_footer_fill_the_window_with_short_and_long_lists() {
+    let (mut app, ..) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    for height in [900.0, 520.0] {
+        frames.height = height;
+        for count in [0, 80] {
+            app.sync.diff = Some(DiffReply {
+                ok: true,
+                map: MapDiff {
+                    cards: (0..count).map(|i| card(1000 + i, &format!("Waiting card {i}"), "added", "frame", 1)).collect(),
+                    ..MapDiff::default()
+                },
+                ..DiffReply::default()
+            });
+            for _ in 0..3 {
+                frames.run(&mut app, Vec::new());
+            }
+            // Frame backgrounds can be nested under Shape::Vec (for example with shadows).
+            fn collect_rects(shape: &egui::Shape, rects: &mut Vec<egui::epaint::RectShape>) {
+                match shape {
+                    egui::Shape::Rect(rect) => rects.push(rect.clone()),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_rects(shape, rects)),
+                    _ => {}
+                }
+            }
+            let mut rects = Vec::new();
+            for clipped in &frames.shapes {
+                collect_rects(&clipped.shape, &mut rects);
+            }
+            let expected = Rect::from_min_max(pos2(1080.0, 0.0), pos2(1440.0, height));
+            let shell = rects.iter().find(|rect| rect.fill == PANEL && rect.rect == expected).unwrap_or_else(|| {
+                let white_rects: Vec<_> = rects.iter().filter(|rect| rect.fill == PANEL).map(|rect| (rect.rect, rect.corner_radius)).collect();
+                panic!("missing flat full-height Sync shell: expected={expected:?}, cards={count}, open={}, viewport={:?}, header={:?}, white_rects={white_rects:?}",
+                    app.sync.open, frames.ctx.viewport_rect(), app.sync.button_rect);
+            });
+            assert_eq!(shell.corner_radius, CornerRadius::ZERO);
+            assert_eq!(shell.rect.top(), 0.0);
+            assert_eq!(shell.rect.right(), 1440.0);
+            let label = sync_label(count as usize, count as usize, None);
+            let action = text_rect(&frames.shapes, &label);
+            assert!(action.bottom() < height && action.top() > height - 100.0, "footer action {action:?} in {height}");
+            let header = app.sync.button_rect.unwrap();
+            assert!(header.bottom() <= crate::MAC_BAND);
+            assert!(header.left() >= shell.rect.left());
+            // Scroll the long list: its content moves, while the footer stays put.
+            if count > 0 {
+                frames.run(
+                    &mut app,
+                    vec![
+                        Event::PointerMoved(pos2(1200.0, 300.0)),
+                        Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: vec2(0.0, -500.0),
+                            phase: egui::TouchPhase::Move,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+                assert_eq!(text_rect(&frames.shapes, &label), action);
+            }
+        }
+    }
 }

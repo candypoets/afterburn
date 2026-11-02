@@ -133,7 +133,7 @@ pub fn blocking_overlay(app: &FigApp, ctx: &Context) -> bool {
         || app.ui.missing_fonts.is_some()
         || app.page_tree.open
         || app.agents_modal.open
-        || app.sync.open
+        || app.sync.menu_open
         || app.new_page.open
         || app.page_delete.is_some()
         || app.machine_modal.open
@@ -172,6 +172,7 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
         || std::mem::take(&mut app.ui.main_menu)
         || app.compose.confirm.take().is_some()
         || std::mem::take(&mut app.compose.menu_open)
+        || std::mem::take(&mut app.sync.menu_open)
         || crate::map_navigation::close_search(ctx)
     {
     } else if app.ui.preferences
@@ -200,7 +201,6 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
         }
     } else if app.page_delete.take().is_some()
         || std::mem::take(&mut app.agents_modal.open)
-        || std::mem::take(&mut app.sync.open)
         || std::mem::take(&mut app.page_tree.open)
         || std::mem::take(&mut app.status.switcher_open)
         || app.ui.key_box.take().is_some()

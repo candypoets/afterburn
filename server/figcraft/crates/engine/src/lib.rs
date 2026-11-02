@@ -684,6 +684,10 @@ pub struct Prefs {
     /// interface keeps it within its limits).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub map_sidebar_width: Option<f32>,
+    /// The map client's right Sync sidebar width (`None`: the default; the interface keeps it
+    /// within its limits and fits it beside the left sidebar without changing this preference).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map_sync_width: Option<f32>,
 }
 
 /// Recently run actions kept for the Actions palette (newest first).
@@ -721,6 +725,7 @@ impl Default for Prefs {
             recent_actions: Vec::new(),
             update_checked: None,
             map_sidebar_width: None,
+            map_sync_width: None,
         }
     }
 }

@@ -36,8 +36,6 @@ use crate::workspaces::Target;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-/// The least it shrinks to in a narrow window.
-const PANEL_MIN_W: f32 = 280.0;
 /// The height of the row under the field: the recipient chip and Send.
 const ROW_H: f32 = 32.0;
 /// Send's least width; `Review send` widens it.
@@ -440,9 +438,15 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         draft_glow(app, ctx, page);
     }
     // The sidebar takes the left edge; the composer belongs to the canvas column.
-    let pane = crate::map_panes::canvas_left(app, ctx);
-    // Docked: the full canvas width, flush on the status bar, with no gap, rounding or shadow.
-    let width = (ctx.content_rect().width() - pane).max(PANEL_MIN_W);
+    // Use this frame's allocated canvas column, including both sidebars. A toggle can change
+    // state during drawing; the composer must still match the panels allocated for this frame.
+    let (pane, width) = if app.canvas.rect.is_finite() && app.canvas.rect.width() > 0.0 {
+        (app.canvas.rect.left() - ctx.content_rect().left(), app.canvas.rect.width())
+    } else {
+        // A standalone composer can be drawn before the canvas has allocated its first frame.
+        let (left, right) = crate::map_panes::widths(app, ctx.content_rect().width());
+        (left, (ctx.content_rect().width() - left - right).max(1.0))
+    };
 
     let mut send = false;
     let mut clear = false;
