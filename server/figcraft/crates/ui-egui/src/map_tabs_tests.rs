@@ -79,6 +79,29 @@ fn clicking_a_tab_opens_its_page_and_middle_click_closes_it() {
 }
 
 #[test]
+fn the_close_button_closes_a_tab_never_its_page_and_the_last_tab_has_none() {
+    crate::with_map_mode(|| {
+        let (mut u, [a, b, c]) = setup();
+        select(&mut u, b);
+        select(&mut u, c);
+        let cell = |u: &Ui, page| u.app.page_tabs.cells.iter().find(|(id, _)| *id == Some(page)).unwrap().1;
+        // The active tab's ×.
+        let at = crate::map_tabs::close_rect(cell(&u, c)).center();
+        click(&mut u, at, PointerButton::Primary);
+        assert_eq!(crate::map_tabs::open(&u.app), vec![a, b]);
+        assert_eq!(page_count(&u), 3, "closing a tab never deletes its page");
+        // An inactive tab shows its × while hovered: hover, then click it there.
+        let at = crate::map_tabs::close_rect(cell(&u, a)).center();
+        click(&mut u, at, PointerButton::Primary);
+        assert_eq!(crate::map_tabs::open(&u.app), vec![b], "the hovered tab closed, not selected");
+        // The last tab has no ×: a click there just selects it.
+        let at = crate::map_tabs::close_rect(cell(&u, b)).center();
+        click(&mut u, at, PointerButton::Primary);
+        assert_eq!(crate::map_tabs::open(&u.app), vec![b]);
+    });
+}
+
+#[test]
 fn command_w_closes_the_active_tab_never_the_page() {
     crate::with_map_mode(|| {
         let (mut u, [a, b, c]) = setup();

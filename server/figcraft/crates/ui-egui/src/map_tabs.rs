@@ -1,7 +1,8 @@
 //! The title row's tabs: the open pages of the map, any depth, from the window's left above the
 //! page tree (the Page tabs design). The tree, a link or search opens a page by selecting it; the
-//! page then gets a tab. ⌘W closes the active tab (its neighbour's page opens), a middle-click
-//! closes any, and the last one stays. Closing a tab never deletes a page.
+//! page then gets a tab. The × on the active tab (and on another while hovered), ⌘W for the
+//! active one, or a middle-click closes a tab (its neighbour's page opens); the last one stays and
+//! has no ×. Closing a tab never deletes a page.
 //!
 //! Each open map (its file, so each worktree) keeps its own tabs for the session. A tab whose page
 //! was deleted goes away. When the tabs outgrow the row they shrink to a minimum, then the strip
@@ -17,7 +18,8 @@ use crate::FigApp;
 
 /// The label's left inset in a cell; the design leaves more room after the label.
 pub const PAD: f32 = 10.0;
-const TAIL: f32 = 22.0;
+/// The room after the label: the × and its margins.
+const TAIL: f32 = 30.0;
 /// The narrowest a tab shrinks to before the strip scrolls.
 pub const MIN_CELL: f32 = 56.0;
 /// The separators between cells.
@@ -34,6 +36,11 @@ const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
 const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
 const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
 const RULE: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
+/// The × button's hover fill.
+const CLOSE_HOVER: Color32 = Color32::from_rgb(0xDF, 0xDE, 0xD9);
+/// The × button: a 16 pt square in the cell's tail, its centre this far from the right edge.
+const CLOSE: f32 = 16.0;
+const CLOSE_INSET: f32 = 14.0;
 
 /// The tab label's type: a JetBrains Mono–like monospace.
 pub fn font() -> FontId {
@@ -155,9 +162,14 @@ pub fn underline(cell: Rect) -> Rect {
     Rect::from_min_max(pos2(cell.left(), cell.bottom() - UNDERLINE), cell.right_bottom())
 }
 
+/// A tab's × button, in its tail on the centre line.
+pub fn close_rect(cell: Rect) -> Rect {
+    Rect::from_center_size(pos2(cell.right() - CLOSE_INSET, cell.center().y), egui::vec2(CLOSE, CLOSE))
+}
+
 /// One flat cell, full height: inactive ones on the soft fill in muted text, the active one white
 /// in ink with the underline.
-fn paint_cell(ui: &Ui, cell: Rect, clip: Rect, label: &str, active: bool, hovered: bool) {
+fn paint_cell(ui: &Ui, cell: Rect, clip: Rect, label: &str, active: bool, hovered: bool, closable: bool) {
     let painter = ui.painter().with_clip_rect(clip);
     let fill = if active {
         ACTIVE
@@ -168,7 +180,9 @@ fn paint_cell(ui: &Ui, cell: Rect, clip: Rect, label: &str, active: bool, hovere
     };
     painter.rect_filled(cell, egui::CornerRadius::ZERO, fill);
     let text = if active || hovered { INK } else { MUTED };
-    let label_clip = Rect::from_min_max(cell.min, pos2(cell.right() - 6.0, cell.bottom())).intersect(clip);
+    // The label stops before the × when the cell shows one.
+    let end = if closable { close_rect(cell).left() - 4.0 } else { cell.right() - 6.0 };
+    let label_clip = Rect::from_min_max(cell.min, pos2(end, cell.bottom())).intersect(clip);
     ui.painter().with_clip_rect(label_clip).text(label_pos(cell), Align2::LEFT_CENTER, label, font(), text);
     if active {
         painter.rect_filled(underline(cell), egui::CornerRadius::ZERO, ACCENT);
@@ -233,15 +247,35 @@ pub fn strip(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
         let hit = cell.intersect(rect);
         let resp = ui.interact(hit, Id::new(("map_tab", id.0)), Sense::click());
         let active = current == Some(*id);
-        paint_cell(ui, cell, rect, name, active, resp.hovered() && !active);
+        let over = ui.rect_contains_pointer(hit);
+        // The ×: on the active tab, and on another while hovered; never on the last tab.
+        let several = tabs.len() > 1;
+        let closable = several && (active || over);
+        paint_cell(ui, cell, rect, name, active, over && !active, closable);
+        if closable {
+            let button = close_rect(cell);
+            let close = ui.interact(button.intersect(rect), Id::new(("map_tab_close", id.0)), Sense::click());
+            let painter = ui.painter().with_clip_rect(rect);
+            if close.hovered() {
+                painter.rect_filled(button, egui::CornerRadius::same(4), CLOSE_HOVER);
+            }
+            let ink = if close.hovered() { INK } else { MUTED };
+            let c = button.center();
+            let stroke = Stroke::new(1.2, ink);
+            painter.line_segment([pos2(c.x - 3.5, c.y - 3.5), pos2(c.x + 3.5, c.y + 3.5)], stroke);
+            painter.line_segment([pos2(c.x + 3.5, c.y - 3.5), pos2(c.x - 3.5, c.y + 3.5)], stroke);
+            crate::a11y::button(&close, &format!("Close tab {name}"));
+            if close.on_hover_text("Close tab").clicked() {
+                act = Some(Act::Close(*id));
+            }
+        }
         ui.painter().with_clip_rect(rect).vline(cell.right() + SEPARATOR / 2.0, rect.y_range(), rule);
         crate::a11y::button(&resp, &format!("Page tab {name}"));
         if resp.middle_clicked() {
             act = Some(Act::Close(*id));
-        } else if resp.clicked() {
+        } else if resp.clicked() && act.is_none() {
             act = Some(Act::Select(*id));
         }
-        let several = tabs.len() > 1;
         resp.context_menu(|ui| {
             if ui.add_enabled(several, egui::Button::new("Close tab")).clicked() {
                 act = Some(Act::Close(*id));
@@ -260,7 +294,7 @@ pub fn strip(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
     }
     let plus = Rect::from_min_max(pos2(x, rect.top()), pos2(x + plus_w, rect.bottom()));
     let resp = ui.interact(plus.intersect(rect), Id::new("map_tab_new_page"), Sense::click());
-    paint_cell(ui, plus, rect, "+ Page", false, resp.hovered());
+    paint_cell(ui, plus, rect, "+ Page", false, resp.hovered(), false);
     crate::a11y::button(&resp, "New page");
     if resp.on_hover_text("New page").clicked() {
         act = Some(Act::NewPage);
