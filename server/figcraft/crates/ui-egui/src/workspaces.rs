@@ -1097,10 +1097,18 @@ fn join_ready(app: &mut FigApp) -> bool {
         // one peer per session, so it must not join twice from two local tabs.
         let existing = app.session.docs.iter().position(|doc| {
             let live = app.session.live_of(doc.uid);
-            live.status == figcraft_engine::live::Status::Live && live.info.as_ref().is_some_and(|info| info.link == route)
+            matches!(
+                live.status,
+                figcraft_engine::live::Status::Live | figcraft_engine::live::Status::Reconnecting { .. } | figcraft_engine::live::Status::Connecting
+            ) && live.info.as_ref().is_some_and(|info| info.link == route)
         });
         if let Some(index) = existing {
             app.session.active = index;
+            if app.session.live().status != figcraft_engine::live::Status::Live
+                && let Ok(target) = crate::node::SessionRef::parse(&route)
+            {
+                crate::node::retry_session(&target);
+            }
             app.ui.home = false;
             update_active(app);
             app.machine_modal.close();
@@ -1128,14 +1136,32 @@ fn join_ready(app: &mut FigApp) -> bool {
 pub fn active_node(app: &FigApp) -> Result<crate::node::SessionRef, String> {
     let live = app.session.live();
     if live.status != figcraft_engine::live::Status::Live {
-        return Err("Open a connected node workspace first.".into());
+        return Err("The node is offline. Click the connection status to retry; your comments are kept.".into());
     }
-    crate::node::SessionRef::parse(&live.info.as_ref().ok_or("The node session is not ready.")?.link)
+    node_identity(app).ok_or_else(|| "Open a node workspace first.".into())
+}
+
+/// Workspace identity survives a temporary outage; only requests require a live connection.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn node_identity(app: &FigApp) -> Option<crate::node::SessionRef> {
+    crate::node::SessionRef::parse(&app.session.live().info.as_ref()?.link).ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn reconnect(app: &mut FigApp) {
+    if let Some(target) = node_identity(app)
+        && crate::node::retry_session(&target)
+    {
+        app.toast("Reconnecting to the node. Your comments are kept; send them when connected.");
+    } else {
+        crate::switcher::toggle(app);
+        app.toast("Choose the workspace to reconnect. Your comments are kept.");
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn update_active(app: &mut FigApp) {
-    app.active_workspace = active_node(app).ok().map(|target| target.workspace);
+    app.active_workspace = node_identity(app).map(|target| target.workspace);
 }
 
 /// Live job and Herdr notifications use the same socket as the document.

@@ -26,9 +26,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").ok_or("missing manifest directory")?);
     let root = manifest.ancestors().find(|path| path.join("service/src/node_main.rs").is_file()).ok_or("missing canonical Mindmap workspace")?;
     let mut files = Vec::new();
-    for relative in
-        ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "service/Cargo.toml", "service/src", "skills/mindmap", "server/figcraft/crates", "server/figcraft/apps"]
-    {
+    for relative in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        "service/Cargo.toml",
+        "service/src",
+        "skills/mindmap",
+        "server/figcraft/crates",
+        "server/figcraft/apps",
+    ] {
         let path = root.join(relative);
         println!("cargo:rerun-if-changed={}", path.display());
         collect(&path, &mut files)?;

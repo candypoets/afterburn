@@ -32,6 +32,14 @@ pub const ACTIONS: &[Action] = &[
     action!("map.newWorkspace", "New workspace", "Workspaces + app", "Cmd+N", "Ctrl+N", "Workspace: open workspace creation."),
     action!("map.save", "Save map", "Workspaces + app", "Cmd+S", "Ctrl+S", "Map: ask the node to persist; show saving, saved or error."),
     action!(
+        "map.reconnect",
+        "Reconnect to node",
+        "Workspaces + app",
+        "",
+        "",
+        "Map: retry the current node connection; keep comments and pending edits."
+    ),
+    action!(
         "map.closeTab",
         "Close tab",
         "Pages + navigation",

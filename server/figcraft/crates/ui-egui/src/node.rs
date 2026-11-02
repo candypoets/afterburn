@@ -6,7 +6,7 @@ use std::net::{Shutdown, TcpStream};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use figcraft_collab::message::{self, ClientMsg, Hello, ServerMsg};
 use figcraft_engine::live::{Event, HostOptions, LiveLink, Presence, Resume, Role, SessionId, SessionInfo, Status};
@@ -23,6 +23,42 @@ type Wake = Arc<dyn Fn() + Send + Sync>;
 static WAKE: OnceLock<Mutex<Option<Wake>>> = OnceLock::new();
 type Slot = Arc<Mutex<Option<Arc<Connection>>>>;
 static POOL: OnceLock<Pool> = OnceLock::new();
+type Recoveries = BTreeMap<String, Vec<Weak<Recovery>>>;
+static RECOVERIES: OnceLock<Mutex<Recoveries>> = OnceLock::new();
+
+#[derive(Default)]
+struct Recovery {
+    retry: AtomicBool,
+    error: Mutex<Option<String>>,
+}
+
+/// Retry the existing session worker; never open another document or resend a comment.
+pub fn retry_session(target: &SessionRef) -> bool {
+    let Some(registry) = RECOVERIES.get() else { return false };
+    let registry = registry.lock().unwrap_or_else(|p| p.into_inner());
+    let mut retried = false;
+    for recovery in registry.get(&target.route()).into_iter().flatten().filter_map(Weak::upgrade) {
+        recovery.retry.store(true, Ordering::SeqCst);
+        retried = true;
+    }
+    retried
+}
+
+pub fn recovery_error(target: &SessionRef) -> Option<String> {
+    let registry = RECOVERIES.get()?.lock().ok()?;
+    registry.get(&target.route())?.iter().filter_map(Weak::upgrade).find_map(|state| state.error.lock().ok()?.clone())
+}
+
+fn register_recovery(target: &SessionRef) -> Arc<Recovery> {
+    let recovery = Arc::new(Recovery::default());
+    let mut registry = RECOVERIES.get_or_init(Mutex::default).lock().unwrap_or_else(|p| p.into_inner());
+    registry.retain(|_, states| {
+        states.retain(|state| state.strong_count() > 0);
+        !states.is_empty()
+    });
+    registry.entry(target.route()).or_default().push(Arc::downgrade(&recovery));
+    recovery
+}
 
 #[derive(Default)]
 struct Pool {
@@ -60,7 +96,7 @@ impl Pool {
         if let Some(slot) = slot
             && let Some(connection) = slot.lock().unwrap_or_else(|p| p.into_inner()).take()
         {
-            connection.fail("The node was updated. Reopen the workspace to reconnect.");
+            connection.fail("The node was updated. Reconnecting to the workspace.");
         }
     }
 
@@ -232,10 +268,13 @@ impl Connection {
         }
         let written = self.writer.lock().unwrap_or_else(|p| p.into_inner()).write_all(&bytes);
         if written.is_err() {
-            self.fail("The node connection was lost. Reopen the workspace to reconnect.");
+            self.fail("The node connection was lost. Reconnecting to the workspace.");
         }
-        let reply =
-            rx.recv_timeout(timeout).unwrap_or_else(|_| Err("The node request timed out; its outcome is unknown. Refresh before retrying.".into()));
+        let reply = rx.recv_timeout(timeout).unwrap_or_else(|_| {
+            // A silent socket must not remain the pool's apparently healthy connection.
+            self.fail("The node stopped responding. Reconnecting to the workspace.");
+            Err("The node request timed out; its outcome is unknown. Refresh before retrying.".into())
+        });
         self.pending.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
         reply
     }
@@ -259,7 +298,7 @@ fn read_frames(stream: TcpStream, weak: Weak<Connection>) {
         let read = reader.by_ref().take(MAX_FRAME + 1).read_line(&mut line);
         let Some(connection) = weak.upgrade() else { return };
         if !matches!(read, Ok(n) if n > 0) {
-            connection.fail("The node connection was lost. Reopen the workspace to reconnect.");
+            connection.fail("The node connection was lost. Reconnecting to the workspace.");
             return;
         }
         if line.len() as u64 > MAX_FRAME || !line.ends_with('\n') {
@@ -407,6 +446,7 @@ impl LiveLink for NodeLiveLink {
         let events = self.tx.clone();
         let wake = self.wake.clone();
         let name = name.to_string();
+        let recovery = register_recovery(&target);
         std::thread::Builder::new()
             .name("mindmap-node-session".into())
             .spawn(move || {
@@ -414,7 +454,7 @@ impl LiveLink for NodeLiveLink {
                     let _ = events.send((id, event));
                     wake();
                 };
-                if let Err(reason) = session_worker(&target, &name, resume, rx, &emit) {
+                if let Err(reason) = session_worker(&target, &name, resume, rx, &recovery, &emit) {
                     emit(Event::Status(Status::Failed { reason }));
                 }
             })
@@ -450,11 +490,69 @@ impl Drop for NodeLiveLink {
 fn session_worker(
     target: &SessionRef,
     name: &str,
-    resume: Option<Resume>,
+    mut resume: Option<Resume>,
     outgoing: mpsc::Receiver<Option<ClientMsg>>,
+    recovery: &Recovery,
+    emit: &dyn Fn(Event),
+) -> Result<(), String> {
+    let mut attempt = 0u32;
+    loop {
+        match session_connection(target, name, &mut resume, &outgoing, recovery, &mut attempt, emit) {
+            Ok(()) => return Ok(()),
+            Err(error) if resume.is_none() => return Err(error),
+            Err(error) => {
+                *recovery.error.lock().unwrap_or_else(|p| p.into_inner()) = Some(error);
+                attempt = attempt.saturating_add(1);
+                emit(Event::Status(Status::Reconnecting { attempt }));
+                let delay = Duration::from_secs((1u64 << attempt.saturating_sub(1).min(5)).min(30));
+                if !wait_retry(&outgoing, recovery, delay) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+/// During an outage the engine owns pending edits and will rebase/resend them after Welcome.
+/// Old transport messages must not race those rebased batches. Leave always cancels the retry.
+fn wait_retry(outgoing: &mpsc::Receiver<Option<ClientMsg>>, recovery: &Recovery, delay: Duration) -> bool {
+    let until = Instant::now() + delay;
+    loop {
+        match outgoing.try_recv() {
+            Ok(None) | Err(mpsc::TryRecvError::Disconnected) => return false,
+            Ok(Some(_)) => continue,
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        if recovery.retry.swap(false, Ordering::SeqCst) || Instant::now() >= until {
+            return true;
+        }
+        match outgoing.recv_timeout(until.saturating_duration_since(Instant::now()).min(Duration::from_millis(100))) {
+            Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            Ok(Some(_)) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+fn session_connection(
+    target: &SessionRef,
+    name: &str,
+    resume: &mut Option<Resume>,
+    outgoing: &mpsc::Receiver<Option<ClientMsg>>,
+    recovery: &Recovery,
+    attempt: &mut u32,
     emit: &dyn Fn(Event),
 ) -> Result<(), String> {
     let connection = connection(&target.address)?;
+    if resume.is_some() && !target.path.is_empty() {
+        // Restarted nodes load worktrees lazily. Reopen this exact branch before joining;
+        // never resume the old document into a different worktree/branch's session.
+        let opened = accepted(connection.request(json!({"method":"open","path":target.path,"workspace":target.workspace}), RPC_TIMEOUT)?)?;
+        if opened["session"].as_str() != Some(target.session.as_str())
+            || (!target.branch.is_empty() && opened["branch"].as_str() != Some(target.branch.as_str()))
+        {
+            return Err("This worktree changed branch. Choose the workspace again to open its current map; your comments are kept.".into());
+        }
+    }
     let incoming = connection.subscribe(&target.session);
     let hello = Hello {
         protocol: message::PROTOCOL,
@@ -463,7 +561,7 @@ fn session_worker(
         name: name.into(),
         color: String::new(),
         client_version: message::client_version(),
-        resume,
+        resume: *resume,
     };
     let joined = accepted(connection.request(json!({"method":"session.join","session":target.session,"hello":hello}), RPC_TIMEOUT)?)?;
     let messages: Vec<ServerMsg> = serde_json::from_value(joined.get("messages").cloned().unwrap_or(Value::Null))
@@ -471,16 +569,34 @@ fn session_worker(
     if !messages.iter().any(|m| matches!(m, ServerMsg::Welcome { .. })) {
         return Err("The node did not send a session welcome.".into());
     }
+    // Discard messages produced for the previous connection before publishing the new Welcome.
+    // The engine retains their batches, including any whose acknowledgement was lost.
+    loop {
+        match outgoing.try_recv() {
+            Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                let _ = connection.request(json!({"method":"session.leave","session":target.session}), RPC_TIMEOUT);
+                return Ok(());
+            }
+            Ok(Some(_)) => {}
+            Err(mpsc::TryRecvError::Empty) => break,
+        }
+    }
+    *recovery.error.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    recovery.retry.store(false, Ordering::SeqCst);
+    *attempt = 0;
     let mut info = None;
     let mut peers = Vec::new();
     for message in messages {
+        track_resume(&message, resume);
         deliver(message, target, name, &mut info, &mut peers, emit)?;
     }
+    let mut heartbeat = Instant::now();
     loop {
         for event in incoming.try_iter() {
             let event = event?;
             if event.get("event").and_then(Value::as_str) == Some("collab") {
                 let message = serde_json::from_value(event["message"].clone()).map_err(|_| "The node sent an invalid collaboration message.")?;
+                track_resume(&message, resume);
                 deliver(message, target, name, &mut info, &mut peers, emit)?;
             }
         }
@@ -489,11 +605,27 @@ fn session_worker(
                 accepted(connection.request(json!({"method":"session.send","session":target.session,"message":message}), RPC_TIMEOUT)?)?;
             }
             Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                accepted(connection.request(json!({"method":"session.leave","session":target.session}), RPC_TIMEOUT)?)?;
+                let _ = connection.request(json!({"method":"session.leave","session":target.session}), RPC_TIMEOUT);
                 return Ok(());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+        if heartbeat.elapsed() >= Duration::from_secs(15) {
+            accepted(connection.request(json!({"method":"hello","build_id":mindmap_build::BUILD_ID}), Duration::from_secs(5))?)?;
+            heartbeat = Instant::now();
+        }
+    }
+}
+
+fn track_resume(message: &ServerMsg, resume: &mut Option<Resume>) {
+    match message {
+        ServerMsg::Welcome { session, client_id, seq, .. } => *resume = Some(Resume { session: *session, client_id: *client_id, seq: *seq }),
+        ServerMsg::Changes(accepted) => {
+            if let Some(resume) = resume {
+                resume.seq = accepted.seq;
+            }
+        }
+        _ => {}
     }
 }
 

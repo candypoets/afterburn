@@ -208,7 +208,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 
     #[cfg(not(target_arch = "wasm32"))]
     let chip = {
-        let active = crate::workspaces::active_node(app).ok();
+        let active = crate::workspaces::node_identity(app);
         if home {
             selected_chip(&app.ws.rows, app.ws.selected.as_deref())
                 .unwrap_or_else(|| label(selected_session(app.ws.selected.as_deref()).or(active).as_ref(), &app.ws.rows))
@@ -252,14 +252,43 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         }
         right = agents.min.x - 10.0;
         // The people on the map: small and quiet beside the agents.
-        let (people, joined) = {
+        let (people, joined, reconnecting) = {
             let live = app.session.live();
-            (live.peers.len() + 1, matches!(live.status, figcraft_engine::live::Status::Live))
+            (
+                live.peers.len() + 1,
+                matches!(live.status, figcraft_engine::live::Status::Live),
+                matches!(live.status, figcraft_engine::live::Status::Reconnecting { .. } | figcraft_engine::live::Status::Connecting),
+            )
         };
-        let live = if joined { format!("{people} live") } else { "offline".to_string() };
+        let live = if joined {
+            format!("{people} live")
+        } else if reconnecting {
+            "Reconnecting…".to_string()
+        } else {
+            "Offline".to_string()
+        };
         let live_font = egui::FontId::monospace(8.5);
         let live_w = ui.painter().layout_no_wrap(live.clone(), live_font.clone(), ink.faint).size().x;
+        let live_rect = Rect::from_min_max(pos2(right - live_w - 5.0, bar.min.y + 3.0), pos2(right + 5.0, bar.max.y - 2.0));
+        let response = ui.interact(live_rect, Id::new("status_connection"), if joined { Sense::hover() } else { Sense::click() });
+        if !joined && response.hovered() {
+            ui.painter().rect_filled(live_rect, CornerRadius::same(4), ink.selected);
+        }
         ui.painter().text(pos2(right, bar.center().y + 0.5), Align2::RIGHT_CENTER, live, live_font, ink.faint);
+        if !joined {
+            crate::a11y::button(&response, "Reconnect to node");
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let reason = crate::workspaces::node_identity(app).and_then(|target| crate::node::recovery_error(&target));
+                let tip = reason.map_or_else(
+                    || "Click to reconnect now. Comments are kept and are not sent automatically.".to_string(),
+                    |reason| format!("{reason}\nClick to retry now. Comments are kept and are not sent automatically."),
+                );
+                if response.on_hover_text(tip).clicked() {
+                    crate::map_actions::run(app, ui.ctx(), "map.reconnect");
+                }
+            }
+        }
         right -= live_w + 16.0;
 
         let path = app.session.doc().ok().zip(app.session.page().ok()).map(|(doc, page)| crumbs(doc, page)).unwrap_or_default();

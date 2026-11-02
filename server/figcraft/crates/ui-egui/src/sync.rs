@@ -983,7 +983,7 @@ pub fn poll(app: &mut FigApp, ctx: &egui::Context) {
         return;
     };
     #[cfg(not(target_arch = "wasm32"))]
-    let identity = workspaces::active_node(app).map(|node| format!("{}:{}", node.address, node.session)).unwrap_or_else(|_| workspace.clone());
+    let identity = workspaces::node_identity(app).map(|node| format!("{}:{}", node.address, node.session)).unwrap_or_else(|| workspace.clone());
     #[cfg(target_arch = "wasm32")]
     let identity = workspace.clone();
     if app.sync.workspace.as_deref() != Some(identity.as_str()) {

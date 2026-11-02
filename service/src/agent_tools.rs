@@ -196,8 +196,15 @@ mod tests {
         let before = missing(DEFAULT_ADDRESS);
         assert!(!before.is_empty(), "a fresh home has nothing");
         assert_eq!(ensure(DEFAULT_ADDRESS).unwrap(), before);
-        assert!(missing(DEFAULT_ADDRESS).is_empty(), "{:?}", missing(DEFAULT_ADDRESS));
-        assert!(ensure(DEFAULT_ADDRESS).unwrap().is_empty(), "a second Init installs nothing");
+        assert!(
+            missing(DEFAULT_ADDRESS).is_empty(),
+            "{:?}",
+            missing(DEFAULT_ADDRESS)
+        );
+        assert!(
+            ensure(DEFAULT_ADDRESS).unwrap().is_empty(),
+            "a second Init installs nothing"
+        );
         let _ = std::fs::remove_dir_all(&home);
     }
 

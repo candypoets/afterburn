@@ -39,6 +39,13 @@ prerequisites, platform availability and lifecycle limits. Existing running node
 only through an explicitly approved upgrade, with prepared Sync/merge checks and a node upgrade
 lease. Ordinary reconnect never silently replaces a running node.
 
+An open workspace automatically reconnects after a dropped node connection, retrying after
+1, 2, 4, 8, 16 and then 30 seconds. Click **Reconnecting…** in the bottom status bar to retry
+immediately. **Offline** opens the workspace picker when there is no resumable connection.
+The current workspace, comments and pending canvas edits stay in place; reconnecting does not
+send comments to an agent. A changed worktree branch requires choosing that workspace again,
+and an incompatible node still requires an explicit update.
+
 ## Original feature-map generator and hosted migration source
 
 A feature map of **FigCraft** — the ArtCraft, pure-Rust Figma clone — drawn in FigCraft itself,

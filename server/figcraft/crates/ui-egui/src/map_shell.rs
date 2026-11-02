@@ -128,6 +128,7 @@ pub fn run(app: &mut FigApp, ctx: &egui::Context, id: &str) -> bool {
         "map.openWorkspace"
             | "map.newWorkspace"
             | "map.save"
+            | "map.reconnect"
             | "map.close"
             | "map.switchWorktree"
             | "map.focusComposer"
@@ -147,6 +148,12 @@ pub fn run(app: &mut FigApp, ctx: &egui::Context, id: &str) -> bool {
             }
         }
         "map.save" => save(app, ctx),
+        "map.reconnect" => {
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::workspaces::reconnect(app);
+            #[cfg(target_arch = "wasm32")]
+            app.toast("Node connections require the desktop app.");
+        }
         "map.switchWorktree" => {
             #[cfg(not(target_arch = "wasm32"))]
             {

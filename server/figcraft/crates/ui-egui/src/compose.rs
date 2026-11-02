@@ -433,7 +433,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         (None, Some(page)) => format!("COMMENTING ON · {page} · whole page · {comments} comment{plural}"),
         _ => "COMMENTING ON".to_string(),
     };
-    let active = app.active_workspace.is_some();
+    let active = app.active_workspace.is_some() && app.session.live().status == figcraft_engine::live::Status::Live;
     if app.session.ds().is_ok_and(|ds| ds.view.comments) {
         draft_glow(app, ctx, page);
     }
@@ -721,7 +721,7 @@ fn body(
     let hint = if state.editing.is_some() {
         "⏎ save edit   ·   ⇧⏎ new line   ·   ⌘⏎ send all   ·   Esc stop editing".to_string()
     } else if !active {
-        "add the service to send".to_string()
+        "connect a workspace to send · click connection status to retry · comments are kept".to_string()
     } else {
         // Esc hands the keys back to the canvas while the field has them.
         let esc = if input_focused { "esc back to the canvas   ·   " } else { "" };
@@ -1367,8 +1367,12 @@ fn start_send(app: &mut FigApp, ctx: &egui::Context) {
     if app.compose.busy {
         return;
     }
+    if crate::workspaces::node_identity(app).is_some() && crate::workspaces::active_node(app).is_err() {
+        crate::workspaces::reconnect(app);
+        return;
+    }
     let Some(workspace) = app.active_workspace.clone() else {
-        app.toast("Add the node to send comments.");
+        app.toast("Open a workspace to send comments. Your comments are kept.");
         return;
     };
     let Some(target) = app.compose.target.clone() else {
