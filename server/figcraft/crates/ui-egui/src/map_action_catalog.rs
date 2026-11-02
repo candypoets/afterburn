@@ -103,6 +103,14 @@ pub const ACTIONS: &[Action] = &[
         "Enter",
         "Selection: open the selected card's subpage, when it has one."
     ),
+    action!(
+        "map.newSubpage",
+        "New subpage",
+        "Cards + selection",
+        "",
+        "",
+        "Selection: start a subpage of the selected card, with a title and prompt to edit before the agent draws it."
+    ),
     action!("map.parentPage", "Parent page", "Cards + selection", "Shift+Enter", "Shift+Enter", "Canvas: return from a detail page to its parent."),
     action!(
         "map.nextCard",
@@ -383,7 +391,7 @@ pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static 
         | "app.checkForUpdates" => None,
         // Navigation resolves links (including subpages linked through their source card),
         // and safely declines an absent or ambiguous detail page.
-        "map.copy" | "map.copyImage" | "map.zoomSelection" | "map.openDetail" | "map.delete" => {
+        "map.copy" | "map.copyImage" | "map.zoomSelection" | "map.openDetail" | "map.newSubpage" | "map.delete" => {
             if no_map {
                 Some("Open a map first")
             } else if app.session.selection().is_empty() {

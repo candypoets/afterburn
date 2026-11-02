@@ -74,6 +74,11 @@ impl State {
         self.focus = true;
     }
 
+    /// The card the page being started is a subpage of.
+    pub fn source_node(&self) -> Option<u64> {
+        self.source.as_ref().map(|source| source.node_id)
+    }
+
     /// Start a new page from a component: inferred title and prompt, editable, with its source.
     pub fn start_component(&mut self, number: usize, source: Source) {
         self.start(number);
@@ -89,6 +94,20 @@ impl State {
 }
 
 /// Draw the dialog (map mode). It owns its own send thread so the composer is untouched.
+/// Right-click › New subpage (`map.newSubpage`): open the dialog for a subpage of the selected
+/// card, with its inferred title and prompt. `false` when nothing is selected.
+pub fn start_subpage(app: &mut FigApp) -> bool {
+    let Some(node_id) = app.session.selection().first().copied() else { return false };
+    let Ok(page_id) = app.session.page() else { return false };
+    let Ok(doc) = app.session.doc() else { return false };
+    let name =
+        |id| doc.node(id).map(|node| if node.name.trim().is_empty() { node.kind.type_name().to_lowercase() } else { node.name.trim().to_string() });
+    let (Some(node_name), Some(page_name)) = (name(node_id), name(page_id)) else { return false };
+    let number = doc.pages.len() + 1;
+    app.new_page.start_component(number, Source { page_id: page_id.0, page_name, node_id: node_id.0, node_name });
+    true
+}
+
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     poll(app);
     if !app.new_page.open {

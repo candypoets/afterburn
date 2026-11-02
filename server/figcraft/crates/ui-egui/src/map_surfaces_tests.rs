@@ -13,6 +13,7 @@ fn map_registry_has_exact_agreed_ids_and_parseable_platform_bindings() {
         "help",
         "search",
         "openWorkspace",
+        "newSubpage",
         "newWorkspace",
         "save",
         "close",
@@ -114,7 +115,10 @@ fn map_help_and_palette_have_exact_registry_parity_and_no_editor_actions() {
 #[test]
 fn palette_only_actions_and_platform_help_are_explicit() {
     let palette_only: BTreeSet<_> = ACTIONS.iter().filter(|a| a.mac.is_empty() && a.other.is_empty()).map(|a| a.id).collect();
-    assert_eq!(palette_only, BTreeSet::from(["map.switchWorktree", "map.focusComposer", "map.syncReview", "map.reconnect", "app.checkForUpdates"]));
+    assert_eq!(
+        palette_only,
+        BTreeSet::from(["map.switchWorktree", "map.focusComposer", "map.newSubpage", "map.syncReview", "map.reconnect", "app.checkForUpdates"])
+    );
     let mac = crate::shortcuts_panel::map_help_rows("map.actions", Platform::Mac);
     let other = crate::shortcuts_panel::map_help_rows("map.actions", Platform::Other);
     assert_eq!(mac[0].keys, format!("{} or {}", keymap::display("Shift+Cmd+P", Platform::Mac), keymap::display("Cmd+K", Platform::Mac)));

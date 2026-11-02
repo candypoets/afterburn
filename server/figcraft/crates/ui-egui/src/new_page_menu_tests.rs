@@ -1,4 +1,4 @@
-//! The map's right-click menu: "New page from card" opens the New page dialog.
+//! The map's right-click menu: "New subpage" opens the New page dialog for the selected card.
 //!
 //! Driven through the same frame order the app uses (`new_page::show` before the menu), on a raw
 //! egui context, so it needs no `MINDMAP_CLIENT` and runs in the normal test suite.
@@ -29,7 +29,7 @@ fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
 }
 
 #[test]
-fn right_click_new_page_from_card_opens_the_dialog() {
+fn right_click_new_subpage_opens_the_dialog_for_the_card() {
     let mut session = Session::new();
     let frame = session.execute("frame.create", &json!({"x": 100, "y": 100, "width": 300, "height": 200, "name": "Card One"})).unwrap();
     let card = figcraft_engine::params::id_of(&frame["id"]).unwrap();
@@ -46,7 +46,7 @@ fn right_click_new_page_from_card_opens_the_dialog() {
         let mut out = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
             crate::new_page::show(app, &ctx);
-            crate::compose::context_menu(app, &ctx, Pos2::new(200.0, 200.0));
+            crate::menus::map_context_menu(app, &ctx, Pos2::new(200.0, 200.0));
         });
         out.textures_delta.clear();
         out
@@ -57,7 +57,7 @@ fn right_click_new_page_from_card_opens_the_dialog() {
 
     let anchor = Pos2::new(200.0, 200.0);
     let out = run(&mut app, vec![egui::Event::PointerMoved(anchor)]);
-    let item = texts(&out.shapes).into_iter().find(|(text, _)| text == "New page from card").expect("the card's menu offers a new page").1;
+    let item = texts(&out.shapes).into_iter().find(|(text, _)| text == "New subpage").expect("the card's menu offers a subpage").1;
     let item = item.center();
     let modifiers = Modifiers::default();
     for pressed in [true, false] {
@@ -69,4 +69,5 @@ fn right_click_new_page_from_card_opens_the_dialog() {
 
     run(&mut app, vec![]);
     assert!(app.new_page.open, "the dialog opens from the card's menu");
+    assert_eq!(app.new_page.source_node(), Some(card.0), "the subpage is of the right-clicked card");
 }

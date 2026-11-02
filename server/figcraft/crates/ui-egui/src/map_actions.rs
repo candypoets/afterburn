@@ -78,6 +78,9 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
                 app.toast(said);
             }
         }
+        "map.newSubpage" => {
+            crate::new_page::start_subpage(app);
+        }
         "map.undo" => crate::map_delete::undo(app, false),
         "map.redo" => crate::map_delete::undo(app, true),
         id if crate::map_action_catalog::workspace_number(id).is_some() => {
