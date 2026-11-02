@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
-/// The skill, compiled in from `skills/mindmap/SKILL.md`.
+/// The skill, compiled in from `skills/mindmap/SKILL.md` (part of the build id; Mac deploys copy it).
 const SKILL: &str = include_str!("../../skills/mindmap/SKILL.md");
 
 /// The MCP server's name in each CLI's configuration.

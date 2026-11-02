@@ -20,7 +20,7 @@ for raw in paths:
         continue
     relative = pathlib.Path(raw.decode())
     name = relative.as_posix()
-    if not (name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain') or name.startswith(('.cargo/', 'server/figcraft/', 'service/', 'client/'))):
+    if not (name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain') or name.startswith(('.cargo/', 'server/figcraft/', 'service/', 'client/', 'skills/mindmap/'))):
         continue
     if any(part in ('target', '.git', '__pycache__', 'node_modules', 'data') for part in relative.parts):
         continue
