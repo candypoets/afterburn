@@ -543,6 +543,13 @@ struct FollowedView {
     zoom: f64,
 }
 
+/// Connection boundaries must stay ordered with sync messages when a sleeping UI or a gesture
+/// delays applying several welcomes. Otherwise the second welcome reaches an online client.
+enum Deferred {
+    Sync(ServerMsg),
+    Disconnected,
+}
+
 /// One live session (see the module docs): a document's, or a join on its way to its own tab.
 #[derive(Default)]
 pub struct Live {
@@ -571,7 +578,7 @@ pub struct Live {
     /// The session document as last sent or installed: a different one has local edits to send.
     synced: Option<Arc<Document>>,
     /// Server batches waiting for a gesture or preview on the session document to end.
-    deferred: Vec<ServerMsg>,
+    deferred: Vec<Deferred>,
     /// Nesting of [`Session::grouped`] on the session document: its edits sync once, at the end.
     hold: u32,
     /// The address of the server this session's file was published to, or is yours on (empty
@@ -978,6 +985,7 @@ impl Session {
                     live.spotlight = None;
                     if let Some(c) = live.client.as_mut() {
                         c.disconnect();
+                        live.deferred.push(Deferred::Disconnected);
                     }
                 }
                 live.status = st;
@@ -1024,7 +1032,7 @@ impl Session {
             Event::Sync(welcome @ ServerMsg::Welcome { .. }) if live.client.is_none() => self.live_welcome(id, welcome),
             // Batches, and the welcome back after a dropped connection: the client catches up in
             // order.
-            Event::Sync(msg) => live.deferred.push(msg),
+            Event::Sync(msg) => live.deferred.push(Deferred::Sync(msg)),
             Event::Ended { reason } => {
                 self.message = Some(if behind.is_empty() { reason } else { format!("{}: {reason}", behind.trim_start()) });
                 self.live.end(id);
@@ -1334,6 +1342,13 @@ impl Session {
         let Some(client) = live.client.as_mut() else { return };
         let mut out = Vec::new();
         for m in std::mem::take(&mut live.deferred) {
+            let Deferred::Sync(m) = m else {
+                client.disconnect();
+                // Earlier queued welcomes may have flushed edits for an obsolete connection.
+                // The client still owns them; only the final welcome may resend them.
+                out.clear();
+                continue;
+            };
             match client.receive(m, &EngineRecompute) {
                 Ok(more) => out.extend(more),
                 Err(e) => return self.live_fail(id, format!("The live session got out of step ({e}); join again")),

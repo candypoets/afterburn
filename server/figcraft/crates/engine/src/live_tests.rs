@@ -507,3 +507,61 @@ fn hosting_commands_check_what_they_are_given() {
     assert!(e.contains("join a file"), "{e}");
     assert!(s.execute("collab.report", &json!({"reason": " \n "})).unwrap_err().to_string().contains("few words"));
 }
+
+#[test]
+fn reconnect_boundaries_survive_sleep_and_a_deferred_gesture() {
+    for gesture in [false, true] {
+        for ends_offline in [false, true] {
+            let (mut s, script) = session();
+            s.execute("collab.join", &json!({"link":"figcraft://join?host=a:1&file=f&token=t"})).unwrap();
+            let (mut server, me, Event::Sync(welcome)) = serve(s.doc().unwrap()) else { panic!("welcome") };
+            push(&script, vec![Event::Welcome { info: info(Role::Guest, me), peers: vec![] }, Event::Sync(welcome.clone())]);
+            s.live_poll();
+            let uid = s.ds().unwrap().uid;
+            let documents = s.docs.len();
+            let shape = s.execute("shape.rectangle", &json!({"name":"Keep across sleep","width":20,"height":20})).unwrap();
+            s.live_sync();
+            script.lock().unwrap().msgs.clear(); // Lost transport; the engine still owns this batch.
+            if gesture {
+                s.begin_interaction("Move").unwrap();
+            }
+            let mut events = Vec::new();
+            for _ in 0..2 {
+                events.extend([
+                    Event::Status(Status::Reconnecting { attempt: 1 }),
+                    Event::Welcome { info: info(Role::Guest, me), peers: vec![] },
+                    Event::Sync(welcome.clone()),
+                ]);
+            }
+            if ends_offline {
+                events.push(Event::Status(Status::Reconnecting { attempt: 1 }));
+            }
+            // A sleeping/minimized UI drains several connection generations in one poll.
+            push(&script, events);
+            s.live_poll();
+            if gesture {
+                assert!(script.lock().unwrap().msgs.is_empty(), "do not sync during a gesture");
+                s.commit_interaction().unwrap();
+                s.live_poll();
+                s.live_sync();
+            }
+            assert_eq!(s.live().status, if ends_offline { Status::Reconnecting { attempt: 1 } } else { Status::Live });
+            if ends_offline {
+                assert!(script.lock().unwrap().msgs.is_empty(), "old connections must not emit batches");
+                push(&script, vec![Event::Welcome { info: info(Role::Guest, me), peers: vec![] }, Event::Sync(welcome.clone())]);
+                s.live_poll();
+            }
+            assert_eq!(s.live().status, Status::Live);
+            assert_eq!(s.ds().unwrap().uid, uid);
+            assert_eq!(s.docs.len(), documents);
+            assert!(s.doc().unwrap().contains(NodeId(shape["id"].as_u64().unwrap())));
+            let sent = script.lock().unwrap().msgs.len();
+            assert_eq!(sent, 1, "only the current connection resends the pending edit (gesture={gesture}, offline={ends_offline})");
+            let confirmed = relay(&script, &mut server, me);
+            push(&script, confirmed);
+            s.live_poll();
+            assert_eq!(server.document().nodes().filter(|node| node.name == "Keep across sleep").count(), 1);
+            assert_eq!(s.live().status, Status::Live);
+        }
+    }
+}

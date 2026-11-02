@@ -79,7 +79,7 @@ fn clicking_a_tab_opens_its_page_and_middle_click_closes_it() {
 }
 
 #[test]
-fn the_close_button_closes_a_tab_never_its_page_and_the_last_tab_has_none() {
+fn the_close_button_closes_any_tab_never_its_page_the_last_one_too() {
     crate::with_map_mode(|| {
         let (mut u, [a, b, c]) = setup();
         select(&mut u, b);
@@ -90,14 +90,17 @@ fn the_close_button_closes_a_tab_never_its_page_and_the_last_tab_has_none() {
         click(&mut u, at, PointerButton::Primary);
         assert_eq!(crate::map_tabs::open(&u.app), vec![a, b]);
         assert_eq!(page_count(&u), 3, "closing a tab never deletes its page");
-        // An inactive tab shows its × while hovered: hover, then click it there.
+        // An inactive tab's ×.
         let at = crate::map_tabs::close_rect(cell(&u, a)).center();
         click(&mut u, at, PointerButton::Primary);
-        assert_eq!(crate::map_tabs::open(&u.app), vec![b], "the hovered tab closed, not selected");
-        // The last tab has no ×: a click there just selects it.
+        assert_eq!(crate::map_tabs::open(&u.app), vec![b], "the inactive tab closed, not selected");
+        // The last tab has its × too: no page is open after it.
+        u.frame(vec![]);
         let at = crate::map_tabs::close_rect(cell(&u, b)).center();
         click(&mut u, at, PointerButton::Primary);
-        assert_eq!(crate::map_tabs::open(&u.app), vec![b]);
+        assert!(crate::map_tabs::open(&u.app).is_empty());
+        assert!(crate::map_tabs::is_empty(&u.app));
+        assert_eq!(page_count(&u), 3, "closing the last tab never deletes its page");
     });
 }
 
@@ -117,10 +120,10 @@ fn command_w_closes_the_active_tab_never_the_page() {
         press(&mut u, Key::W, cmd());
         assert_eq!(crate::map_tabs::open(&u.app), vec![a], "the last tab before it opens");
         assert_eq!(u.app.session.page().unwrap(), a);
-        // The last tab stays.
+        // The last tab closes too, and the map stays open with no page.
         press(&mut u, Key::W, cmd());
-        assert_eq!(crate::map_tabs::open(&u.app), vec![a]);
-        assert_eq!(u.app.session.page().unwrap(), a);
+        assert!(crate::map_tabs::open(&u.app).is_empty());
+        assert!(crate::map_tabs::is_empty(&u.app));
         assert_eq!(page_count(&u), 3);
         assert!(!u.app.ui.home);
     });
@@ -220,5 +223,109 @@ fn dragged_sidebar_width_persists_in_the_preferences() {
         let back: figcraft_engine::Prefs = serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
         assert_eq!(back.map_sidebar_width, Some(left + 40.0));
         assert_eq!(crate::map_panes::width(&u.app, 1440.0), left + 40.0);
+    });
+}
+
+#[test]
+fn after_the_last_tab_closes_opening_any_page_brings_a_tab_back() {
+    crate::with_map_mode(|| {
+        let (mut u, [a, b, _]) = setup();
+        u.app.session.execute("select.set", &json!({"ids": []})).ok();
+        crate::map_tabs::close(&mut u.app, a);
+        u.frame(vec![]);
+        u.frame(vec![]);
+        assert!(crate::map_tabs::is_empty(&u.app), "the current page doesn't sneak its tab back");
+        assert!(u.app.session.selection().is_empty(), "nothing out of sight stays selected");
+        // The tree opens the very page that was showing: it gets its tab again.
+        select(&mut u, a);
+        assert_eq!(crate::map_tabs::open(&u.app), vec![a]);
+        assert!(!crate::map_tabs::is_empty(&u.app));
+        crate::map_tabs::close(&mut u.app, a);
+        select(&mut u, b);
+        assert_eq!(crate::map_tabs::open(&u.app), vec![b], "another page opens with its tab");
+    });
+}
+
+fn double_click(u: &mut Ui, at: Pos2) {
+    // Half a second apart from any earlier clicks, so these two read as one double-click.
+    for _ in 0..30 {
+        u.frame(vec![]);
+    }
+    u.frame(vec![Event::PointerMoved(at)]);
+    for _ in 0..2 {
+        let ev = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        u.frame(vec![ev(true)]);
+        u.frame(vec![ev(false)]);
+    }
+    u.frame(vec![]);
+    u.frame(vec![]);
+}
+
+fn type_text(u: &mut Ui, text: &str) {
+    u.frame(vec![Event::Text(text.to_string())]);
+}
+
+fn page_name(u: &Ui, page: NodeId) -> String {
+    u.app.session.doc().unwrap().node(page).unwrap().name.clone()
+}
+
+#[test]
+fn a_tab_double_click_never_renames_the_tree_does_and_esc_keeps_the_name() {
+    crate::with_map_mode(|| {
+        let (mut u, [a, b, _]) = setup();
+        u.app.ws.pane_open = true;
+        select(&mut u, b);
+        u.frame(vec![]);
+        let tab = |u: &Ui, page| u.app.page_tabs.cells.iter().find(|(id, _)| *id == Some(page)).unwrap().1;
+        let before = page_name(&u, b);
+        let at = tab(&u, b).center();
+        double_click(&mut u, at);
+        assert!(u.app.page_tree.renaming.is_none(), "a tab is never a name field");
+        // The tree's row: a double-click turns its name into a field, all selected.
+        let row = |u: &Ui, page| u.app.page_tree.drawn.iter().find(|(id, _)| *id == page).unwrap().1;
+        let at = row(&u, b).center();
+        double_click(&mut u, at);
+        assert_eq!(u.app.page_tree.renaming.as_ref().map(|(id, _)| *id), Some(b), "the row became a field");
+        type_text(&mut u, "Widgets");
+        press(&mut u, Key::Enter, Modifiers::NONE);
+        u.frame(vec![]);
+        assert_eq!(page_name(&u, b), "Widgets", "Enter renames the page");
+        assert_ne!(before, "Widgets");
+        assert!(u.app.page_tree.renaming.is_none());
+        assert_eq!(crate::map_tabs::open(&u.app), vec![a, b], "its tab stays where it was");
+        // Esc keeps the name.
+        let at = row(&u, b).center();
+        double_click(&mut u, at);
+        type_text(&mut u, "Nope");
+        press(&mut u, Key::Escape, Modifiers::NONE);
+        u.frame(vec![]);
+        assert_eq!(page_name(&u, b), "Widgets");
+        assert!(u.app.page_tree.renaming.is_none());
+        // An empty name keeps the old one too.
+        let before = page_name(&u, a);
+        crate::page_tree::start_rename(&mut u.app, a);
+        u.frame(vec![]);
+        u.frame(vec![]);
+        press(&mut u, Key::Backspace, Modifiers::NONE);
+        press(&mut u, Key::Enter, Modifiers::NONE);
+        u.frame(vec![]);
+        assert_eq!(page_name(&u, a), before);
+    });
+}
+
+#[test]
+fn the_close_button_shows_only_on_the_hovered_tab() {
+    crate::with_map_mode(|| {
+        let (mut u, [a, b, _]) = setup();
+        select(&mut u, b);
+        let cell = |u: &Ui, page| u.app.page_tabs.cells.iter().find(|(id, _)| *id == Some(page)).unwrap().1;
+        // Away from the strip, a click where the active tab's × would be just selects it.
+        u.frame(vec![Event::PointerMoved(egui::pos2(600.0, 400.0))]);
+        let at = crate::map_tabs::close_rect(cell(&u, b)).center();
+        let ev = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        // Press without hovering first: the × isn't there yet.
+        u.frame(vec![ev(true)]);
+        u.frame(vec![ev(false)]);
+        assert_eq!(crate::map_tabs::open(&u.app), vec![a, b], "no × until the tab is hovered");
     });
 }

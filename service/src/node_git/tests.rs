@@ -818,3 +818,51 @@ fn a_left_out_card_keeps_waiting_and_the_frozen_map_has_only_included_edits() {
         names(&doc)
     );
 }
+
+#[test]
+fn a_card_only_moved_or_slightly_resized_is_not_waiting() {
+    let repo = Repo::new();
+    let (mut doc, page, card, _) = design();
+    let frame = doc
+        .create(page, NodeKind::Frame, "Widget", 100.0, 0.0, 200.0, 100.0)
+        .unwrap();
+    let inner = doc
+        .create(frame, NodeKind::Rectangle, "Button", 10.0, 10.0, 40.0, 20.0)
+        .unwrap();
+    repo.marker(&doc, &format!("page={}", page.0));
+    let waiting = |doc: &Document| {
+        let drift = design_drift(&repo.0, doc, Some(page.0)).unwrap();
+        let ids: Vec<u64> = drift
+            .cards
+            .iter()
+            .filter_map(|c| c["id"].as_u64())
+            .collect();
+        (drift.is_empty(), ids)
+    };
+    // Moved across the map, and a little wider and shorter: arrangement, nothing to build.
+    for id in [card, frame] {
+        let node = doc.get_mut(id).unwrap();
+        node.transform = node.transform.then_translate((300.0, 67.0).into());
+    }
+    doc.get_mut(card).unwrap().width = 21.0;
+    doc.get_mut(frame).unwrap().height = 92.0;
+    assert_eq!(
+        waiting(&doc),
+        (true, vec![]),
+        "moves and slight resizes wait for nothing"
+    );
+    // A real resize is design.
+    doc.get_mut(card).unwrap().width = 30.0;
+    assert_eq!(waiting(&doc), (false, vec![card.0]));
+    doc.get_mut(card).unwrap().width = 21.0;
+    // So is a move inside a card: the layout it designs.
+    let node = doc.get_mut(inner).unwrap();
+    node.transform = node.transform.then_translate((5.0, 0.0).into());
+    assert_eq!(waiting(&doc), (false, vec![frame.0]));
+    let node = doc.get_mut(inner).unwrap();
+    node.transform = node.transform.then_translate((-5.0, 0.0).into());
+    // And a rotated card.
+    let node = doc.get_mut(card).unwrap();
+    node.transform = node.transform * figcraft_doc::geom::Affine::rotate(0.3);
+    assert_eq!(waiting(&doc), (false, vec![card.0]));
+}

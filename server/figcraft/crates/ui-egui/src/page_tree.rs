@@ -4,7 +4,9 @@
 //! `mindmap.source_node`; if that card disappears, the subpage and its descendants are removed.
 //! The tree is docked in the map's sidebar under the workspace switcher (design: `Sidebar pages ·
 //! window`): every page, indented by level, the open one marked; a click opens a page. ⌘P (the
-//! `map.pageTree` action) reveals the sidebar.
+//! `map.pageTree` action) reveals the sidebar. Pages are renamed here: a double-click on a row (or
+//! Rename page in its menu) turns its name into a field; Enter or a click elsewhere renames the
+//! page, Esc keeps the old name.
 
 use std::collections::HashSet;
 
@@ -34,6 +36,79 @@ pub struct State {
     /// Pages whose children are folded away in the docked tree.
     pub collapsed: HashSet<NodeId>,
     last_cleanup: f64,
+    /// The page whose name is being edited, and the text so far.
+    pub(crate) renaming: Option<(NodeId, String)>,
+    /// The rename field still has to take focus and select its whole text.
+    select_name: bool,
+    /// The rows as last drawn: each page and its rect.
+    pub(crate) drawn: Vec<(NodeId, Rect)>,
+}
+
+/// The rename field's selected text: a soft accent behind ink.
+const SELECTION: Color32 = Color32::from_rgb(0xF3, 0xDC, 0xD5);
+
+/// Start editing `page`'s name in its row.
+pub fn start_rename(app: &mut FigApp, page: NodeId) {
+    let Some(name) = app.session.doc().ok().and_then(|doc| doc.node(page).map(|node| node.name.clone())) else { return };
+    app.page_tree.renaming = Some((page, name));
+    app.page_tree.select_name = true;
+}
+
+/// Rename `page` to `text` (trimmed); an empty or unchanged name keeps the old one.
+fn finish_rename(app: &mut FigApp, page: NodeId, text: &str) {
+    let name = text.trim();
+    let unchanged = app.session.doc().ok().and_then(|doc| doc.node(page).map(|node| node.name == name)).unwrap_or(true);
+    if !name.is_empty() && !unchanged {
+        app.run("page.rename", serde_json::json!({"id": page.0, "name": name}));
+    }
+}
+
+/// How a rename ended: the name to rename to, or `None` when Esc cancelled.
+type Renamed = Option<String>;
+
+/// The name field in a row being renamed, over `field`. Returns how editing ended once Enter, a
+/// click elsewhere or Esc ends it, `None` while it goes on.
+fn rename_field(ui: &mut Ui, s: &Skin, field: Rect, page: NodeId, text: &mut String, select_name: &mut bool) -> Option<Renamed> {
+    let id = Id::new(("page_tree_rename", page.0));
+    // Esc is the map's: it ends the rename before the tree draws (`map_actions`). This catches
+    // an Esc that reached the field anyway.
+    let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let edit = egui::TextEdit::singleline(text)
+        .id(id)
+        .frame(egui::Frame::NONE)
+        .margin(egui::Margin::symmetric(2, 0))
+        .font(regular(13.0))
+        .text_color(s.text)
+        .vertical_align(egui::Align::Center)
+        .desired_width(field.width());
+    let resp = ui
+        .scope(|ui| {
+            let visuals = ui.visuals_mut();
+            visuals.selection.bg_fill = SELECTION;
+            visuals.selection.stroke = Stroke::new(1.0, s.text);
+            visuals.text_cursor.stroke = Stroke::new(1.0, s.text);
+            ui.put(field, edit)
+        })
+        .inner;
+    crate::a11y::text(&resp, "Page name", text);
+    if *select_name {
+        resp.request_focus();
+        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
+            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
+            state.cursor.set_char_range(Some(all));
+            state.store(ui.ctx(), id);
+            *select_name = false;
+        }
+        ui.ctx().request_repaint();
+        return None;
+    }
+    if escaped && (resp.has_focus() || resp.lost_focus()) {
+        return Some(None);
+    }
+    if resp.lost_focus() {
+        return Some(Some(text.clone()));
+    }
+    None
 }
 
 fn meta_id(doc: &Document, page: NodeId, key: &str) -> Option<NodeId> {
@@ -234,6 +309,7 @@ enum Ask {
     Open(NodeId),
     Fold(NodeId),
     Delete(NodeId),
+    Rename(NodeId),
     NewPage,
 }
 
@@ -276,23 +352,44 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
     }
 
     let list = Rect::from_min_max(pos2(rect.min.x, head.max.y), rect.max);
+    let mut renaming = app.page_tree.renaming.take().filter(|(page, _)| lines.iter().any(|line| line.page == *page));
+    let mut select_name = app.page_tree.select_name;
+    let mut renamed: Option<(NodeId, Renamed)> = None;
+    let mut drawn = Vec::with_capacity(lines.len());
     ui.scope_builder(egui::UiBuilder::new().max_rect(list).id_salt("page_tree_docked"), |ui| {
         ui.set_clip_rect(list.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical().id_salt("page_tree_docked_scroll").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for line in &lines {
-                if let Some(a) = row(ui, &s, line, current == Some(line.page), current_fill) {
+                let editing = renaming.as_mut().filter(|(page, _)| *page == line.page).map(|(_, text)| text);
+                let (a, rect, end) = row(ui, &s, line, current == Some(line.page), current_fill, editing, &mut select_name);
+                if let Some(a) = a {
                     ask = Some(a);
                 }
+                if let Some(end) = end {
+                    renamed = Some((line.page, end));
+                }
+                drawn.push((line.page, rect));
             }
             ui.add_space(14.0);
         });
     });
 
+    app.page_tree.drawn = drawn;
+    app.page_tree.select_name = select_name;
+    app.page_tree.renaming = renaming;
+    if let Some((page, end)) = renamed {
+        app.page_tree.renaming = None;
+        if let Some(text) = end {
+            finish_rename(app, page, &text);
+        }
+        ui.ctx().request_repaint();
+    }
     match ask {
         Some(Ask::Open(page)) => {
             app.run("page.select", serde_json::json!({"id": page.0}));
         }
+        Some(Ask::Rename(page)) => start_rename(app, page),
         Some(Ask::Fold(page)) => {
             if !app.page_tree.collapsed.remove(&page) {
                 app.page_tree.collapsed.insert(page);
@@ -305,8 +402,18 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
 }
 
 /// One page: the fold chevron for a page with children, its name indented by level, and its child
-/// count at the right (× to delete while hovered). The open page wears the selected fill.
-fn row(ui: &mut Ui, s: &Skin, line: &Line, is_current: bool, current_fill: Color32) -> Option<Ask> {
+/// count at the right (× to delete while hovered). The open page wears the selected fill. A row
+/// being renamed (`editing`: the text so far) shows a field ringed in the accent instead of its
+/// name, and says how the rename ended. Returns what was asked, the row's rect and that end.
+fn row(
+    ui: &mut Ui,
+    s: &Skin,
+    line: &Line,
+    is_current: bool,
+    current_fill: Color32,
+    editing: Option<&mut String>,
+    select_name: &mut bool,
+) -> (Option<Ask>, Rect, Option<Renamed>) {
     let (outer, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
     let rect = Rect::from_min_max(pos2(outer.min.x + 8.0, outer.min.y), pos2(outer.max.x - 8.0, outer.max.y));
     crate::a11y::button(&response, &line.name);
@@ -331,11 +438,22 @@ fn row(ui: &mut Ui, s: &Skin, line: &Line, is_current: bool, current_fill: Color
         chevron(ui, pos2(x - 11.0, rect.center().y), !line.folded, ink);
     }
     let room = (rect.max.x - 34.0 - x).max(30.0);
-    let name = crate::widgets::elide_font(ui, &line.name, room, regular(13.0));
-    ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, name, regular(13.0), s.text);
+    let mut end = None;
+    let is_editing = editing.is_some();
+    if let Some(text) = editing {
+        let field = Rect::from_min_max(pos2(x - 4.0, rect.center().y - 11.0), pos2(rect.max.x - 6.0, rect.center().y + 11.0));
+        ui.painter().rect_filled(field, CornerRadius::same(5), Color32::WHITE);
+        ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, s.accent), egui::StrokeKind::Inside);
+        end = rename_field(ui, s, field.shrink2(vec2(2.0, 1.0)), line.page, text, select_name);
+    } else {
+        let name = crate::widgets::elide_font(ui, &line.name, room, regular(13.0));
+        ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, name, regular(13.0), s.text);
+    }
     // The right column: how many children, or the depth cap on a page at the last level.
     let trail = pos2(rect.max.x - 14.0, rect.center().y);
-    if hot {
+    if is_editing {
+        // The field covers the right column.
+    } else if hot {
         let ink = if delete.hovered() { s.danger } else { s.faint };
         ui.painter().text(trail, Align2::CENTER_CENTER, "×", regular(12.0), ink);
     } else if line.kids > 0 {
@@ -345,10 +463,14 @@ fn row(ui: &mut Ui, s: &Skin, line: &Line, is_current: bool, current_fill: Color
     }
     let delete = delete.on_hover_text(format!("Delete {}…", line.name));
     let mut ask = None;
-    if delete.clicked() {
+    if is_editing {
+        // Clicks belong to the field.
+    } else if delete.clicked() {
         ask = Some(Ask::Delete(line.page));
     } else if fold.as_ref().is_some_and(|f| f.clicked()) {
         ask = Some(Ask::Fold(line.page));
+    } else if response.double_clicked() {
+        ask = Some(Ask::Rename(line.page));
     } else if response.clicked() {
         ask = Some(Ask::Open(line.page));
     }
@@ -357,12 +479,16 @@ fn row(ui: &mut Ui, s: &Skin, line: &Line, is_current: bool, current_fill: Color
             ask = Some(Ask::Open(line.page));
             ui.close();
         }
+        if ui.button("Rename page").clicked() {
+            ask = Some(Ask::Rename(line.page));
+            ui.close();
+        }
         if ui.button("Delete page…").clicked() {
             ask = Some(Ask::Delete(line.page));
             ui.close();
         }
     });
-    ask
+    (ask, outer, end)
 }
 
 /// The fold mark: ⌄ when open, › when folded.

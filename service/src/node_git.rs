@@ -488,6 +488,18 @@ pub fn design_drift(path: &Path, live: &Document, page: Option<u64>) -> Result<D
             }
         }
     }
+    // Cards only moved or slightly resized are the map's arrangement, not design: no Sync builds
+    // them. They still travel with the map that Sync or a record commits.
+    let arranged: BTreeSet<NodeId> = fields
+        .iter()
+        .filter(|(id, fields)| arranged_only(&old, live, **id, fields))
+        .map(|(id, _)| *id)
+        .collect();
+    fields.retain(|id, _| !arranged.contains(id));
+    let changes: Vec<Change> = changes
+        .into_iter()
+        .filter(|c| !matches!(c, Change::Set { id, .. } if arranged.contains(id)))
+        .collect();
     let cards = cards(&old, live, &before, &after, &fields);
     let changed: Vec<Value> = fields.into_iter().map(|(id, fields)| {
         json!({"id": id.0, "name": live.node(id).map(|n| n.name.as_str()).unwrap_or(""), "fields": fields})
@@ -500,6 +512,31 @@ pub fn design_drift(path: &Path, live: &Document, page: Option<u64>) -> Result<D
         removed,
         cards,
     })
+}
+
+/// The most a card may grow or shrink, as a share of its size, and still count as arranged.
+const SLIGHT_RESIZE: f64 = 0.1;
+
+/// A card (a direct child of its page) whose only changes are a move, and a resize of at most
+/// [`SLIGHT_RESIZE`]: where it sits on the map, not what it designs. Rotation, flips and any
+/// other property make it a design change, and so does any layer inside a card.
+fn arranged_only(old: &Document, live: &Document, id: NodeId, fields: &BTreeSet<String>) -> bool {
+    if card_of(live, id) != Some(id) || card_of(old, id) != Some(id) {
+        return false;
+    }
+    let (Some(was), Some(now)) = (old.node(id), live.node(id)) else {
+        return false;
+    };
+    if !fields
+        .iter()
+        .all(|field| matches!(field.as_str(), "transform" | "width" | "height"))
+    {
+        return false;
+    }
+    let (w, n) = (was.transform.as_coeffs(), now.transform.as_coeffs());
+    let moved_only = w.iter().zip(&n).take(4).all(|(a, b)| a == b);
+    let slight = |a: f64, b: f64| (b - a).abs() <= SLIGHT_RESIZE * a.abs();
+    moved_only && slight(was.width, now.width) && slight(was.height, now.height)
 }
 
 /// The card a layer belongs to: its top-level ancestor on its page (a direct child of the page).

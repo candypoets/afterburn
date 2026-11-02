@@ -68,7 +68,7 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
             app.run("view.toggleUi", json!({}));
         }
         "map.workspacePane" => app.ws.pane_open = !app.ws.pane_open,
-        // Closes the tab, never the page; the last tab stays.
+        // Closes the tab, never the page; closing the last one leaves no page open.
         "map.closeTab" => {
             crate::map_tabs::close_active(app);
         }
@@ -203,6 +203,8 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
             app.new_page.open = false;
         }
     } else if app.page_delete.take().is_some()
+        // Esc in the tree's name field keeps the old name.
+        || app.page_tree.renaming.take().is_some()
         || std::mem::take(&mut app.agents_modal.open)
         || std::mem::take(&mut app.page_tree.open)
         || std::mem::take(&mut app.status.switcher_open)

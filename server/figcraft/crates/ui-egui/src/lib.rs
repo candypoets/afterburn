@@ -94,8 +94,8 @@ fn map_command_allowed(id: &str) -> bool {
         return true;
     }
     // Adding a page is navigation, not drawing: the human can make a blank page for an agent to
-    // fill. Renaming, deleting and editing a page stay with the agent.
-    if id == "page.add" || id == "page.delete" {
+    // fill, and rename a page from its tab. Editing a page's content stays with the agent.
+    if id == "page.add" || id == "page.delete" || id == "page.rename" {
         return true;
     }
     if id.starts_with("tool.") || id.starts_with("text.edit") {
@@ -972,6 +972,10 @@ impl FigApp {
         }
         let r = self.session.execute(id, &params);
         self.handle_ui_requests();
+        if id == "page.select" && r.is_ok() {
+            // Opening a page gives it a tab, even after every tab was closed.
+            map_tabs::opened(self);
+        }
         r.map_err(|e| self.failed(id, &e)).ok()
     }
 
@@ -1861,7 +1865,12 @@ impl FigApp {
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             let worker = self.worker.take();
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
-            canvas::show(self, ui, &mut worker);
+            if map_mode && map_tabs::is_empty(self) {
+                // Every tab closed: no page shows until the tree, a link or + Page opens one.
+                ui.allocate_rect(ui.max_rect(), egui::Sense::click());
+            } else {
+                canvas::show(self, ui, &mut worker);
+            }
             self.worker = Some(worker);
             if !hidden && !map_mode {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
