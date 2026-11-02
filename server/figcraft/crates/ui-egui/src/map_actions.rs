@@ -73,6 +73,13 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
             crate::map_tabs::close_active(app);
         }
         "map.switchWorkspace" => crate::switcher::toggle(app),
+        "map.delete" => {
+            if let Some(said) = crate::map_delete::delete_selection(app) {
+                app.toast(said);
+            }
+        }
+        "map.undo" => crate::map_delete::undo(app, false),
+        "map.redo" => crate::map_delete::undo(app, true),
         id if crate::map_action_catalog::workspace_number(id).is_some() => {
             crate::switcher::open_nth(app, ctx, crate::map_action_catalog::workspace_number(id).unwrap_or(0));
         }

@@ -107,6 +107,16 @@ pub const ACTIONS: &[Action] = &[
     action!("map.previousCard", "Previous card", "Cards + selection", "Shift+Tab", "Shift+Tab", "Canvas: select the previous visible content card."),
     action!("map.selectArea", "Select an area", "Cards + selection", "F8", "F8", "Canvas: arrows move the box; Shift+arrows resize; Enter selects."),
     action!(
+        "map.delete",
+        "Delete",
+        "Cards + selection",
+        "Cmd+Backspace",
+        "Ctrl+Backspace",
+        "Selection: delete the selected cards, arrows and labels at once, with a card's detail page; ⌘Z brings them back."
+    ),
+    action!("map.undo", "Undo", "Cards + selection", "Cmd+Z", "Ctrl+Z", "Map: take back your own last edit (never an agent's)."),
+    action!("map.redo", "Redo", "Cards + selection", "Shift+Cmd+Z", "Ctrl+Shift+Z", "Map: redo the edit you took back."),
+    action!(
         "map.copy",
         "Copy card content",
         "Copying + text fields",
@@ -365,7 +375,7 @@ pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static 
         | "app.checkForUpdates" => None,
         // Navigation resolves links (including subpages linked through their source card),
         // and safely declines an absent or ambiguous detail page.
-        "map.copy" | "map.copyImage" | "map.zoomSelection" | "map.openDetail" => {
+        "map.copy" | "map.copyImage" | "map.zoomSelection" | "map.openDetail" | "map.delete" => {
             if no_map {
                 Some("Open a map first")
             } else if app.session.selection().is_empty() {

@@ -1540,7 +1540,7 @@ fn map_popups(app: &mut FigApp, ctx: &egui::Context) {
 }
 
 pub(crate) const MAP_CONTEXT_ACTIONS: &[&str] =
-    &["map.copy", "map.copyImage", "map.focusComposer", "map.openDetail", "map.zoomSelection", "map.parentPage"];
+    &["map.copy", "map.copyImage", "map.focusComposer", "map.openDetail", "map.zoomSelection", "map.parentPage", "map.delete"];
 
 /// The keyboard and pointer open the same map action menu; no editor menu is ever constructed.
 pub(crate) fn map_context_menu(app: &mut FigApp, ctx: &egui::Context, pos: egui::Pos2) {

@@ -214,8 +214,12 @@ pub fn menus() -> Vec<Menu> {
             title: "Edit",
             role: Role::Plain,
             entries: vec![
+                action("map.undo"),
+                action("map.redo"),
+                Sep,
                 action("map.copy"),
                 action("map.copyImage"),
+                action("map.delete"),
                 Sep,
                 action("map.search"),
                 Sep,

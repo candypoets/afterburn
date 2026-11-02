@@ -470,3 +470,21 @@ fn map_recipient_chip_opens_the_agent_menu_on_a_click() {
         assert!(!u.app.compose.menu_open);
     });
 }
+
+#[test]
+fn command_backspace_deletes_the_selection_and_command_z_brings_it_back() {
+    crate::with_map_mode(|| {
+        let (mut u, a, b) = setup();
+        u.app.ui.nav.region = crate::a11y::Region::Canvas;
+        press(&mut u, Key::Backspace, cmd());
+        assert!(u.app.session.doc().unwrap().node(a).is_none(), "⌘⌫ deletes the selected card");
+        assert!(u.app.session.doc().unwrap().node(b).is_some());
+        press(&mut u, Key::Z, cmd());
+        assert!(u.app.session.doc().unwrap().node(a).is_some(), "⌘Z brings it back");
+        // A plain Delete or Backspace still does nothing.
+        u.app.session.set_selection(vec![a]);
+        press(&mut u, Key::Backspace, Modifiers::NONE);
+        press(&mut u, Key::Delete, Modifiers::NONE);
+        assert!(u.app.session.doc().unwrap().node(a).is_some());
+    });
+}

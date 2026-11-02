@@ -44,6 +44,7 @@ pub mod live;
 pub mod live_text;
 pub mod map_action_catalog;
 pub mod map_actions;
+pub mod map_delete;
 pub mod map_navigation;
 pub mod map_palette;
 pub mod map_panes;
