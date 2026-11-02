@@ -684,12 +684,6 @@ pub struct Prefs {
     /// interface keeps it within its limits).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub map_sidebar_width: Option<f32>,
-    /// The map client's comments pane width, dragged at its inner edge (`None`: the default).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub map_comments_width: Option<f32>,
-    /// The map client's comments pane is folded to a rail from its header.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub map_comments_collapsed: bool,
 }
 
 /// Recently run actions kept for the Actions palette (newest first).
@@ -727,8 +721,6 @@ impl Default for Prefs {
             recent_actions: Vec::new(),
             update_checked: None,
             map_sidebar_width: None,
-            map_comments_width: None,
-            map_comments_collapsed: false,
         }
     }
 }

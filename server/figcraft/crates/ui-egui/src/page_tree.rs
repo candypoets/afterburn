@@ -260,10 +260,22 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
         Err(_) => return,
     };
     let current = app.session.page().ok();
-    ui.painter().text(pos2(rect.min.x + 14.0, rect.min.y), Align2::LEFT_TOP, format!("PAGES  {total}"), FontId::monospace(9.0), s.muted);
-
-    let list = Rect::from_min_max(pos2(rect.min.x, rect.min.y + 18.0), rect.max);
+    // The section's name, and + for a new page at its right.
+    let head = Rect::from_min_size(rect.min, vec2(rect.width(), crate::workspaces::SECTION_H));
+    crate::workspaces::section(ui, &s, head, "Pages");
     let mut ask = None;
+    let plus = Rect::from_center_size(pos2(head.max.x - 10.0 - 13.0, head.center().y), vec2(26.0, 26.0));
+    let resp = ui.interact(plus, Id::new("page_tree_new_page"), Sense::click());
+    crate::a11y::button(&resp, "New page");
+    if resp.hovered() {
+        ui.painter().rect_filled(plus, CornerRadius::same(6), s.soft);
+    }
+    crate::workspaces::plus(ui, plus.center(), if resp.hovered() { s.text } else { s.faint });
+    if resp.on_hover_text("New page").clicked() {
+        ask = Some(Ask::NewPage);
+    }
+
+    let list = Rect::from_min_max(pos2(rect.min.x, head.max.y), rect.max);
     ui.scope_builder(egui::UiBuilder::new().max_rect(list).id_salt("page_tree_docked"), |ui| {
         ui.set_clip_rect(list.intersect(ui.clip_rect()));
         egui::ScrollArea::vertical().id_salt("page_tree_docked_scroll").auto_shrink([false, false]).show(ui, |ui| {
@@ -274,19 +286,6 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
                 }
             }
             ui.add_space(14.0);
-            let (outer, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
-            let plus = Rect::from_min_max(pos2(outer.min.x + 6.0, outer.min.y), pos2(outer.min.x + 90.0, outer.max.y));
-            let resp = ui.interact(plus, Id::new("page_tree_new_page"), Sense::click());
-            crate::a11y::button(&resp, "New page");
-            if resp.hovered() {
-                ui.painter().rect_filled(plus, CornerRadius::same(4), s.soft);
-            }
-            let ink = if resp.hovered() { s.text } else { s.muted };
-            ui.painter().text(pos2(plus.min.x + 8.0, plus.center().y), Align2::LEFT_CENTER, "+ Page", regular(12.0), ink);
-            if resp.on_hover_text("New page").clicked() {
-                ask = Some(Ask::NewPage);
-            }
-            ui.add_space(12.0);
         });
     });
 
@@ -306,10 +305,10 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
 }
 
 /// One page: the fold chevron for a page with children, its name indented by level, and its child
-/// count at the right (× to delete while hovered). The open page wears the fill and the accent bar.
+/// count at the right (× to delete while hovered). The open page wears the selected fill.
 fn row(ui: &mut Ui, s: &Skin, line: &Line, is_current: bool, current_fill: Color32) -> Option<Ask> {
     let (outer, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
-    let rect = Rect::from_min_max(pos2(outer.min.x + 6.0, outer.min.y), pos2(outer.max.x - 6.0, outer.max.y));
+    let rect = Rect::from_min_max(pos2(outer.min.x + 8.0, outer.min.y), pos2(outer.max.x - 8.0, outer.max.y));
     crate::a11y::button(&response, &line.name);
     let x = rect.min.x + 22.0 + line.level as f32 * INDENT;
     let fold = (line.kids > 0).then(|| {
@@ -323,18 +322,17 @@ fn row(ui: &mut Ui, s: &Skin, line: &Line, is_current: bool, current_fill: Color
     );
     let hot = response.hovered() || delete.hovered() || fold.as_ref().is_some_and(|f| f.hovered());
     if is_current {
-        ui.painter().rect_filled(rect, CornerRadius { nw: 0, sw: 0, ne: 5, se: 5 }, current_fill);
-        ui.painter().rect_filled(Rect::from_min_size(rect.min, vec2(2.0, rect.height())), CornerRadius::ZERO, s.accent);
+        ui.painter().rect_filled(rect, CornerRadius::same(8), current_fill);
     } else if hot {
-        ui.painter().rect_filled(rect, CornerRadius::same(5), s.soft);
+        ui.painter().rect_filled(rect, CornerRadius::same(8), s.soft);
     }
     if let Some(fold) = &fold {
         let ink = if fold.hovered() { s.text } else { s.muted };
         chevron(ui, pos2(x - 11.0, rect.center().y), !line.folded, ink);
     }
     let room = (rect.max.x - 34.0 - x).max(30.0);
-    let name = crate::widgets::elide_font(ui, &line.name, room, regular(12.0));
-    ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, name, regular(12.0), s.text);
+    let name = crate::widgets::elide_font(ui, &line.name, room, regular(13.0));
+    ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, name, regular(13.0), s.text);
     // The right column: how many children, or the depth cap on a page at the last level.
     let trail = pos2(rect.max.x - 14.0, rect.center().y);
     if hot {

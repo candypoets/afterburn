@@ -44,7 +44,6 @@ pub mod live;
 pub mod live_text;
 pub mod map_action_catalog;
 pub mod map_actions;
-pub mod map_comments;
 pub mod map_navigation;
 pub mod map_palette;
 pub mod map_panes;
@@ -107,7 +106,7 @@ fn map_command_allowed(id: &str) -> bool {
     }
 }
 
-fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
+pub(crate) fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 30.0), egui::Sense::click());
     let hot = resp.hovered();
     let color = if hot { egui::Color32::from_rgb(0xB5, 0x45, 0x2F) } else { egui::Color32::from_rgb(0x6E, 0x6C, 0x68) };
@@ -845,8 +844,6 @@ pub struct FigApp {
     pub compose: compose::State,
     /// The title row's tabs: the open pages of each map opened this session.
     pub page_tabs: map_tabs::State,
-    /// The comments pane's own state (when each saved comment was first seen).
-    pub map_comments: map_comments::State,
     pub map_shell: map_shell::State,
     /// The Sync button and widget in map mode.
     pub sync: sync::State,
@@ -915,7 +912,6 @@ impl FigApp {
             new_page: new_page::State::default(),
             compose: compose::State::default(),
             page_tabs: map_tabs::State::default(),
-            map_comments: map_comments::State::default(),
             map_shell: map_shell::State::default(),
             sync: sync::State::default(),
             status: status_bar::State::default(),
@@ -1668,6 +1664,24 @@ impl FigApp {
             windows::requests(self, &ctx);
             return;
         }
+        // The map's sidebar runs the window's full height, as Herdr's does: the window buttons and
+        // its toggle at the top, the workspace and the page tree, its footer at the bottom. The
+        // header, the canvas and the status bar share the column beside it.
+        let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
+        let map_view = map_mode && self.has_files() && !self.ui.home;
+        let sidebar_w = if map_view { map_panes::width(self, ui.available_width()) } else { 0.0 };
+        let window_rows = ui.available_rect_before_wrap().y_range();
+        if sidebar_w > 0.0 {
+            egui::Panel::left("workspace_pane")
+                .exact_size(sidebar_w)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::NONE.fill(t.panel))
+                .show(ui, |ui| {
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspace and pages");
+                    workspaces::pane(self, ui);
+                });
+        }
         // The first-run flow has no status bar: it owns the whole window.
         if map_mode && !(self.onboarding.active && (!self.has_files() || self.ui.home)) {
             egui::Panel::bottom("map_status").exact_size(status_bar::HEIGHT).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
@@ -1707,7 +1721,6 @@ impl FigApp {
             windows::requests(self, &ctx);
             return;
         }
-        let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
         if map_mode && hidden && self.ui.mac_inset() {
             // AppKit still owns the traffic-light band in a windowed focus view.
             egui::Panel::top("map_focus_titlebar").exact_size(MAC_BAND).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| {
@@ -1762,9 +1775,6 @@ impl FigApp {
                     right::right_panel(self, ui)
                 });
         }
-        // The map's panes beside the canvas: the sidebar and the comments pane, as wide as dragged
-        // (less in a small window).
-        let (sidebar_w, comments_w) = if map_mode { map_panes::widths(self, ui.available_width()) } else { (0.0, 0.0) };
         if map_mode && !hidden {
             // On macOS the header is the toolbar band the window buttons sit centred in.
             let inset = self.ui.mac_inset();
@@ -1781,45 +1791,28 @@ impl FigApp {
                         titlebar_drag(ui, rect);
                     }
                     ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.border));
-                    // The window buttons, the sidebar toggle, then the open pages' tabs from there
-                    // (above the sidebar), and Sync at the right end: all on the row's centre line.
-                    let toggle_left = rect.left() + if inset { MAC_BUTTONS_W - 10.0 } else { 8.0 };
-                    let toggle = egui::Rect::from_x_y_ranges(toggle_left..=toggle_left + 28.0, rect.y_range());
+                    // Over the canvas column: the open pages' tabs and Sync at the right end, all on
+                    // the row's centre line. With the sidebar closed, the window buttons and the
+                    // sidebar toggle come first (the toggle is in the sidebar's top row otherwise).
                     let centred = |r: egui::Rect, layout: egui::Layout| egui::UiBuilder::new().max_rect(r).layout(layout);
-                    let mut cell = ui.new_child(centred(toggle, egui::Layout::left_to_right(egui::Align::Center)));
-                    if sidebar_toggle(&mut cell, self.ws.pane_open).clicked() {
-                        self.ws.pane_open = !self.ws.pane_open;
-                        if self.ws.pane_open {
+                    let tabs_left = if sidebar_w > 0.0 {
+                        rect.left()
+                    } else {
+                        let toggle_left = rect.left() + if inset { MAC_BUTTONS_W - 10.0 } else { 8.0 };
+                        let toggle = egui::Rect::from_x_y_ranges(toggle_left..=toggle_left + 28.0, rect.y_range());
+                        let mut cell = ui.new_child(centred(toggle, egui::Layout::left_to_right(egui::Align::Center)));
+                        if sidebar_toggle(&mut cell, false).clicked() {
+                            self.ws.pane_open = true;
                             self.ws.refresh(&ctx);
                         }
-                    }
+                        toggle.right() + if inset { 0.0 } else { 4.0 }
+                    };
                     let mut end = ui.new_child(centred(rect, egui::Layout::right_to_left(egui::Align::Center)));
                     end.add_space(8.0);
                     sync::header_button(self, &mut end, &ctx);
-                    let tabs_left = toggle.right() + if inset { 0.0 } else { 4.0 };
                     let tabs_right = (end.min_rect().left() - 12.0).max(tabs_left);
                     map_tabs::strip(self, ui, egui::Rect::from_x_y_ranges(tabs_left..=tabs_right, rect.y_range()));
                 });
-        }
-        // Where the panes' inner edges are dragged: below the header, beside the canvas.
-        let pane_area = ui.available_rect_before_wrap();
-        if map_mode && !hidden && self.ws.pane_open {
-            egui::Panel::left("workspace_pane")
-                .exact_size(sidebar_w)
-                .resizable(false)
-                .frame(egui::Frame::NONE.fill(t.panel).stroke(egui::Stroke::new(1.0, t.border)))
-                .show(ui, |ui| {
-                    // The sidebar: the workspace switcher's head over the docked page tree.
-                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Layers, egui::accesskit::Role::Navigation, "Workspace and pages");
-                    workspaces::pane(self, ui);
-                });
-        }
-        if map_mode && comments_w > 0.0 {
-            egui::Panel::right("map_comments")
-                .exact_size(comments_w)
-                .resizable(false)
-                .frame(egui::Frame::NONE.fill(t.panel))
-                .show(ui, |ui| map_comments::show(self, ui));
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             let worker = self.worker.take();
@@ -1850,20 +1843,13 @@ impl FigApp {
             page_tree::maintain(self, &ctx);
             map_navigation::show(self, &ctx);
         }
-        // The map panes' inner edges: dragging one sizes its pane (kept once the drag is over).
-        if map_mode && sidebar_w > 0.0 {
-            let x = pane_area.left() + sidebar_w;
-            if let Some(w) = map_panes::splitter(ui, "sidebar", x, pane_area.y_range(), sidebar_w, 1.0, map_panes::SIDEBAR_DEFAULT) {
-                map_panes::set_sidebar_width(self, w);
-                self.panels_unsaved = true;
-            }
-        }
-        if map_mode && comments_w > map_panes::RAIL {
-            let x = pane_area.right() - comments_w;
-            if let Some(w) = map_panes::splitter(ui, "comments", x, pane_area.y_range(), comments_w, -1.0, map_panes::COMMENTS_DEFAULT) {
-                map_panes::set_comments_width(self, w);
-                self.panels_unsaved = true;
-            }
+        // The sidebar's inner edge, down the whole window: dragging it sizes the sidebar (kept once
+        // the drag is over).
+        if sidebar_w > 0.0
+            && let Some(w) = map_panes::splitter(ui, "sidebar", sidebar_w, window_rows, sidebar_w, map_panes::SIDEBAR_DEFAULT)
+        {
+            map_panes::set_sidebar_width(self, w);
+            self.panels_unsaved = true;
         }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
@@ -2022,8 +2008,7 @@ impl FigApp {
         state["missingFonts"] = json!(self.ui.missing_fonts.as_ref().map(missing_fonts::Shown::inspect));
         if map_mode() {
             state["mapTabs"] = map_tabs::inspect(self);
-            state["mapComments"] = map_comments::inspect(self);
-            state["mapPanes"] = json!({"sidebar": map_panes::sidebar_width(self), "comments": map_panes::comments_width(self)});
+            state["mapPanes"] = json!({"sidebar": map_panes::sidebar_width(self)});
         }
         state
     }

@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{OnceLock, RwLock};
 
-use egui::{Align2, Color32, CornerRadius, FontId, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, FontId, Id, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde::Deserialize;
 
 use crate::FigApp;
@@ -848,10 +848,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     crate::machine_modal::show(app, ui);
 }
 
-/// The map's sidebar (design: `Sidebar pages · window`): the workspace switcher's head at the top,
-/// then the docked page tree. The head names the open workspace and where it runs; a click (or
-/// ⌃⌘O) opens the switcher under it. Clicking a workspace with a map there switches the map in
-/// place; the others open the browser for Init.
+/// The map's sidebar, laid out as Herdr's: it runs the window's full height. At the top, a row as
+/// tall as the header with the window buttons (macOS) and the toggle that hides it; then the open
+/// workspace (a click, or ⌃⌘O, opens the switcher under it), the page tree, and a footer with
+/// Settings and Add machine. Clicking a workspace with a map there switches the map in place; the
+/// others open the browser for Init.
 pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     app.ws.poll();
@@ -875,61 +876,169 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let s = &skin;
     let area = ui.max_rect();
     ui.painter().rect_filled(area, CornerRadius::ZERO, s.panel);
+    // Its inner edge.
+    ui.painter().vline(area.max.x - 0.5, area.y_range(), Stroke::new(1.0, s.border));
 
-    let head = Rect::from_min_size(area.min + vec2(10.0, 10.0), vec2(area.width() - 20.0, HEAD_H));
-    let (name, sub) = head_lines(app);
-    if head_ui(ui, s, head, &name, &sub, app.status.switcher_open) {
+    // The top row: the window drags from it; the window buttons sit at its left on macOS.
+    let inset = app.ui.mac_inset();
+    let top = Rect::from_min_size(area.min, vec2(area.width(), if inset { crate::MAC_BAND } else { 44.0 }));
+    if app.ui.title_bar != crate::TitleBar::Native {
+        crate::titlebar_drag(ui, top);
+    }
+    let toggle = Rect::from_min_max(pos2(top.max.x - 38.0, top.min.y), pos2(top.max.x - 10.0, top.max.y));
+    let mut cell = ui.new_child(egui::UiBuilder::new().max_rect(toggle).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    if crate::sidebar_toggle(&mut cell, true).clicked() {
+        app.ws.pane_open = false;
+    }
+
+    // The open workspace, under its section's name.
+    let x = area.min.x + 8.0;
+    let w = area.width() - 16.0;
+    section(ui, s, Rect::from_min_size(pos2(area.min.x, top.max.y), vec2(area.width(), SECTION_H)), "Workspace");
+    let head = Rect::from_min_size(pos2(x, top.max.y + SECTION_H), vec2(w, SIDEBAR_ROW_H));
+    let (name, tail) = head_lines(app);
+    if head_ui(ui, s, head, &name, &tail, app.status.switcher_open) {
         crate::switcher::toggle(app);
     }
 
-    let tree = Rect::from_min_max(pos2(area.min.x, head.max.y + 24.0), area.max);
+    let footer = Rect::from_min_max(pos2(area.min.x, area.max.y - FOOTER_H), area.max);
+    let tree = Rect::from_min_max(pos2(area.min.x, head.max.y + 10.0), pos2(area.max.x, footer.min.y));
     crate::page_tree::docked(app, ui, tree);
+
+    match footer_ui(ui, s, footer) {
+        Some(Footer::Settings) => {
+            crate::map_actions::run(app, &ctx, "map.preferences");
+        }
+        Some(Footer::AddMachine) => crate::machine_modal::open(app),
+        None => {}
+    }
 
     crate::switcher::show(app, ui, head);
     crate::new_workspace::show(app, ui);
     crate::machine_modal::show(app, ui);
 }
 
-/// The switcher head's height.
-const HEAD_H: f32 = 46.0;
+/// A row in the sidebar (the workspace, a page, a footer action).
+pub(crate) const SIDEBAR_ROW_H: f32 = 30.0;
+/// A section's name over its rows (Workspace, Pages).
+pub(crate) const SECTION_H: f32 = 31.0;
+/// The footer under the page tree.
+const FOOTER_H: f32 = 69.0;
+/// The open workspace's mark: its initial on a coloured square.
+const MARK: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
 
-/// The head's two lines: the open workspace's name, and `This computer · main · 3 agents`.
+/// A section's name, small and quiet, over its rows.
+pub(crate) fn section(ui: &Ui, s: &Skin, rect: Rect, label: &str) {
+    ui.painter().text(pos2(rect.min.x + 16.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.5), s.faint);
+}
+
+/// The open workspace's name, and what is unusual about it after the name: the machine when it
+/// isn't this computer, the branch unless main or master, and its agents.
 fn head_lines(app: &FigApp) -> (String, String) {
     let rows = &app.ws.rows;
     let active = app.active_workspace.as_deref().and_then(|id| rows.iter().find(|w| w.id == id));
     #[cfg(not(target_arch = "wasm32"))]
-    let machine = app.ws.hosts.selected.as_ref().map(|host| host.name.clone()).unwrap_or_else(|| "This computer".to_string());
+    let machine = app.ws.hosts.selected.as_ref().map(|host| host.name.clone());
     #[cfg(target_arch = "wasm32")]
-    let machine = "This computer".to_string();
+    let machine: Option<String> = None;
+    let machine = machine.filter(|m| m != "This computer");
     match active {
         Some(w) => {
             let base = grouped(rows).into_iter().find(|(_, members)| members.iter().any(|m| m.id == w.id)).map(|(base, _)| base);
             let name = base.as_ref().unwrap_or(w).name().to_string();
-            (name, format!("{machine}  ·  {}  ·  {}", branch_label(w), pane_agents(w)))
+            let branch = branch_label(w);
+            let branch = (branch != "main" && branch != "master").then_some(branch);
+            let tail: Vec<String> = machine.into_iter().chain(branch).chain([pane_agents(w)]).collect();
+            (name, tail.join(" · "))
         }
         None if app.ws.busy.is_some() || (rows.is_empty() && app.ws.error.is_none()) => ("Workspaces".to_string(), "Listing…".to_string()),
-        None => ("Choose a workspace".to_string(), machine),
+        None => ("Choose a workspace".to_string(), machine.unwrap_or_default()),
     }
 }
 
-/// The switcher's head: a bordered box with the name, the mono line under it and a chevron.
-fn head_ui(ui: &mut Ui, s: &Skin, rect: Rect, name: &str, sub: &str, open: bool) -> bool {
+/// The open workspace's row: its mark, its name, the quiet tail at the right and a chevron. It
+/// wears the selected fill, as the open one does.
+fn head_ui(ui: &mut Ui, s: &Skin, rect: Rect, name: &str, tail: &str, open: bool) -> bool {
     let resp = ui.interact(rect, Id::new("workspace_switcher_head"), Sense::click());
     a11y::button(&resp, &format!("{name} · switch workspace"));
-    let fill = if open || resp.hovered() { s.selected } else { s.panel };
-    ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
-    ui.painter().rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, if open { s.accent } else { s.border }), StrokeKind::Inside);
-    focus_ring(ui, s, rect, &resp, 7);
-    let room = rect.width() - 46.0;
-    let name = widgets::elide_font(ui, name, room, semibold(13.0));
-    ui.painter().text(pos2(rect.min.x + 12.0, rect.min.y + 8.0), Align2::LEFT_TOP, name, semibold(13.0), s.text);
-    let sub = widgets::elide_font(ui, sub, room, mono(8.5));
-    ui.painter().text(pos2(rect.min.x + 12.0, rect.min.y + 28.0), Align2::LEFT_TOP, sub, mono(8.5), s.muted);
-    let c = pos2(rect.max.x - 16.0, rect.center().y);
+    let fill = if open || resp.hovered() { s.soft } else { s.selected };
+    ui.painter().rect_filled(rect, CornerRadius::same(8), fill);
+    focus_ring(ui, s, rect, &resp, 8);
+    let mark = Rect::from_center_size(pos2(rect.min.x + 8.0 + 9.0, rect.center().y), vec2(18.0, 18.0));
+    ui.painter().rect_filled(mark, CornerRadius::same(5), MARK);
+    let initial = name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+    ui.painter().text(mark.center(), Align2::CENTER_CENTER, initial, semibold(10.5), Color32::WHITE);
+    let c = pos2(rect.max.x - 12.0, rect.center().y);
     let stroke = Stroke::new(1.2, s.muted);
-    ui.painter().line_segment([pos2(c.x - 3.5, c.y - 1.5), pos2(c.x, c.y + 2.0)], stroke);
-    ui.painter().line_segment([pos2(c.x, c.y + 2.0), pos2(c.x + 3.5, c.y - 1.5)], stroke);
+    ui.painter().line_segment([pos2(c.x - 3.0, c.y - 1.5), pos2(c.x, c.y + 1.5)], stroke);
+    ui.painter().line_segment([pos2(c.x, c.y + 1.5), pos2(c.x + 3.0, c.y - 1.5)], stroke);
+    let left = mark.max.x + 9.0;
+    let right = c.x - 10.0;
+    let name = widgets::elide_font(ui, name, (right - left).min(150.0), regular(13.0));
+    let name_w = ui.painter().layout_no_wrap(name.clone(), regular(13.0), s.text).size().x;
+    ui.painter().text(pos2(left, rect.center().y), Align2::LEFT_CENTER, name, regular(13.0), s.text);
+    let room = right - left - name_w - 8.0;
+    if room > 24.0 {
+        let tail = widgets::elide_font(ui, tail, room, regular(11.5));
+        ui.painter().text(pos2(right, rect.center().y), Align2::RIGHT_CENTER, tail, regular(11.5), s.faint);
+    }
     resp.on_hover_text("Switch workspace (⌃⌘O)").clicked()
+}
+
+enum Footer {
+    Settings,
+    AddMachine,
+}
+
+/// The footer under the page tree: Settings, and Add machine (dimmer).
+fn footer_ui(ui: &mut Ui, s: &Skin, rect: Rect) -> Option<Footer> {
+    ui.painter().hline(rect.x_range(), rect.min.y + 0.5, Stroke::new(1.0, s.border));
+    let mut asked = None;
+    for (i, (label, dim, what)) in [("Settings", false, Footer::Settings), ("Add machine", true, Footer::AddMachine)].into_iter().enumerate() {
+        let row = Rect::from_min_size(pos2(rect.min.x + 8.0, rect.min.y + 5.0 + i as f32 * 28.0), vec2(rect.width() - 16.0, 28.0));
+        let resp = ui.interact(row, Id::new(("sidebar_footer", i)), Sense::click());
+        a11y::button(&resp, label);
+        if resp.hovered() {
+            ui.painter().rect_filled(row, CornerRadius::same(8), s.soft);
+        }
+        let ink = if resp.hovered() {
+            s.text
+        } else if dim {
+            s.faint
+        } else {
+            s.muted
+        };
+        let icon = pos2(row.min.x + 8.0 + 7.0, row.center().y);
+        if i == 0 {
+            gear(ui, icon, ink);
+        } else {
+            plus(ui, icon, ink);
+        }
+        ui.painter().text(pos2(row.min.x + 8.0 + 14.0 + 9.0, row.center().y), Align2::LEFT_CENTER, label, regular(13.0), ink);
+        if resp.clicked() {
+            asked = Some(what);
+        }
+    }
+    asked
+}
+
+/// A small gear: a ring with six teeth.
+fn gear(ui: &Ui, c: Pos2, ink: Color32) {
+    let stroke = Stroke::new(1.2, ink);
+    ui.painter().circle_stroke(c, 4.0, stroke);
+    ui.painter().circle_stroke(c, 1.6, stroke);
+    for k in 0..6 {
+        let a = k as f32 * std::f32::consts::TAU / 6.0;
+        let d = vec2(a.cos(), a.sin());
+        ui.painter().line_segment([c + d * 4.0, c + d * 6.0], stroke);
+    }
+}
+
+/// A small plus.
+pub(crate) fn plus(ui: &Ui, c: Pos2, ink: Color32) {
+    let stroke = Stroke::new(1.3, ink);
+    ui.painter().line_segment([pos2(c.x - 5.0, c.y), pos2(c.x + 5.0, c.y)], stroke);
+    ui.painter().line_segment([pos2(c.x, c.y - 5.0), pos2(c.x, c.y + 5.0)], stroke);
 }
 
 /// The head's agent count.

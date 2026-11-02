@@ -174,57 +174,28 @@ fn many_tabs_shrink_then_scroll() {
 }
 
 #[test]
-fn comments_pane_follows_shift_c_and_folds_from_its_header() {
-    crate::with_map_mode(|| {
-        let (mut u, [a, _, _]) = setup();
-        u.app.compose.drafts.push(crate::compose::Draft { text: "Explain Init".into(), node: None, page: None, node_id: None, page_id: Some(a) });
-        u.frame(vec![]);
-        assert!(crate::map_panes::comments_open(&u.app));
-        assert_eq!(crate::map_comments::inspect(&u.app)["groups"][0]["heading"], "Page comment · 1");
-        u.app.ui.nav.region = crate::a11y::Region::Canvas;
-        press(&mut u, Key::C, Modifiers::SHIFT);
-        assert!(!crate::map_panes::comments_open(&u.app), "Shift+C hides the pane with the marks");
-        press(&mut u, Key::C, Modifiers::SHIFT);
-        assert!(crate::map_panes::comments_open(&u.app));
-        // The header's › folds it to a rail; the rail's ‹ unfolds it.
-        let w = crate::map_panes::comments_width(&u.app);
-        click(&mut u, Pos2::new(1440.0 - 14.0 - 6.0, 44.0 + 22.0), PointerButton::Primary);
-        assert!(u.app.session.prefs.map_comments_collapsed);
-        assert_eq!(crate::map_panes::widths(&u.app, 1440.0).1, crate::map_panes::RAIL);
-        click(&mut u, Pos2::new(1440.0 - crate::map_panes::RAIL / 2.0, 22.0 + 44.0), PointerButton::Primary);
-        assert!(!u.app.session.prefs.map_comments_collapsed);
-        assert_eq!(crate::map_panes::widths(&u.app, 1440.0).1, w);
-    });
-}
-
-#[test]
-fn dragged_pane_widths_persist_in_the_preferences() {
+fn dragged_sidebar_width_persists_in_the_preferences() {
     crate::with_map_mode(|| {
         let (mut u, _) = setup();
         u.app.ws.pane_open = true;
         u.frame(vec![]);
-        let (left, right) = crate::map_panes::widths(&u.app, 1440.0);
+        let left = crate::map_panes::width(&u.app, 1440.0);
         assert_eq!(left, crate::map_panes::SIDEBAR_DEFAULT);
-        // Drag the sidebar's inner edge 40 pt right, then the comments pane's 30 pt left.
-        let drag = |u: &mut Ui, from: Pos2, dx: f32| {
-            u.frame(vec![Event::PointerMoved(from)]);
-            u.frame(vec![Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
-            for step in 1..=4 {
-                u.frame(vec![Event::PointerMoved(from + egui::vec2(dx * step as f32 / 4.0, 0.0))]);
-            }
-            let to = from + egui::vec2(dx, 0.0);
-            u.frame(vec![Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
-            u.frame(vec![]);
-        };
-        drag(&mut u, Pos2::new(left, 400.0), 40.0);
-        drag(&mut u, Pos2::new(1440.0 - right, 400.0), -30.0);
+        // Drag the sidebar's inner edge 40 pt right.
+        let from = Pos2::new(left, 400.0);
+        u.frame(vec![Event::PointerMoved(from)]);
+        u.frame(vec![Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        for step in 1..=4 {
+            u.frame(vec![Event::PointerMoved(from + egui::vec2(40.0 * step as f32 / 4.0, 0.0))]);
+        }
+        let to = from + egui::vec2(40.0, 0.0);
+        u.frame(vec![Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        u.frame(vec![]);
         let prefs = &u.app.session.prefs;
         assert_eq!(prefs.map_sidebar_width, Some(left + 40.0));
-        assert_eq!(prefs.map_comments_width, Some(right + 30.0));
         // Saved and read back.
         let back: figcraft_engine::Prefs = serde_json::from_value(serde_json::to_value(prefs).unwrap()).unwrap();
         assert_eq!(back.map_sidebar_width, Some(left + 40.0));
-        assert_eq!(back.map_comments_width, Some(right + 30.0));
-        assert_eq!(crate::map_panes::widths(&u.app, 1440.0), (left + 40.0, right + 30.0));
+        assert_eq!(crate::map_panes::width(&u.app, 1440.0), left + 40.0);
     });
 }
