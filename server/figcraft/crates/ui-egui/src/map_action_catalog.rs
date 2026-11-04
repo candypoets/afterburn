@@ -48,10 +48,18 @@ pub const ACTIONS: &[Action] = &[
         "Map: close the active page tab and open its neighbour; the page stays, and so does the last tab."
     ),
     action!("map.close", "Close map", "Workspaces + app", "Shift+Cmd+W", "Ctrl+Shift+W", "Map: return to workspaces; keep agents and drafts alive."),
-    action!("map.preferences", "Preferences", "Workspaces + app", "Cmd+,", "Ctrl+,", "App: open settings."),
+    action!("map.preferences", "Settings", "Workspaces + app", "Cmd+,", "Ctrl+,", "App: list the map's and the app's settings; flip one."),
     action!("map.focusMode", "Focus mode", "Workspaces + app", "Cmd+\\", "Ctrl+\\", "App: toggle workspace chrome around the canvas."),
     action!("map.fullscreen", "Full screen", "Workspaces + app", "Ctrl+Cmd+F", "F11", "App: toggle the native window's fullscreen state."),
-    action!("map.pageTree", "Page tree", "Pages + navigation", "Cmd+P", "Ctrl+P", "Map: show the page tree in the sidebar; choose a page."),
+    action!(
+        "map.goToPage",
+        "Go to page",
+        "Pages + navigation",
+        "Cmd+P",
+        "Ctrl+P",
+        "Map: search every page by name and path; open one here, or in a new tab."
+    ),
+    action!("map.pageTree", "Page tree", "Pages + navigation", "", "", "Map: show the page tree in the sidebar; choose a page."),
     action!("map.previousPage", "Previous page", "Pages + navigation", "PageUp", "PageUp", "Canvas: previous page in visible tree order."),
     action!("map.nextPage", "Next page", "Pages + navigation", "PageDown", "PageDown", "Canvas: next page in visible tree order."),
     action!("map.workspacePane", "Workspace pane", "Pages + navigation", "Shift+Cmd+\\", "Ctrl+Shift+\\", "App: show or hide workspace navigation."),
@@ -190,6 +198,8 @@ pub const ACTIONS: &[Action] = &[
         "Composer only: send the prompt and included drafts to the selected agent."
     ),
     action!("map.switchWorktree", "Switch worktree", "Workspaces + app", "", "", "Workspace: choose another worktree from the actions palette."),
+    action!("map.agents", "Agents", "Workspaces + app", "", "", "Workspace: list this workspace's agents; focus one's pane."),
+    action!("map.newAgent", "New agent", "Comments + composer", "Alt+Cmd+N", "Ctrl+Alt+N", "Composer: choose the CLI a new agent starts with."),
     action!("map.focusComposer", "Focus composer", "Comments + composer", "", "", "Composer: focus the prompt field without sending anything."),
     action!("map.syncReview", "Open Sync review", "Workspaces + app", "", "", "Workspace: review Sync; opening this view never starts Sync."),
     action!(
@@ -207,6 +217,30 @@ pub const ACTIONS: &[Action] = &[
         "Ctrl+Cmd+O",
         "Ctrl+Alt+O",
         "Workspace: search the workspaces and worktrees of every machine; open one."
+    ),
+    action!(
+        "map.newWindowTab",
+        "New window tab",
+        "Workspaces + app",
+        "Cmd+T",
+        "Ctrl+T",
+        "Workspace: choose a workspace to open in a window of its own (a window tab on macOS)."
+    ),
+    action!(
+        "map.nextWindowTab",
+        "Show next window tab",
+        "Workspaces + app",
+        "Shift+Cmd+]",
+        "Ctrl+Tab",
+        "App: bring the next project window (macOS window tab) to the front."
+    ),
+    action!(
+        "map.previousWindowTab",
+        "Show previous window tab",
+        "Workspaces + app",
+        "Shift+Cmd+[",
+        "Ctrl+Shift+Tab",
+        "App: bring the previous project window (macOS window tab) to the front."
     ),
     action!(
         "map.workspace1",
@@ -284,7 +318,13 @@ pub const ACTIONS: &[Action] = &[
 
 /// Second bindings that run an action without being its primary shortcut: ⌘K, the palette's
 /// earlier key, keeps opening it; ⌘O, once Open workspace, opens the workspace switcher. Help shows them after the primary binding.
-pub const ALIASES: &[(&str, &str, &str)] = &[("map.actions", "Cmd+K", "Ctrl+K"), ("map.switchWorkspace", "Cmd+O", "Ctrl+O")];
+pub const ALIASES: &[(&str, &str, &str)] = &[
+    ("map.actions", "Cmd+K", "Ctrl+K"),
+    ("map.switchWorkspace", "Cmd+O", "Ctrl+O"),
+    // macOS's own window tab keys (AppKit's Window menu takes them first when it lists its tab items).
+    ("map.nextWindowTab", "Ctrl+Tab", ""),
+    ("map.previousWindowTab", "Ctrl+Shift+Tab", ""),
+];
 
 pub fn find(id: &str) -> Option<&'static Action> {
     ACTIONS.iter().find(|action| action.id == id)
@@ -386,6 +426,7 @@ pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static 
         | "map.focusMode"
         | "map.workspacePane"
         | "map.switchWorkspace"
+        | "map.newWindowTab"
         | "map.nextRegion"
         | "map.previousRegion"
         | "app.checkForUpdates" => None,
@@ -400,6 +441,7 @@ pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static 
                 None
             }
         }
+        "map.nextWindowTab" | "map.previousWindowTab" => app.windows.list.is_empty().then_some("Only one window is open"),
         id if workspace_number(id).is_some() => {
             workspace_number(id).and_then(|n| crate::switcher::nth(app, n)).is_none().then_some("No workspace listed there")
         }

@@ -191,7 +191,7 @@ fn agent_row(ui: &mut egui::Ui, info: &TargetInfo, task: Option<&str>, chosen: b
 }
 
 /// What each agent says it is doing, from the workspace list.
-fn agent_tasks(app: &FigApp, agents: &[TargetInfo]) -> Vec<Option<String>> {
+pub(crate) fn agent_tasks(app: &FigApp, agents: &[TargetInfo]) -> Vec<Option<String>> {
     let row = app.ws.rows.iter().find(|row| app.active_workspace.as_deref() == Some(row.id.as_str()));
     agents
         .iter()

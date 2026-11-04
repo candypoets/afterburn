@@ -377,6 +377,13 @@ impl State {
         }
     }
 
+    /// Open the agent menu, where a new agent's CLI is chosen.
+    pub(crate) fn open_menu(&mut self) {
+        if !self.menu_open {
+            self.toggle_menu();
+        }
+    }
+
     /// Open or close the agent menu; it opens on an empty search with the keyboard in it.
     fn toggle_menu(&mut self) {
         self.menu_open = !self.menu_open;

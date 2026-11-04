@@ -993,7 +993,9 @@ const PALETTE_H: f32 = 450.0;
 
 /// Open the Actions palette afresh (empty search, All tab, first row highlighted), or close it.
 pub fn set_palette(ui: &mut crate::UiState, open: bool) {
-    ui.palette = open.then(String::new);
+    // Mindmap's palette opens on its actions (`>` typed); ⌘P opens it on the pages.
+    ui.palette = open.then(|| if crate::map_mode() { ">".to_string() } else { String::new() });
+    ui.palette_box = crate::map_palette::State::default();
     ui.palette_tab = PaletteTab::All;
     ui.palette_hi = 0;
     ui.palette_armed = open;
@@ -1483,12 +1485,13 @@ pub(crate) fn activate_map_action(app: &mut FigApp, ctx: &egui::Context, id: &st
     if !crate::map_action_catalog::enabled(app, action) {
         return false;
     }
-    app.ui.palette = None;
+    crate::map_palette::close(app);
     if let Some(focus) = ctx.memory(|m| m.focused()) {
         ctx.memory_mut(|m| m.surrender_focus(focus));
     }
     let ran = crate::map_actions::run(app, ctx, action.id);
-    if ran {
+    // The actions that open another list in the palette are its own doors, not recent work.
+    if ran && !crate::map_palette::box_action(action.id) && action.id != "map.switchWorktree" {
         record_recent(app, &format!("command:{}", action.id));
     }
     ran

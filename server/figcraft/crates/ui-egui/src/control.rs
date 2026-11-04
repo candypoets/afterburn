@@ -264,6 +264,21 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             crate::windows::open(app, ctx, index, p.get("path").and_then(Value::as_str), None).map(|id| json!({"window": id}))
         }
         "window.list" => Ok(crate::windows::list(app)),
+        // Map mode: a workspace's map in a window of its own (a macOS window tab), or its window
+        // to the front when it is open.
+        #[cfg(not(target_arch = "wasm32"))]
+        "window.openWorkspace" => {
+            let workspace = p.get("workspace").and_then(Value::as_str).filter(|w| !w.trim().is_empty()).ok_or("`workspace` required")?;
+            let address = p.get("address").and_then(Value::as_str).map_or_else(crate::workspaces::service_addr, str::to_string);
+            if address != crate::workspaces::service_addr() {
+                return Err(format!("{address} is not the machine in use; open one of its workspaces from the switcher first"));
+            }
+            Ok(match crate::window_tabs::open_workspace(app, ctx, &address, workspace) {
+                crate::window_tabs::Plan::Join => json!({"opening": workspace}),
+                crate::window_tabs::Plan::Focus(id) => json!({"focused": id}),
+                crate::window_tabs::Plan::Move(_) => json!({"window": app.windows.focused}),
+            })
+        }
         "window.focus" => crate::windows::focus(app, ctx, p.get("id").and_then(Value::as_u64).ok_or("`id` required")?),
         "ui.inspect" => {
             let mut v = app.inspect();

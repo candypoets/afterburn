@@ -2,10 +2,10 @@
 //! the right (design: `Sidebar pages · window`).
 //!
 //! Like an editor's status bar it is chrome, not canvas: it costs no header space. The worktree
-//! names the open design (`repo / branch`); a click opens the workspace switcher in the sidebar.
+//! names the open design (`repo / branch`); a click opens the palette on the workspaces.
 //! After it comes the open page's path (`Overview › Canvas and layers › Paint › Fills`): every
-//! crumb before the last opens its page. At the right, the agent summary opens the Agent
-//! breakdown, beside the count of people on the map.
+//! crumb before the last opens its page. At the right, the agent summary opens the palette on the
+//! workspace's agents, beside the count of people on the map.
 //!
 //! The worktree comes from the same node listing the Workspaces screen uses: the active session's
 //! [`crate::node::SessionRef`] says which worktree is open, and `workspaces::State::rows` names
@@ -27,21 +27,14 @@ use crate::workspaces::Workspace;
 /// keeps the design's type and spacing in a 28 pt band.
 pub const HEIGHT: f32 = 28.0;
 
-/// The workspace switcher's state ([`crate::switcher`]).
+/// A workspace switch's state ([`crate::switcher`]): the palette shows it while it shows the
+/// workspaces.
 #[derive(Default)]
 pub struct State {
-    /// The switcher is open under the sidebar's head.
-    pub switcher_open: bool,
-    /// What the search field holds.
-    pub query: String,
-    /// The highlighted row (↑ ↓ move it), by row key.
-    pub cursor: Option<String>,
     /// A switch in flight: the old map stays until the new one is ready.
     pub switching: Option<Switch>,
     /// A switch that failed, with the node's reason; the old map is still open.
     pub failed: Option<(Switch, String)>,
-    /// The search field takes the keyboard on the frame the switcher opens.
-    focus_search: bool,
 }
 
 /// One requested switch: where to, and where the human still is.
@@ -51,54 +44,6 @@ pub struct Switch {
     pub branch: String,
     /// The workspace still on screen while the other one opens.
     pub from: String,
-}
-
-/// What the switcher shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Phase {
-    /// The workspaces, filtered by the search.
-    List,
-    /// The search matches nothing.
-    NoMatch,
-    /// Another workspace is opening.
-    Opening,
-    /// The switch failed; the current map stays.
-    Failed,
-}
-
-impl State {
-    /// Open the switcher with an empty search.
-    pub fn open(&mut self) {
-        self.switcher_open = true;
-        self.query.clear();
-        self.cursor = None;
-        self.failed = None;
-        self.focus_search = true;
-    }
-
-    /// Close the switcher; a switch in flight keeps going (Cancel switch is the way to stop it).
-    pub fn close(&mut self) {
-        self.switcher_open = false;
-        self.failed = None;
-    }
-
-    /// The search field should take the keyboard (once, as the switcher opens).
-    pub fn take_focus(&mut self) -> bool {
-        std::mem::take(&mut self.focus_search)
-    }
-
-    /// The switcher's state, given how many rows the search leaves.
-    pub fn phase(&self, matches: usize) -> Phase {
-        if self.switching.is_some() {
-            Phase::Opening
-        } else if self.failed.is_some() {
-            Phase::Failed
-        } else if matches == 0 && !self.query.trim().is_empty() {
-            Phase::NoMatch
-        } else {
-            Phase::List
-        }
-    }
 }
 
 /// The worktree's branch name, or its label when git has none.
@@ -241,14 +186,13 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         let w = ui.painter().layout_no_wrap(summary.clone(), summary_font.clone(), color).size().x;
         let agents = Rect::from_min_max(pos2(right - w - 8.0, bar.min.y + 3.0), pos2(right + 4.0, bar.max.y - 2.0));
         let resp = ui.interact(agents, Id::new("status_agents"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-        crate::a11y::button(&resp, "Agent breakdown");
+        crate::a11y::button(&resp, "Agents");
         if resp.hovered() {
             ui.painter().rect_filled(agents, CornerRadius::same(4), ink.selected);
         }
         ui.painter().text(pos2(right - 2.0, bar.center().y + 0.5), Align2::RIGHT_CENTER, &summary, summary_font, color);
-        if resp.on_hover_text("Agent breakdown").clicked() {
-            app.agents_modal.open = true;
-            app.agents_modal.just_opened = true;
+        if resp.on_hover_text("Agents").clicked() {
+            crate::map_palette::open(app, crate::map_palette::Scope::Agents);
         }
         right = agents.min.x - 10.0;
         // The people on the map: small and quiet beside the agents.
@@ -299,10 +243,6 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 
     #[cfg(not(target_arch = "wasm32"))]
     track_switch(app);
-    // The switcher hangs from the sidebar: over a map, it shows the sidebar too.
-    if app.status.switcher_open && !home {
-        app.ws.pane_open = true;
-    }
 }
 
 /// ` · Overview › Canvas and layers › Fills` from `x`, up to `right`; returns a clicked crumb.
@@ -352,7 +292,7 @@ fn track_switch(app: &mut FigApp) {
     let Some(switch) = app.status.switching.clone() else { return };
     if app.active_workspace.as_deref() == Some(switch.id.as_str()) {
         app.status.switching = None;
-        app.status.close();
+        crate::switcher::close(app);
         return;
     }
     if app.ws.busy.is_some() || app.ws.join.is_some() {
@@ -362,9 +302,11 @@ fn track_switch(app: &mut FigApp) {
     match app.ws.error.clone() {
         Some(error) => {
             app.status.failed = Some((switch, error));
-            app.status.switcher_open = true;
+            if !crate::switcher::is_open(app) {
+                crate::map_palette::open(app, crate::map_palette::Scope::Workspace);
+            }
         }
-        None => app.status.close(),
+        None => crate::switcher::close(app),
     }
 }
 
@@ -402,27 +344,6 @@ mod tests {
     fn the_bar_falls_back_to_the_branch_alone() {
         assert_eq!(label(Some(&target("w9", "/gone", "feature/x")), &[]), "feature/x");
         assert_eq!(label(None, &[]), "no design open");
-    }
-
-    #[test]
-    fn the_switcher_phase_follows_search_and_switching() {
-        let mut state = State::default();
-        state.open();
-        assert!(state.take_focus());
-        assert!(!state.take_focus(), "the field takes the keyboard once");
-        assert_eq!(state.phase(3), Phase::List);
-        state.query = "billing".into();
-        assert_eq!(state.phase(0), Phase::NoMatch);
-        state.query.clear();
-        assert_eq!(state.phase(0), Phase::List);
-        let switch = Switch { id: "w2".into(), branch: "feature/checkout".into(), from: "main".into() };
-        state.switching = Some(switch.clone());
-        assert_eq!(state.phase(3), Phase::Opening);
-        state.switching = None;
-        state.failed = Some((switch, "unavailable".into()));
-        assert_eq!(state.phase(3), Phase::Failed);
-        state.open();
-        assert_eq!(state.phase(3), Phase::List);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

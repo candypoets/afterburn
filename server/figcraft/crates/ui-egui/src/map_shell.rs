@@ -158,7 +158,7 @@ pub fn run(app: &mut FigApp, ctx: &egui::Context, id: &str) -> bool {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 reveal_chrome(app);
-                app.status.open();
+                crate::switcher::open_worktrees(app);
             }
             #[cfg(target_arch = "wasm32")]
             app.toast("Worktree switching requires a desktop node connection.");
@@ -196,7 +196,7 @@ fn workspace_home(app: &mut FigApp) {
     // waiting UI request; it does not stop an agent or leave a live engine session.
     app.ws.cancel_open();
     app.status.switching = None;
-    app.status.close();
+    crate::switcher::close(app);
     app.ws.worktree_init = false;
     app.ui.home = true;
 }
@@ -512,12 +512,11 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn worktree_action_opens_the_existing_switcher_without_opening_a_workspace() {
+    fn worktree_action_opens_the_palette_on_the_worktrees_without_opening_a_workspace() {
         let mut app = app();
-        app.status.query = "old search".into();
         assert!(run(&mut app, &egui::Context::default(), "map.switchWorktree"));
-        assert!(app.status.switcher_open);
-        assert!(app.status.query.is_empty());
+        assert!(matches!(crate::map_palette::scope(&app), Some(crate::map_palette::Scope::Worktree { current: true, .. })));
+        assert_eq!(app.ui.palette.as_deref(), Some(""));
         assert!(app.status.switching.is_none());
         assert!(app.ws.busy.is_none());
     }

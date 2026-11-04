@@ -40,8 +40,9 @@ fmv-macos-events = "=0.1.0"
 # The map client's window gets an empty unified toolbar, which puts the traffic lights where native
 # apps have them. Only safe AppKit calls are used (no `unsafe`); eframe already links these crates.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSToolbar"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString"] }
+# Window tabs (`mac_tabs`): the tab group, each tab's title and the ordering of an added tab.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSToolbar", "NSWindowTab", "NSWindowTabGroup", "NSGraphics"] }
 # The native menu bar (`mac_menu`). Menu items need an Objective-C target class, i.e. `unsafe`,
 # which the workspace forbids; muda (Tauri's menu crate) wraps NSMenu behind a safe API. Pinned
 # exactly: review the diff before bumping. No default features: those are its GTK backend.

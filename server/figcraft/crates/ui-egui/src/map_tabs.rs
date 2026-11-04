@@ -64,7 +64,12 @@ pub struct State {
     /// Maps whose last tab was closed, with the page open then: they show no page until one is
     /// opened (a `page.select`, or another page becoming current).
     empty: HashMap<String, Option<NodeId>>,
+    /// The pages opened lately by map, the latest first (Go to page lists them first).
+    recent: HashMap<String, Vec<NodeId>>,
 }
+
+/// How many pages Go to page remembers as recently opened.
+pub const RECENT: usize = 3;
 
 /// The open map's key: its file, or its session id when it has none.
 fn key(app: &FigApp) -> Option<String> {
@@ -82,6 +87,16 @@ pub fn follow(app: &mut FigApp) {
         state.empty.remove(&key);
     }
     let empty = state.empty.contains_key(&key);
+    let recent = state.recent.entry(key.clone()).or_default();
+    recent.retain(|id| doc.pages.contains(id));
+    if let Some(page) = current
+        && !empty
+        && recent.first() != Some(&page)
+    {
+        recent.retain(|id| *id != page);
+        recent.insert(0, page);
+        recent.truncate(RECENT);
+    }
     let tabs = state.maps.entry(key).or_default();
     tabs.retain(|id| doc.pages.contains(id));
     if let Some(page) = current
@@ -109,6 +124,33 @@ pub fn opened(app: &mut FigApp) {
 /// The open map's tabs, in strip order.
 pub fn open(app: &FigApp) -> Vec<NodeId> {
     key(app).and_then(|key| app.page_tabs.maps.get(&key).cloned()).unwrap_or_default()
+}
+
+/// The open map's recently opened pages, the latest first.
+pub fn recent(app: &FigApp) -> Vec<NodeId> {
+    key(app).and_then(|key| app.page_tabs.recent.get(&key).cloned()).unwrap_or_default()
+}
+
+/// Open `page` in the active tab (Go to page's ↵): the active tab shows it instead of its page. A
+/// page that already has a tab opens there; with no tab open it gets one.
+pub fn open_here(app: &mut FigApp, page: NodeId) {
+    follow(app);
+    let current = app.session.page().ok();
+    if let Some(key) = key(app)
+        && !app.page_tabs.empty.contains_key(&key)
+        && let Some(tabs) = app.page_tabs.maps.get_mut(&key)
+        && !tabs.contains(&page)
+        && let Some(at) = current.and_then(|current| tabs.iter().position(|id| *id == current))
+        && let Some(slot) = tabs.get_mut(at)
+    {
+        *slot = page;
+    }
+    app.run("page.select", json!({"id": page.0}));
+}
+
+/// Open `page` in a tab of its own (Go to page's ⌘↵), keeping the active tab's page.
+pub fn open_new_tab(app: &mut FigApp, page: NodeId) {
+    app.run("page.select", json!({"id": page.0}));
 }
 
 fn select(app: &mut FigApp, page: NodeId) {

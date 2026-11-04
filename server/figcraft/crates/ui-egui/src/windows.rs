@@ -40,6 +40,10 @@ struct Pane {
     worker: Option<Worker>,
     field_focus: bool,
     control_input: Vec<egui::Event>,
+    /// A map window's own Sync sidebar, workspace switcher and page tree (`window_tabs`).
+    sync: crate::sync::State,
+    status: crate::status_bar::State,
+    page_tree: crate::page_tree::State,
 }
 
 /// The app's other windows.
@@ -52,6 +56,8 @@ pub struct Windows {
     pub focused: u64,
     /// The main window's file while another window draws.
     main_active: Option<u64>,
+    /// The main window shows the workspace browser, while another window draws.
+    main_home: bool,
     /// Windows to close (their files close with them), at the main window's next frame.
     closing: Vec<u64>,
     last_id: u64,
@@ -132,7 +138,12 @@ impl FigApp {
 
     /// The window title: the file it shows and whether it has unsaved changes.
     pub fn title(&self) -> String {
-        title_of(self.session.ds().ok().filter(|d| self.shows(d.uid)))
+        let shown = self.session.ds().ok().filter(|d| self.shows(d.uid));
+        if crate::map_mode() {
+            // A project window: `mindmap — main` (its tab: `mindmap · main`).
+            return crate::window_tabs::window_title(self, shown.filter(|_| !self.ui.home).map(|d| d.uid)).unwrap_or_else(|| "Mindmap".to_string());
+        }
+        title_of(shown)
     }
 
     /// Files in this window with unsaved changes (a branch tab's edits live on in its file).
@@ -164,6 +175,19 @@ fn exchange(app: &mut FigApp, p: &mut Pane) {
     std::mem::swap(&mut app.worker, &mut p.worker);
     std::mem::swap(&mut app.field_focus, &mut p.field_focus);
     std::mem::swap(&mut app.control_input, &mut p.control_input);
+    std::mem::swap(&mut app.sync, &mut p.sync);
+    std::mem::swap(&mut app.status, &mut p.status);
+    std::mem::swap(&mut app.page_tree, &mut p.page_tree);
+}
+
+/// The open workspace follows the map the window drawing now shows.
+fn follow_workspace(app: &mut FigApp) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::map_mode() {
+        crate::workspaces::update_active(app);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = app;
 }
 
 /// Open a window (`window.new`) with open file `index` moved into it, the file at `path`, or a new
@@ -282,7 +306,11 @@ pub fn list(app: &FigApp) -> Value {
             json!({
                 "id": id,
                 "main": id == 0,
-                "title": title_of(shown),
+                "title": if crate::map_mode() {
+                    crate::window_tabs::window_title(app, shown.map(|d| d.uid)).unwrap_or_else(|| "Mindmap".to_string())
+                } else {
+                    title_of(shown)
+                },
                 "files": app.session.docs.iter().filter(mine).map(|d| d.doc.name.as_str()).collect::<Vec<_>>(),
                 "active": shown.map(|d| d.doc.name.as_str()),
                 "focused": id == app.windows.focused,
@@ -422,7 +450,11 @@ pub(crate) fn repaint_others(app: &FigApp, ctx: &Context) {
 /// Keep the other windows open (each draws itself when it needs to).
 pub(crate) fn show(app: &FigApp, ctx: &Context) {
     for w in &app.windows.list {
-        let title = title_of(app.session.docs.iter().find(|d| Some(d.uid) == w.active));
+        let title = if crate::map_mode() {
+            crate::window_tabs::window_title(app, w.active.filter(|_| !w.pane.ui.home)).unwrap_or_else(|| "Mindmap".to_string())
+        } else {
+            title_of(app.session.docs.iter().find(|d| Some(d.uid) == w.active))
+        };
         let mut b = ViewportBuilder::default().with_title(title).with_inner_size(w.size).with_min_inner_size([800.0, 500.0]).with_drag_and_drop(true);
         if let Some(p) = w.pos {
             b = b.with_position(p);
@@ -454,6 +486,7 @@ struct Entered {
 fn enter(app: &mut FigApp, id: u64) -> Option<Entered> {
     let k = app.windows.list.iter().position(|w| w.id == id)?;
     let main_active = app.session.ds().ok().map(|d| d.uid);
+    let main_home = app.ui.home;
     let newest = app.session.docs.iter().map(|d| d.uid).max().unwrap_or(0);
     let w = app.windows.list.get_mut(k)?;
     let want = w.active;
@@ -461,7 +494,9 @@ fn enter(app: &mut FigApp, id: u64) -> Option<Entered> {
     exchange(app, &mut pane);
     app.windows.current = id;
     app.windows.main_active = main_active;
+    app.windows.main_home = main_home;
     show_own(app, want);
+    follow_workspace(app);
     Some(Entered { id, pane, newest })
 }
 
@@ -487,6 +522,7 @@ fn leave(app: &mut FigApp, mut e: Entered, outer: Option<egui::Rect>, inner: Opt
     app.windows.current = 0;
     let main_active = app.windows.main_active.take();
     show_own(app, main_active);
+    follow_workspace(app);
 }
 
 /// Run `f` as window `id` (0: the main window) outside its frame, with its state swapped in as
@@ -509,7 +545,11 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let files_before = app.session.docs.len();
     let prefs = app.session.prefs.clone();
+    #[cfg(not(target_arch = "wasm32"))]
+    let (busy_before, main_before) = (app.ws.busy.clone(), (app.session.ds().ok().map(|d| d.uid), app.ui.home));
     let Some(e) = enter(app, id) else { return };
+    #[cfg(not(target_arch = "wasm32"))]
+    let (active_before, home_before) = (app.session.ds().ok().map(|d| d.uid), app.ui.home);
     if ctx.input(|i| i.viewport().focused == Some(true)) {
         app.windows.focused = id;
     }
@@ -517,6 +557,8 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
     app.logic(&ctx);
     // Within the swap, so a panic leaves every window its own state.
     guard(app, &ctx, |app| app.frame(ui));
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::window_tabs::after_window_frame(app, id, (busy_before.as_ref(), active_before, home_before), main_before);
     adopt(app, &e);
     settle(app, &ctx, files_before);
     if app.session.prefs != prefs {
@@ -524,4 +566,97 @@ fn draw(app: &mut FigApp, id: u64, ui: &mut egui::Ui) {
     }
     let (outer, inner) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect));
     leave(app, e, outer, inner);
+}
+
+/// Each window and the map it shows (`None`: the workspace browser, or no file), the main window
+/// first.
+pub fn shown_maps(app: &FigApp) -> Vec<(u64, Option<u64>)> {
+    let current = app.session.ds().ok().map(|d| d.uid).filter(|u| app.shows(*u) && !app.ui.home);
+    std::iter::once(0)
+        .chain(app.windows.list.iter().map(|w| w.id))
+        .map(|id| {
+            let shown = if id == app.windows.current {
+                current
+            } else if id == 0 {
+                app.windows.main_active.filter(|_| !app.windows.main_home)
+            } else {
+                app.windows.list.iter().find(|w| w.id == id).and_then(|w| w.active.filter(|_| !w.pane.ui.home))
+            };
+            (id, shown)
+        })
+        .collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The main window's file (from another window's frame: what it showed when that one began).
+pub(crate) fn main_active(app: &FigApp) -> Option<u64> {
+    if app.windows.current == 0 { app.session.ds().ok().map(|d| d.uid) } else { app.windows.main_active }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The main window shows the workspace browser.
+pub(crate) fn main_home(app: &FigApp) -> bool {
+    if app.windows.current == 0 { app.ui.home } else { app.windows.main_home }
+}
+
+/// Window `id` shows its map (`false`) or the workspace browser (`true`; map mode).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn set_home(app: &mut FigApp, id: u64, home: bool) {
+    if id == app.windows.current {
+        app.ui.home = home;
+    } else if let Some(w) = app.windows.list.iter_mut().find(|w| w.id == id) {
+        w.pane.ui.home = home;
+    }
+}
+
+/// macOS shows (or stopped showing) window `id`'s tab bar; `true` when that changed.
+pub(crate) fn set_native_tab_bar(app: &mut FigApp, id: u64, on: bool) -> bool {
+    let ui = if id == app.windows.current { Some(&mut app.ui) } else { app.windows.list.iter_mut().find(|w| w.id == id).map(|w| &mut w.pane.ui) };
+    match ui {
+        Some(ui) if ui.native_tab_bar != on => {
+            ui.native_tab_bar = on;
+            true
+        }
+        _ => false,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Window `id` (not the main one) shows open file `uid` from now on, in place of what it showed.
+pub(crate) fn give(app: &mut FigApp, uid: u64, id: u64) {
+    if id == 0 || !app.windows.exists(id) {
+        return;
+    }
+    for w in &mut app.windows.list {
+        w.docs.retain(|u| *u != uid);
+    }
+    if let Some(w) = app.windows.list.iter_mut().find(|w| w.id == id) {
+        w.docs.push(uid);
+        w.active = Some(uid);
+    }
+}
+
+/// A Sync job event from the node reaches every window's Sync (each takes its own job's).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn sync_event(app: &mut FigApp, ctx: &Context, address: &str, event: Value) {
+    let ids: Vec<u64> = app.windows.list.iter().map(|w| w.id).collect();
+    for id in ids {
+        if let Some(w) = app.windows.list.iter_mut().find(|w| w.id == id) {
+            std::mem::swap(&mut app.sync, &mut w.pane.sync);
+            crate::sync::node_event(app, ctx, address, event.clone());
+            if let Some(w) = app.windows.list.iter_mut().find(|w| w.id == id) {
+                std::mem::swap(&mut app.sync, &mut w.pane.sync);
+            }
+            ctx.request_repaint_of(viewport(id));
+        }
+    }
+    crate::sync::node_event(app, ctx, address, event);
+}
+
+/// The main window drew: what woke it (a reply, the node, a live edit) may be another window's, so
+/// the map windows look again soon (each draws only what changed for it).
+pub(crate) fn wake_others(app: &FigApp, ctx: &Context) {
+    for w in &app.windows.list {
+        ctx.request_repaint_after_for(std::time::Duration::from_millis(100), viewport(w.id));
+    }
 }

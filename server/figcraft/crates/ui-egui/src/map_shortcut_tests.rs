@@ -160,18 +160,24 @@ fn map_composer_typing_owns_shift_enter_and_enter_saves() {
 }
 
 #[test]
-fn shift_cmd_p_toggles_the_palette_and_cmd_p_shows_the_page_tree() {
+fn shift_cmd_p_toggles_the_actions_and_cmd_p_goes_to_a_page() {
     crate::with_map_mode(|| {
         let (mut u, _, _) = setup();
         press(&mut u, Key::P, cmd() | Modifiers::SHIFT);
-        assert!(u.app.ui.palette.is_some());
+        assert_eq!(u.app.ui.palette.as_deref(), Some(">"), "the same box, with > typed");
+        assert!(crate::map_palette::listing_actions(&u.app));
         assert!(!u.app.page_tree.open);
         press(&mut u, Key::P, cmd() | Modifiers::SHIFT);
         assert!(u.app.ui.palette.is_none(), "the same chord closes it");
-        u.app.ws.pane_open = false;
         press(&mut u, Key::P, cmd());
-        assert!(u.app.ws.pane_open, "the page tree is docked: Cmd+P shows the sidebar");
-        assert!(u.app.ui.palette.is_none());
+        assert_eq!(u.app.ui.palette.as_deref(), Some(""), "Cmd+P opens the box on the pages");
+        assert_eq!(crate::map_palette::scope(&u.app), Some(&crate::map_palette::Scope::Pages));
+        press(&mut u, Key::P, cmd() | Modifiers::SHIFT);
+        assert_eq!(u.app.ui.palette.as_deref(), Some(">"), "Shift+Cmd+P switches the open box to the actions");
+        press(&mut u, Key::P, cmd());
+        assert_eq!(u.app.ui.palette.as_deref(), Some(""), "and Cmd+P back to the pages");
+        press(&mut u, Key::P, cmd());
+        assert!(u.app.ui.palette.is_none(), "the same chord closes it");
     });
 }
 

@@ -189,6 +189,7 @@ pub mod variables_panel;
 pub mod vector_panel;
 pub mod versions;
 pub mod widgets;
+pub mod window_tabs;
 pub mod windows;
 pub mod workspaces;
 
@@ -269,6 +270,8 @@ mod live_share_tests;
 mod live_tests;
 #[cfg(test)]
 mod live_text_tests;
+#[cfg(test)]
+mod map_palette_tests;
 #[cfg(test)]
 mod map_shortcut_tests;
 #[cfg(test)]
@@ -355,6 +358,8 @@ mod vector_panel_tests;
 mod vector_tail_ui_tests;
 #[cfg(test)]
 mod web_clipboard_tests;
+#[cfg(test)]
+mod window_tabs_tests;
 #[cfg(test)]
 mod windows_qa_tests;
 #[cfg(test)]
@@ -513,7 +518,7 @@ impl UiState {
     /// The macOS traffic lights sit in the top band: keep it clear. Fullscreen hides them (and
     /// the toolbar that places them), so the map's header starts at the top there.
     pub fn mac_inset(&self) -> bool {
-        self.title_bar == TitleBar::Inset && !self.fullscreen
+        self.title_bar == TitleBar::Inset && !self.fullscreen && !self.native_tab_bar
     }
 }
 /// Where content may start right of the window buttons inside that band.
@@ -601,6 +606,8 @@ pub struct UiState {
     pub palette_tab: menus::PaletteTab,
     /// The palette row Up and Down are on (Enter runs it).
     pub palette_hi: usize,
+    /// Mindmap's palette: what it lists, and the lists ⌫ goes back to.
+    pub palette_box: map_palette::State,
     /// The palette ignores one outside click after opening (the click that opened it).
     pub palette_armed: bool,
     /// This frame's Actions toolbar button rect: presses on it toggle, never dismiss.
@@ -742,6 +749,11 @@ pub struct UiState {
     pub online: online::OnlineUi,
     /// The window was asked to close with unsaved changes: the question shows.
     pub confirm_close: bool,
+    /// macOS shows this window's native tab bar: AppKit draws a titled bar and the tabs above the
+    /// content, so the content keeps no traffic-light band ([`window_tabs`]).
+    pub native_tab_bar: bool,
+    /// ⌘T asked for a workspace: the next one chosen opens in a new window tab ([`window_tabs`]).
+    pub new_tab_armed: bool,
 }
 
 impl Default for UiState {
@@ -762,6 +774,7 @@ impl Default for UiState {
             palette: None,
             palette_tab: menus::PaletteTab::All,
             palette_hi: 0,
+            palette_box: map_palette::State::default(),
             palette_armed: false,
             actions_rect: None,
             variables: None,
@@ -841,6 +854,8 @@ impl Default for UiState {
             live: live::LiveUi::default(),
             online: online::OnlineUi::default(),
             confirm_close: false,
+            native_tab_bar: false,
+            new_tab_armed: false,
         }
     }
 }
@@ -873,6 +888,8 @@ pub struct FigApp {
     pub sync: sync::State,
     /// The bottom status bar (the worktree and Page tree).
     pub status: status_bar::State,
+    /// Projects open in windows of their own (macOS window tabs): Opens on their way.
+    pub window_tabs: window_tabs::State,
     /// The first-run onboarding flow.
     pub onboarding: onboarding::State,
     /// The Add machine modal.
@@ -939,6 +956,7 @@ impl FigApp {
             map_shell: map_shell::State::default(),
             sync: sync::State::default(),
             status: status_bar::State::default(),
+            window_tabs: window_tabs::State::default(),
             onboarding: onboarding::State::default(),
             machine_modal: machine_modal::State::default(),
             new_workspace: new_workspace::State::default(),
@@ -1618,6 +1636,7 @@ impl FigApp {
         if map_mode() {
             workspaces::update_active(self);
             workspaces::poll_node_events(self, &ctx);
+            window_tabs::poll(self, &ctx);
         }
         // Files that arrived without a command (joined, recovered) take the kept View toggles too.
         self.session.apply_view_prefs();
@@ -1634,6 +1653,9 @@ impl FigApp {
             windows::repaint_others(self, &ctx);
         }
         windows::show(self, &ctx);
+        if map_mode() {
+            windows::wake_others(self, &ctx);
+        }
         // Plugins installed, removed or set up are kept at once: a crash doesn't lose them.
         // So are the owner tokens of files put online.
         if std::mem::take(&mut self.session.plugins.unsaved) | std::mem::take(&mut self.session.live.unsaved) {
@@ -1658,6 +1680,7 @@ impl FigApp {
         if map_mode {
             map_shell::poll(self, &ctx);
             map_actions::begin(self, &ctx, typing);
+            window_tabs::frame(self);
         }
         // A dialog that closed acts first, in the window it was opened from.
         self.poll_dialog(&ctx);

@@ -46,13 +46,26 @@ fn app_window_and_help_menus_follow_the_design() {
             Entry::Native(Native::Quit),
         ]
     );
-    assert_eq!(menu("Window").entries, [Entry::Native(Native::Minimize), Entry::Native(Native::Zoom), Entry::Native(Native::BringAllToFront)]);
+    assert_eq!(
+        menu("Window").entries,
+        [
+            Entry::Native(Native::Minimize),
+            Entry::Native(Native::Zoom),
+            Entry::Separator,
+            Entry::Item { id: "map.previousWindowTab", label: "Show previous window tab" },
+            Entry::Item { id: "map.nextWindowTab", label: "Show next window tab" },
+            Entry::Separator,
+            Entry::Native(Native::BringAllToFront),
+        ]
+    );
+    assert_eq!(key_equivalent("map.nextWindowTab"), Some("Shift+Cmd+]"));
+    assert_eq!(key_equivalent("map.newWindowTab"), Some("Cmd+T"));
     assert_eq!(
         menu("Help").entries,
         [Entry::Item { id: "map.help", label: "Keyboard shortcuts" }, Entry::Item { id: DOCS, label: "Docs" }, Entry::Native(Native::About)]
     );
     let file: Vec<_> = items(&menu("File")).into_iter().map(|(_, label)| label).collect();
-    assert_eq!(file, ["Close tab", "Close map", "Sync…", "Save", "Export…"]);
+    assert_eq!(file, ["New window tab…", "Close tab", "Close map", "Sync…", "Save", "Export…"]);
 }
 
 #[test]
@@ -68,6 +81,9 @@ fn the_workspace_menu_lists_workspaces_then_switches_and_creates() {
             Entry::Item { id: "map.openWorkspace", label: "All workspaces…" },
             Entry::Item { id: "map.newWorkspace", label: "New workspace…" },
             Entry::Item { id: ADD_MACHINE, label: "Add machine…" },
+            Entry::Separator,
+            Entry::Item { id: "map.agents", label: "Agents…" },
+            Entry::Item { id: "map.newAgent", label: "New agent…" },
         ]
     );
     assert_eq!(key_equivalent("map.switchWorkspace"), Some("Ctrl+Cmd+O"));

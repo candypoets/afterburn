@@ -41,8 +41,13 @@ fn global_action(id: &str) -> bool {
             | "map.focusMode"
             | "map.workspacePane"
             | "map.pageTree"
+            | "map.goToPage"
+            | "map.newAgent"
             | "map.search"
             | "map.switchWorkspace"
+            | "map.newWindowTab"
+            | "map.nextWindowTab"
+            | "map.previousWindowTab"
     ) || crate::map_action_catalog::workspace_number(id).is_some()
 }
 
@@ -58,9 +63,17 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
         return true;
     }
     match id {
-        "map.actions" => crate::menus::toggle_palette(&mut app.ui),
+        "map.actions" => crate::map_palette::toggle_actions(app),
+        "map.goToPage" => crate::map_palette::toggle_pages(app),
+        "map.agents" => crate::map_palette::open(app, crate::map_palette::Scope::Agents),
+        "map.newAgent" => {
+            if let Ok(ds) = app.session.ds_mut() {
+                ds.view.ui_hidden = false;
+            }
+            app.compose.open_menu();
+        }
         "map.help" => app.ui.shortcuts_panel = !app.ui.shortcuts_panel,
-        "map.preferences" => app.ui.preferences = !app.ui.preferences,
+        "map.preferences" => crate::map_palette::toggle(app, crate::map_palette::Scope::Settings),
         "map.fullscreen" => {
             app.run("view.fullscreen", json!({}));
         }
@@ -73,6 +86,9 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
             crate::map_tabs::close_active(app);
         }
         "map.switchWorkspace" => crate::switcher::toggle(app),
+        "map.newWindowTab" => crate::window_tabs::request_new_tab(app),
+        "map.nextWindowTab" => crate::window_tabs::step(app, ctx, 1),
+        "map.previousWindowTab" => crate::window_tabs::step(app, ctx, -1),
         "map.delete" => {
             if let Some(said) = crate::map_delete::delete_selection(app) {
                 app.toast(said);
@@ -142,7 +158,6 @@ pub fn blocking_overlay(app: &FigApp, ctx: &Context) -> bool {
         || app.machine_modal.open
         || app.new_workspace.open
         || app.update.open
-        || app.status.switcher_open
         || app.compose.confirm.is_some()
         || crate::map_navigation::search_open(ctx)
         || egui::Popup::is_any_open(ctx)
@@ -157,7 +172,7 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
         if let Event::Key { key, physical_key, pressed: true, modifiers, repeat: false } = event
             && let Some(action) = lookup(crate::shortcuts::platform(), key, physical_key, modifiers)
             && global_action(action.id)
-            && (!overlay_open(app, ctx) || (action.id == "map.actions" && app.ui.palette.is_some()))
+            && (!overlay_open(app, ctx) || (app.ui.palette.is_some() && crate::map_palette::box_action(action.id)))
         {
             ctx.input_mut(|i| i.consume_key(modifiers, key));
             run(app, ctx, action.id);
@@ -207,7 +222,6 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
         || app.page_tree.renaming.take().is_some()
         || std::mem::take(&mut app.agents_modal.open)
         || std::mem::take(&mut app.page_tree.open)
-        || std::mem::take(&mut app.status.switcher_open)
         || app.ui.key_box.take().is_some()
     {
     } else if app.compose.editing.is_some() {

@@ -187,6 +187,8 @@ pub fn menus() -> Vec<Menu> {
             title: "File",
             role: Role::Plain,
             entries: vec![
+                titled("map.newWindowTab", "New window tab…"),
+                Sep,
                 titled("map.closeTab", "Close tab"),
                 titled("map.close", "Close map"),
                 Sep,
@@ -208,6 +210,9 @@ pub fn menus() -> Vec<Menu> {
                 titled("map.openWorkspace", "All workspaces…"),
                 titled("map.newWorkspace", "New workspace…"),
                 titled(ADD_MACHINE, "Add machine…"),
+                Sep,
+                titled("map.agents", "Agents…"),
+                titled("map.newAgent", "New agent…"),
             ],
         },
         Menu {
@@ -248,6 +253,7 @@ pub fn menus() -> Vec<Menu> {
                 action("map.nextRegion"),
                 action("map.previousRegion"),
                 action("map.contextMenu"),
+                titled("map.goToPage", "Go to page…"),
                 action("map.pageTree"),
                 action("map.previousPage"),
                 action("map.nextPage"),
@@ -264,7 +270,16 @@ pub fn menus() -> Vec<Menu> {
         Menu {
             title: "Window",
             role: Role::Window,
-            entries: vec![Entry::Native(Native::Minimize), Entry::Native(Native::Zoom), Entry::Native(Native::BringAllToFront)],
+            entries: vec![
+                Entry::Native(Native::Minimize),
+                Entry::Native(Native::Zoom),
+                Sep,
+                // The project windows' tabs (`window_tabs`), in the tab group's order.
+                titled("map.previousWindowTab", "Show previous window tab"),
+                titled("map.nextWindowTab", "Show next window tab"),
+                Sep,
+                Entry::Native(Native::BringAllToFront),
+            ],
         },
         Menu {
             title: "Help",

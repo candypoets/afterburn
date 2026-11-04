@@ -324,6 +324,15 @@ Every window: `[{id, main, title, files, active, focused}]` (`files` are its tab
 the one it shows, `focused` the window requests go to). `ui.inspect` reports it as `windows`, plus
 `window` (the window it ran in).
 
+### `window.openWorkspace {workspace, address?}`
+
+Map mode: open a workspace's map in a window of its own (a native window tab on macOS), as ⌘↵ in
+the workspace switcher does. `address` defaults to the machine in use (another machine's
+workspaces open from the switcher). A workspace already open is never joined twice: its window
+comes to the front (`{focused}`), or, when its window has switched to another map since, it gets a
+window of its own (`{window}`). Otherwise the node is asked for it (`{opening}`) and the map gets
+its window when it arrives; `window.list` shows it then.
+
 ### `window.focus {id}`
 
 Bring a window to the front; requests without `window` go to it from now on. The `window.focus`

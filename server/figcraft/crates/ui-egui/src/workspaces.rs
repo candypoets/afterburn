@@ -854,9 +854,6 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         detail(app, ui, &skin, detail_rect, band);
         ui.painter().line_segment([pos2(list.max.x, body.min.y), pos2(list.max.x, body.max.y)], Stroke::new(1.0, skin.border));
     });
-    // ⌃⌘O (or the palette) over the browser: the switcher hangs from its top left.
-    let anchor = Rect::from_min_size(ui.max_rect().min + vec2(10.0, band + 4.0), vec2(SIDEBAR - 20.0, 0.0));
-    crate::switcher::show(app, ui, anchor);
     // The New workspace modal first, so the Add machine modal it opens draws above it.
     crate::new_workspace::show(app, ui);
     crate::machine_modal::show(app, ui);
@@ -864,7 +861,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 
 /// The map's sidebar, laid out as Herdr's: it runs the window's full height. At the top, a row as
 /// tall as the header with the window buttons (macOS) and the toggle that hides it; then the open
-/// workspace (a click, or ⌃⌘O, opens the switcher under it), the page tree, and a footer with
+/// workspace (a click, or ⌃⌘O, opens the palette on the workspaces), the page tree, and a footer with
 /// Settings and Add machine. Clicking a workspace with a map there switches the map in place; the
 /// others open the browser for Init.
 pub fn pane(app: &mut FigApp, ui: &mut Ui) {
@@ -911,7 +908,7 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     section(ui, s, Rect::from_min_size(pos2(area.min.x, top.max.y), vec2(area.width(), SECTION_H)), "Workspace");
     let head = Rect::from_min_size(pos2(x, top.max.y + SECTION_H), vec2(w, SIDEBAR_ROW_H));
     let (name, tail) = head_lines(app);
-    if head_ui(ui, s, head, &name, &tail, app.status.switcher_open) {
+    if head_ui(ui, s, head, &name, &tail, crate::switcher::is_open(app)) {
         crate::switcher::toggle(app);
     }
 
@@ -927,7 +924,6 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
         None => {}
     }
 
-    crate::switcher::show(app, ui, head);
     crate::new_workspace::show(app, ui);
     crate::machine_modal::show(app, ui);
 }
@@ -1185,7 +1181,7 @@ pub fn poll_node_events(app: &mut FigApp, ctx: &egui::Context) {
                     app.compose.targets_at = -10.0;
                 }
             }
-            Some("job") => crate::sync::node_event(app, ctx, &address, event),
+            Some("job") => crate::windows::sync_event(app, ctx, &address, event),
             Some("session") => {
                 app.ws.queue_branch_reopen(&selected, &address, &event, active.as_ref());
                 if active.as_ref().is_some_and(|node| node.address == address && event["session"].as_str() == Some(node.session.as_str()))

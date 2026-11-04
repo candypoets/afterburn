@@ -269,7 +269,7 @@ pub fn maintain(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
-/// ⌘P (`map.pageTree`): the tree lives in the sidebar, so asking for it shows the sidebar.
+/// Page tree (`map.pageTree`): the tree lives in the sidebar, so asking for it shows the sidebar.
 pub fn show(app: &mut FigApp, _ctx: &egui::Context) {
     if std::mem::take(&mut app.page_tree.open) {
         app.page_tree.just_opened = false;

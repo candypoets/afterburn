@@ -29,6 +29,8 @@ mod linux_window;
 mod mac_chrome;
 #[cfg(target_os = "macos")]
 mod mac_menu;
+#[cfg(target_os = "macos")]
+mod mac_tabs;
 mod recovery;
 mod services;
 mod startup;
@@ -70,6 +72,9 @@ struct App {
     /// The map client's native menu bar (`None` outside map mode: winit's default bar stays).
     #[cfg(target_os = "macos")]
     menu: Option<mac_menu::MacMenu>,
+    /// The project windows' native tab group (map mode).
+    #[cfg(target_os = "macos")]
+    tabs: mac_tabs::MacTabs,
 }
 
 impl eframe::App for App {
@@ -87,6 +92,12 @@ impl eframe::App for App {
             apple_events::poll(&self.apple_events, fig, ctx);
             #[cfg(target_os = "macos")]
             if figcraft_ui_egui::map_mode() {
+                // Group the project windows as tabs first: a tabbed window keeps no toolbar.
+                let synced = self.tabs.sync(&figcraft_ui_egui::window_tabs::native_titles(fig));
+                figcraft_ui_egui::window_tabs::set_tab_bars(fig, ctx, &synced.tabbed);
+                if !synced.settled {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(150));
+                }
                 mac_chrome::unify_toolbars();
             }
             #[cfg(target_os = "macos")]
@@ -269,6 +280,9 @@ fn main() -> eframe::Result {
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
     graphics::configure(&mut options.wgpu_options);
     figcraft_ui_egui::windows::install(fig);
+    // ⇧⌘] / ⇧⌘[ follow the tab group's own order.
+    #[cfg(target_os = "macos")]
+    figcraft_ui_egui::window_tabs::set_native_step(mac_tabs::step);
     #[cfg(target_os = "linux")]
     let linux_display = linux_window::display_socket();
     // Registered before the event loop starts, so it catches the Finder event that launched the app
@@ -296,6 +310,8 @@ fn main() -> eframe::Result {
                 // After launch, so it replaces winit's default bar.
                 #[cfg(target_os = "macos")]
                 menu: figcraft_ui_egui::map_mode().then(|| mac_menu::MacMenu::install(&_cc.egui_ctx)),
+                #[cfg(target_os = "macos")]
+                tabs: mac_tabs::MacTabs::default(),
             }))
         }),
     );

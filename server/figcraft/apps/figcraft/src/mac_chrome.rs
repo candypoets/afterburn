@@ -25,7 +25,8 @@ pub fn unify_toolbars() {
             }
             continue;
         }
-        if window.toolbar().is_some() {
+        // A window showing its tab bar wears the native title bar (`mac_tabs`).
+        if window.toolbar().is_some() || window.tabGroup().is_some_and(|group| group.isTabBarVisible()) {
             continue;
         }
         let toolbar = NSToolbar::new(mtm);
