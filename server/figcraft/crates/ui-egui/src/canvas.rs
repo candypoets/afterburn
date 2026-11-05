@@ -89,6 +89,11 @@ struct MapDrag {
     base: Vec<NodeId>,
     toggle: bool,
     marquee: bool,
+    /// The cards a drag from a selected card moves: the selected cards that sit on the page
+    /// itself, so the move is the map's arrangement and never waits for Sync.
+    moving: Vec<NodeId>,
+    /// The move has begun (an engine gesture: one undo step, ⌘Z puts the cards back).
+    moved: bool,
 }
 
 /// What the canvas shows while an IME composition is in progress: the document with the
@@ -804,6 +809,14 @@ fn map_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response) -> bool {
                 selected.push(id);
             }
         }
+        let moving = app.session.ds().ok().map_or_else(Vec::new, |ds| {
+            let on_page = |id: &NodeId| ds.doc.node(*id).is_some_and(|node| node.parent == Some(ds.page) && !node.locked);
+            if target.is_some_and(|id| selected.contains(&id) && on_page(&id)) {
+                selected.iter().copied().filter(on_page).collect()
+            } else {
+                Vec::new()
+            }
+        });
         app.canvas.map_drag = app.session.ds().ok().map(|ds| MapDrag {
             document: ds.uid,
             page: ds.page,
@@ -811,12 +824,32 @@ fn map_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response) -> bool {
             base,
             toggle: mods.shift,
             marquee: target.is_none(),
+            moving,
+            moved: false,
         });
         app.canvas.dragging = app.canvas.map_drag.is_some();
         app.session.set_selection(selected);
     }
-    if let Some(drag) = app.canvas.map_drag.take() {
+    if let Some(mut drag) = app.canvas.map_drag.take() {
         let same_page = app.session.ds().is_ok_and(|ds| ds.uid == drag.document && ds.page == drag.page);
+        if same_page && primary && !drag.moving.is_empty() && (drag.moved || pos.distance(app.to_screen(drag.start.x, drag.start.y)) >= 3.0) {
+            if !drag.moved {
+                drag.moved = app.session.begin_interaction("Move").is_ok();
+            }
+            if drag.moved {
+                let (dx, dy) = ((point.x - drag.start.x).round(), (point.y - drag.start.y).round());
+                let ids = drag.moving.clone();
+                let _ = app.session.preview(|doc, _| {
+                    for id in &ids {
+                        if let Some(node) = doc.node_mut(*id) {
+                            node.transform = figcraft_geom::Affine::translate((dx, dy)) * node.transform;
+                        }
+                    }
+                    Ok(())
+                });
+                app.session.tool.overlay.cursor = figcraft_engine::tools::Cursor::Move;
+            }
+        }
         if same_page && drag.marquee && pos.distance(app.to_screen(drag.start.x, drag.start.y)) >= 3.0 {
             let bounds = figcraft_geom::Rect::from_points(drag.start, point);
             app.session.tool.overlay.marquee = Some([bounds.x0, bounds.y0, bounds.x1, bounds.y1]);
@@ -830,10 +863,14 @@ fn map_input(app: &mut FigApp, ui: &Ui, resp: &egui::Response) -> bool {
         } else {
             app.canvas.dragging = false;
             app.session.tool.overlay.marquee = None;
+            if drag.moved && app.session.ds().is_ok_and(|ds| ds.uid == drag.document) {
+                let _ = app.session.commit_interaction();
+            }
             // A click or marquee that leaves something selected hands the keyboard to the
             // composer, so the human can type about it at once; Esc gives it back. Keyboard
-            // selection (Tab, F8, search) never comes through here.
-            if same_page && !app.session.selection().is_empty() {
+            // selection (Tab, F8, search) never comes through here. A move keeps the keyboard on
+            // the map, so ⌘Z takes it back.
+            if same_page && !drag.moved && !app.session.selection().is_empty() {
                 app.compose.focus_input = true;
             }
         }

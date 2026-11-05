@@ -275,22 +275,66 @@ fn map_view(u: &mut Ui) {
     u.frame(vec![]);
 }
 
+fn x_of(u: &Ui, id: NodeId) -> f64 {
+    u.app.session.doc().unwrap().node(id).unwrap().transform.as_coeffs()[4]
+}
+
 #[test]
-fn map_pointer_drags_never_move_resize_duplicate_or_space_cards() {
+fn map_pointer_drag_moves_the_selected_cards_and_cmd_z_puts_them_back() {
     crate::with_map_mode(|| {
         let (mut u, a, b) = setup();
         map_view(&mut u);
         let before = serde_json::to_value(u.app.session.doc().unwrap()).unwrap();
-        // Text within a card, its resize corner, and Alt-drag all stay selection gestures.
-        for (x, y, modifiers) in [(70.0, 115.0, Modifiers::NONE), (250.0, 200.0, Modifiers::NONE), (70.0, 115.0, Modifiers::ALT)] {
+        // A press on the text inside a card, or on its corner, drags the whole card: no resize.
+        for (x, y) in [(70.0, 115.0), (249.0, 199.0)] {
             u.app.session.set_selection(vec![a]);
             u.frame(vec![]);
             let start = u.app.to_screen(x, y);
-            assert!(u.app.canvas.rect.contains(start));
-            drag(&mut u, start, start + egui::vec2(45.0, 25.0), modifiers);
-            assert_eq!(serde_json::to_value(u.app.session.doc().unwrap()).unwrap(), before);
+            drag(&mut u, start, start + egui::vec2(45.0, 25.0), Modifiers::NONE);
+            let n = u.app.session.doc().unwrap().node(a).unwrap().clone();
+            assert_eq!((n.transform.as_coeffs()[4], n.transform.as_coeffs()[5], n.width, n.height), (95.0, 125.0, 200.0, 100.0));
+            assert_eq!(u.app.session.selection(), vec![a]);
+            press(&mut u, Key::Z, cmd());
+            assert_eq!(serde_json::to_value(u.app.session.doc().unwrap()).unwrap(), before, "one ⌘Z undoes the whole drag");
         }
-        // The gap between two selected cards used to activate an invisible spacing handle.
+        press(&mut u, Key::Z, cmd() | Modifiers::SHIFT);
+        assert_eq!(x_of(&u, a), 95.0, "⇧⌘Z moves it again");
+        press(&mut u, Key::Z, cmd());
+
+        // Both selected cards move together; the other stays where it is when only one is.
+        u.app.session.set_selection(vec![a, b]);
+        u.frame(vec![]);
+        let start = u.app.to_screen(400.0, 150.0);
+        drag(&mut u, start, start + egui::vec2(-30.0, 0.0), Modifiers::NONE);
+        assert_eq!((x_of(&u, a), x_of(&u, b)), (20.0, 320.0));
+        press(&mut u, Key::Z, cmd());
+        assert_eq!(serde_json::to_value(u.app.session.doc().unwrap()).unwrap(), before);
+
+        // Esc during the drag puts the card back and records nothing.
+        u.app.session.set_selection(vec![a]);
+        u.frame(vec![]);
+        let depth = u.app.session.undo_depth();
+        let start = u.app.to_screen(150.0, 160.0);
+        pointer(&mut u, start, true, Modifiers::NONE);
+        u.frame(vec![Event::PointerMoved(start + egui::vec2(60.0, 0.0))]);
+        assert_eq!(x_of(&u, a), 110.0, "the card follows the pointer");
+        press(&mut u, Key::Escape, Modifiers::NONE);
+        pointer(&mut u, start + egui::vec2(60.0, 0.0), false, Modifiers::NONE);
+        assert_eq!(serde_json::to_value(u.app.session.doc().unwrap()).unwrap(), before);
+        assert_eq!(u.app.session.undo_depth(), depth);
+
+        // A box inside a card, a locked card and the gap between cards never move.
+        let text = u.app.session.doc().unwrap().node(a).unwrap().children[0];
+        u.app.session.set_selection(vec![text]);
+        u.frame(vec![]);
+        let start = u.app.to_screen(70.0, 115.0);
+        drag(&mut u, start, start + egui::vec2(45.0, 25.0), Modifiers::NONE);
+        u.app.session.doc_mut().unwrap().node_mut(b).unwrap().locked = true;
+        let before = serde_json::to_value(u.app.session.doc().unwrap()).unwrap();
+        u.app.session.set_selection(vec![b]);
+        u.frame(vec![]);
+        let start = u.app.to_screen(450.0, 150.0);
+        drag(&mut u, start, start + egui::vec2(45.0, 25.0), Modifiers::NONE);
         u.app.session.set_selection(vec![a, b]);
         u.frame(vec![]);
         let gap = u.app.to_screen(300.0, 150.0);
