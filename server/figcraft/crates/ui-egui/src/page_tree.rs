@@ -21,11 +21,77 @@ pub const PARENT_KEY: &str = "mindmap.parent_page";
 /// Pages nest at most this deep (the root counts as the first level).
 pub const MAX_LEVELS: usize = 5;
 pub const SOURCE_KEY: &str = "mindmap.source_node";
+/// A page's mode: `exploration` for a new idea not built yet; absent (or anything else) for a page
+/// that describes the code as it is, the state of the art.
+pub const MODE_KEY: &str = "mindmap.page_mode";
+/// The [`MODE_KEY`] value of an exploration page.
+pub const EXPLORATION: &str = "exploration";
+
+/// What a page's icon in the tree says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// The page describes the code as it is.
+    Current,
+    /// A new idea, not built yet.
+    Exploration,
+    /// A Sync is building it now.
+    Building,
+}
+
+impl Mode {
+    fn icon(self) -> crate::icons::Icon {
+        match self {
+            Mode::Current => crate::icons::Icon::PageCurrent,
+            Mode::Exploration => crate::icons::Icon::PageExplore,
+            Mode::Building => crate::icons::Icon::PageBuild,
+        }
+    }
+
+    /// The icon's ink: blue for the state of the art, violet for an exploration, the accent
+    /// while building (lighter on the dark skin).
+    fn ink(self, s: &Skin, dark: bool) -> Color32 {
+        match (self, dark) {
+            (Mode::Current, false) => Color32::from_rgb(0x41, 0x6F, 0x91),
+            (Mode::Current, true) => Color32::from_rgb(0x8F, 0xB4, 0xD1),
+            (Mode::Exploration, false) => Color32::from_rgb(0x6B, 0x4F, 0xA0),
+            (Mode::Exploration, true) => Color32::from_rgb(0xB3, 0x9D, 0xDB),
+            (Mode::Building, _) => s.accent,
+        }
+    }
+}
+
+/// Whether `page` is an exploration (see [`MODE_KEY`]).
+pub fn is_exploration(doc: &Document, page: NodeId) -> bool {
+    doc.node(page).and_then(|n| n.plugin_data.get(MODE_KEY)).is_some_and(|mode| mode.trim() == EXPLORATION)
+}
+
+/// The pages a running Sync covers (see `sync::State::building`): `scope` and its subpages, or
+/// every page.
+pub fn building_pages(doc: &Document, scope: Option<Option<u64>>) -> HashSet<NodeId> {
+    match scope {
+        None => HashSet::new(),
+        Some(None) => doc.pages.iter().copied().collect(),
+        Some(Some(page)) => descendants(doc, NodeId(page)).into_iter().chain([NodeId(page)]).collect(),
+    }
+}
+
+/// `page`'s mode: building while a Sync covers it, else what the page says it is.
+pub fn mode(doc: &Document, page: NodeId, building: &HashSet<NodeId>) -> Mode {
+    if building.contains(&page) {
+        Mode::Building
+    } else if is_exploration(doc, page) {
+        Mode::Exploration
+    } else {
+        Mode::Current
+    }
+}
 
 /// One row of the docked tree, and its pitch.
 const ROW_H: f32 = 30.0;
 /// Each level sits this much further in.
 const INDENT: f32 = 16.0;
+/// The mode icon before each name.
+const ICON: f32 = 14.0;
 
 /// The tree's state plus the orphan-cleanup clock.
 #[derive(Default)]
@@ -301,6 +367,7 @@ struct Line {
     level: usize,
     name: String,
     kids: usize,
+    mode: Mode,
     folded: bool,
 }
 
@@ -321,6 +388,7 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
     let current_fill = if tokens.dark { s.selected } else { Color32::from_rgb(0xEF, 0xEE, 0xEA) };
     let (lines, total) = match app.session.doc() {
         Ok(doc) => {
+            let building = building_pages(doc, app.sync.building());
             let lines: Vec<Line> = rows(doc, &app.page_tree.collapsed)
                 .into_iter()
                 .map(|(page, level)| Line {
@@ -328,6 +396,7 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
                     level,
                     name: page_name(doc, page),
                     kids: children(doc, page).len(),
+                    mode: mode(doc, page, &building),
                     folded: app.page_tree.collapsed.contains(&page),
                 })
                 .collect();
@@ -362,7 +431,7 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
             ui.spacing_mut().item_spacing.y = 0.0;
             for line in &lines {
                 let editing = renaming.as_mut().filter(|(page, _)| *page == line.page).map(|(_, text)| text);
-                let (a, rect, end) = row(ui, &s, line, current == Some(line.page), current_fill, editing, &mut select_name);
+                let (a, rect, end) = row(ui, &s, tokens.dark, line, current == Some(line.page), current_fill, editing, &mut select_name);
                 if let Some(a) = a {
                     ask = Some(a);
                 }
@@ -401,13 +470,14 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
     }
 }
 
-/// One page: the fold chevron for a page with children, its name indented by level, and its child
-/// count at the right (× to delete while hovered). The open page wears the selected fill. A row
+/// One page: the fold chevron for a page with children, then its mode icon and name indented by
+/// level, and the depth cap at the right on a page at the last level (× to delete while hovered). The open page wears the selected fill. A row
 /// being renamed (`editing`: the text so far) shows a field ringed in the accent instead of its
 /// name, and says how the rename ended. Returns what was asked, the row's rect and that end.
 fn row(
     ui: &mut Ui,
     s: &Skin,
+    dark: bool,
     line: &Line,
     is_current: bool,
     current_fill: Color32,
@@ -437,6 +507,10 @@ fn row(
         let ink = if fold.hovered() { s.text } else { s.muted };
         chevron(ui, pos2(x - 11.0, rect.center().y), !line.folded, ink);
     }
+    // The mode icon where the name used to start; the name follows it.
+    let icon = Rect::from_center_size(pos2(x + 4.0, rect.center().y), vec2(ICON, ICON));
+    crate::icons::paint(ui.painter(), icon, line.mode.icon(), line.mode.ink(s, dark));
+    let x = x + ICON;
     let room = (rect.max.x - 34.0 - x).max(30.0);
     let mut end = None;
     let is_editing = editing.is_some();
@@ -449,15 +523,13 @@ fn row(
         let name = crate::widgets::elide_font(ui, &line.name, room, regular(13.0));
         ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, name, regular(13.0), s.text);
     }
-    // The right column: how many children, or the depth cap on a page at the last level.
+    // The right column: the depth cap on a page at the last level.
     let trail = pos2(rect.max.x - 14.0, rect.center().y);
     if is_editing {
         // The field covers the right column.
     } else if hot {
         let ink = if delete.hovered() { s.danger } else { s.faint };
         ui.painter().text(trail, Align2::CENTER_CENTER, "×", regular(12.0), ink);
-    } else if line.kids > 0 {
-        ui.painter().text(trail, Align2::CENTER_CENTER, line.kids.to_string(), FontId::monospace(9.0), s.faint);
     } else if line.level + 1 >= MAX_LEVELS {
         ui.painter().text(trail, Align2::CENTER_CENTER, format!("L{}", line.level + 1), FontId::monospace(9.0), s.faint);
     }
@@ -525,6 +597,28 @@ mod tests {
         assert_eq!(listed, [(overview, 0), (canvas, 1), (paint, 2), (components, 1), (checkout, 0)]);
         let folded = rows(&doc, &HashSet::from([canvas]));
         assert_eq!(folded, [(overview, 0), (canvas, 1), (components, 1), (checkout, 0)]);
+    }
+
+    #[test]
+    fn a_page_is_the_state_of_the_art_unless_marked_exploration_or_being_built() {
+        let mut doc = Document::new("Map");
+        let overview = doc.pages[0];
+        let canvas = sub(&mut doc, overview, "Canvas and layers");
+        let paint = sub(&mut doc, canvas, "Paint");
+        let checkout = doc.add_page("Checkout");
+        doc.node_mut(checkout).unwrap().plugin_data.insert(MODE_KEY.into(), EXPLORATION.into());
+        let none = building_pages(&doc, None);
+        assert_eq!(mode(&doc, overview, &none), Mode::Current);
+        assert_eq!(mode(&doc, checkout, &none), Mode::Exploration);
+        // A page Sync builds the page and its subpages, and nothing else.
+        let canvas_sync = building_pages(&doc, Some(Some(canvas.0)));
+        assert_eq!(mode(&doc, canvas, &canvas_sync), Mode::Building);
+        assert_eq!(mode(&doc, paint, &canvas_sync), Mode::Building);
+        assert_eq!(mode(&doc, overview, &canvas_sync), Mode::Current);
+        assert_eq!(mode(&doc, checkout, &canvas_sync), Mode::Exploration);
+        // An all-pages Sync builds every page.
+        let all = building_pages(&doc, Some(None));
+        assert!([overview, canvas, paint, checkout].iter().all(|page| mode(&doc, *page, &all) == Mode::Building));
     }
 
     #[test]

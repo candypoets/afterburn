@@ -63,6 +63,11 @@ icons! {
     Cut,
     Boolean,
     Page,
+    /// A page's mode in the page tree: state of the art (a seal with a check), exploration (a
+    /// flask), and a page a Sync is building (a hammer).
+    PageCurrent,
+    PageExplore,
+    PageBuild,
     Check,
     Close,
     /// Window buttons: minimise, maximise, restore.
@@ -614,6 +619,29 @@ fn draw(p: &P, icon: Icon) {
         Page => {
             p.poly(&[(3.5, 2.5), (9.5, 2.5), (12.5, 5.5), (12.5, 13.5), (3.5, 13.5)], true);
             p.poly(&[(9.5, 2.5), (9.5, 5.5), (12.5, 5.5)], false);
+        }
+        PageCurrent => {
+            // A seal: a circle with eight soft bumps, a check inside.
+            let seal: Vec<(f32, f32)> = (0..64)
+                .map(|i| {
+                    let a = i as f32 / 64.0 * TAU;
+                    let r = 5.7 + 0.7 * (8.0 * a).cos();
+                    (8.0 + r * a.cos(), 8.0 + r * a.sin())
+                })
+                .collect();
+            p.path(&seal, true);
+            p.path(&[(5.4, 8.2), (7.2, 10.0), (10.6, 6.4)], false);
+        }
+        PageExplore => {
+            // A flask: a neck with a lip, a wide body, a liquid line.
+            p.line(5.0, 2.5, 11.0, 2.5);
+            p.path(&[(6.5, 2.5), (6.5, 6.5), (2.9, 12.6), (3.6, 13.5), (12.4, 13.5), (13.1, 12.6), (9.5, 6.5), (9.5, 2.5)], false);
+            p.line(4.8, 10.5, 11.2, 10.5);
+        }
+        PageBuild => {
+            // A hammer: a head across the handle's end.
+            p.path(&[(8.2, 2.1), (13.9, 7.8), (11.8, 9.9), (6.1, 4.2)], true);
+            p.path(&[(2.6, 13.4), (8.9, 7.1)], false);
         }
         Check => p.poly(&[(3.0, 8.5), (6.5, 12.0), (13.0, 4.5)], false),
         Close => {

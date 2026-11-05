@@ -56,6 +56,9 @@ const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
 const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
 const ACCENT_HOVER: Color32 = Color32::from_rgb(0xC2, 0x55, 0x3E);
 const MAP_INK: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
+/// The pale accent behind a comment saved on several cards, and the `N SELECTED` chip.
+const ACCENT_TINT: Color32 = Color32::from_rgb(0xFA, 0xE9, 0xE4);
+const ACCENT_TINT_HOVER: Color32 = Color32::from_rgb(0xF5, 0xDC, 0xD5);
 const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
 /// The draft open in the field, and that field: a blue that leaves the warm accents alone.
 const EDIT: Color32 = Color32::from_rgb(0x2F, 0x6F, 0xDB);
@@ -89,6 +92,8 @@ pub struct Draft {
     pub node_id: Option<NodeId>,
     /// The page it belongs to.
     pub page_id: Option<NodeId>,
+    /// One comment saved on several cards at once: its drafts share this id and show as one chip.
+    pub group: Option<u64>,
 }
 
 /// One choice in the target chip: an agent already in the workspace, or a CLI to start.
@@ -176,6 +181,8 @@ pub struct State {
     notice: Option<String>,
     /// The whole page's drafts are shown one by one instead of as one `Whole page` chip.
     page_open: bool,
+    /// The last group id given to a comment saved on several cards.
+    last_group: u64,
 }
 
 /// The send confirmation for a busy recipient; it reads the pane's status live while open.
@@ -239,10 +246,10 @@ impl State {
     /// Save the field's text into the draft being edited, then go back to a new comment.
     fn save_edited(&mut self) {
         let Some(index) = self.editing.take() else { return };
-        if let Some(draft) = self.drafts.get_mut(index) {
-            let text = self.input.trim();
-            if !text.is_empty() {
-                draft.text = text.to_string();
+        let text = self.input.trim().to_string();
+        if !text.is_empty() {
+            for member in self.group_of(index) {
+                self.drafts[member].text = text.clone();
             }
         }
         self.input.clear();
@@ -255,6 +262,20 @@ impl State {
         }
         if self.editing.is_some() {
             self.save_edited();
+        } else if names.cards.len() > 1 {
+            // Several cards selected: the same comment on each, kept together as one group.
+            self.last_group += 1;
+            for (id, name) in names.cards {
+                self.drafts.push(Draft {
+                    text: self.input.trim().to_string(),
+                    node: name.clone(),
+                    page: names.page.map(str::to_owned),
+                    node_id: Some(*id),
+                    page_id: names.page_id,
+                    group: Some(self.last_group),
+                });
+            }
+            self.input.clear();
         } else {
             self.drafts.push(Draft {
                 text: self.input.trim().to_string(),
@@ -262,6 +283,7 @@ impl State {
                 page: names.page.map(str::to_owned),
                 node_id: names.node_id,
                 page_id: names.page_id,
+                group: None,
             });
             self.input.clear();
         }
@@ -392,16 +414,26 @@ impl State {
         }
     }
 
-    /// Remove one draft, keeping [`editing`](Self::editing) on the draft it was on.
-    fn remove_draft(&mut self, index: usize) {
-        if index >= self.drafts.len() {
-            return;
+    /// The drafts saved together with `drafts[index]` (itself included), in order.
+    fn group_of(&self, index: usize) -> Vec<usize> {
+        let Some(draft) = self.drafts.get(index) else { return Vec::new() };
+        match draft.group {
+            Some(group) => (0..self.drafts.len()).filter(|at| self.drafts[*at].group == Some(group)).collect(),
+            None => vec![index],
         }
-        self.drafts.remove(index);
+    }
+
+    /// Remove one draft (and the drafts saved with it), keeping [`editing`](Self::editing) on the
+    /// draft it was on.
+    fn remove_draft(&mut self, index: usize) {
+        let members = self.group_of(index);
+        for &member in members.iter().rev() {
+            self.drafts.remove(member);
+        }
         match self.editing {
-            Some(active) if active == index => self.stop_editing(),
-            Some(active) if active > index => self.editing = Some(active - 1),
-            _ => {}
+            Some(active) if members.contains(&active) => self.stop_editing(),
+            Some(active) => self.editing = Some(active - members.iter().filter(|member| **member < active).count()),
+            None => {}
         }
     }
 }
@@ -431,18 +463,22 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let node = node_id.and_then(|id| node_name(app, id));
     let page_name = page.and_then(|id| node_name(app, id));
     let has_selection = !selection.is_empty();
-    // What a send from here carries: the drafts in the card's subtree, or on the whole page.
+    // Several cards selected: one comment goes on each of them.
+    let cards: Vec<(NodeId, Option<String>)> =
+        if selection.len() > 1 { selection.iter().map(|id| (*id, node_name(app, *id))).collect() } else { Vec::new() };
+    // What a send from here carries: the drafts in the cards' subtrees, or on the whole page.
     let included = included_drafts(app, &selection, page);
     let comments = included.len();
     let plural = if comments == 1 { "" } else { "s" };
     let context = match (node.as_deref(), page_name.as_deref()) {
+        _ if cards.len() > 1 => many_cards_context(cards.len()),
         (Some(node), _) => format!("COMMENTING ON · {node} · {comments} comment{plural} in the tree"),
         (None, Some(page)) => format!("COMMENTING ON · {page} · whole page · {comments} comment{plural}"),
         _ => "COMMENTING ON".to_string(),
     };
     let active = app.active_workspace.is_some() && app.session.live().status == figcraft_engine::live::Status::Live;
     if app.session.ds().is_ok_and(|ds| ds.view.comments) {
-        draft_glow(app, ctx, page);
+        draft_marks(app, ctx, page, &selection);
     }
     // The sidebar takes the left edge; the composer belongs to the canvas column.
     // Use this frame's allocated canvas column, including both sidebars. A toggle can change
@@ -468,7 +504,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                 }
                 ui.set_width((width - 32.0).max(40.0));
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let names = Names { node: node.as_deref(), page: page_name.as_deref(), node_id, page_id: page };
+                let names = Names { node: node.as_deref(), page: page_name.as_deref(), node_id, page_id: page, cards: &cards };
                 let out = body(ui, &mut app.compose, &context, &names, has_selection, active, &included, comments);
                 send = out.send;
                 clear = out.clear;
@@ -505,7 +541,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     // one gets the confirmation first, and a gone one keeps the text in the field.
     let has_content = !app.compose.input.trim().is_empty() || !included.is_empty();
     if send && has_content && !app.compose.busy {
-        let scope = send_scope(!app.compose.input.trim().is_empty(), included.len(), node.as_deref().or(page_name.as_deref()));
+        let many = (cards.len() > 1).then(|| format!("{} cards", cards.len()));
+        let scope = send_scope(!app.compose.input.trim().is_empty(), included.len(), many.as_deref().or(node.as_deref()).or(page_name.as_deref()));
         if app.compose.request_send(scope) {
             start_send(app, ctx);
         }
@@ -531,6 +568,13 @@ struct Names<'a> {
     page: Option<&'a str>,
     node_id: Option<NodeId>,
     page_id: Option<NodeId>,
+    /// Every selected card and its name when there are several; empty for one card or none.
+    cards: &'a [(NodeId, Option<String>)],
+}
+
+/// The context line with several cards selected: `COMMENTING ON · 3 cards · one comment for all`.
+fn many_cards_context(count: usize) -> String {
+    format!("COMMENTING ON · {count} cards · one comment for all")
 }
 
 /// What the human asked of the bar this frame.
@@ -561,7 +605,7 @@ fn body(
     }
     let editing = state.editing.and_then(|index| state.drafts.get(index).map(|draft| (index, draft)));
     let context_line = match editing {
-        Some((index, draft)) => editing_context(draft, included, index),
+        Some((index, draft)) => editing_context(draft, included, index, state.group_of(index).len()),
         None => context.to_string(),
     };
     // The context line is the accent in every state, as the design draws it.
@@ -573,7 +617,8 @@ fn body(
                 if text_action(ui, "×  clear selection", "Comment on the whole page") {
                     out.clear = true;
                 }
-                if text_action(ui, "+ Page", "New page from this card") {
+                // A page comes from one card; with several selected it has no single source.
+                if names.cards.len() < 2 && text_action(ui, "+ Page", "New page from this card") {
                     state.page_from_card = true;
                 }
             });
@@ -628,7 +673,13 @@ fn body(
     }
 
     // The field spans the bar; the recipient chip and Send sit on the row under it, at the right.
-    let placeholder = if names.node.is_some() { "Comment on this card and its children…" } else { "Comment on the whole page…" };
+    let placeholder = if names.cards.len() > 1 {
+        "One comment for every selected card…"
+    } else if names.node.is_some() {
+        "Comment on this card and its children…"
+    } else {
+        "Comment on the whole page…"
+    };
     let input_w = ui.available_width().max(90.0);
     // Grow with the prompt, up to eight rows; the full text stays reachable by scrolling.
     let per_line = ((input_w - 20.0) / 6.5).max(12.0);
@@ -732,7 +783,11 @@ fn body(
     } else {
         // Esc hands the keys back to the canvas while the field has them.
         let esc = if input_focused { "esc back to the canvas   ·   " } else { "" };
-        format!("{esc}⏎ save   ·   ⇧⏎ new line   ·   ⌘⏎ send all   ·   {comments} in the tree")
+        if names.cards.len() > 1 {
+            format!("{esc}⏎ save   ·   ⌘⏎ send   ·   attaches to every selected card")
+        } else {
+            format!("{esc}⏎ save   ·   ⇧⏎ new line   ·   ⌘⏎ send all   ·   {comments} in the tree")
+        }
     };
     ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
     out.send = send;
@@ -749,9 +804,11 @@ fn text_action(ui: &mut Ui, label: &str, tip: &str) -> bool {
     resp.on_hover_text(tip).clicked()
 }
 
-/// The context line while a draft is open in the field: `EDITING DRAFT · on Card · 1 of 2`.
-fn editing_context(draft: &Draft, included: &[usize], index: usize) -> String {
+/// The context line while a draft is open in the field: `EDITING DRAFT · on Card · 1 of 2`. A
+/// comment saved on several cards (`cards` > 1) reads `on 3 cards`.
+fn editing_context(draft: &Draft, included: &[usize], index: usize, cards: usize) -> String {
     let on = match (draft.node.as_deref(), draft.page.as_deref()) {
+        _ if cards > 1 => format!("on {cards} cards"),
         (Some(node), _) => format!("on {node}"),
         (None, Some(page)) => format!("on {page}"),
         _ => "on the page".to_string(),
@@ -761,39 +818,73 @@ fn editing_context(draft: &Draft, included: &[usize], index: usize) -> String {
     format!("EDITING DRAFT  ·  {on}  ·  {position} of {total}")
 }
 
-/// Cards waiting with a draft comment glow blue on the canvas until a send carries them away
-/// ("before: cards glow; after: no glow, sent once").
-fn draft_glow(app: &FigApp, ctx: &egui::Context, page: Option<NodeId>) {
+/// Cards waiting with a draft comment carry an accent pin with their count at the top-right
+/// corner, and glow blue while unselected, until a send carries them away ("send → a pin on each
+/// card"). Several selected cards get an `N SELECTED` chip under them.
+fn draft_marks(app: &FigApp, ctx: &egui::Context, page: Option<NodeId>, selection: &[NodeId]) {
     let Ok(doc) = app.session.doc() else { return };
-    let mut cards: Vec<NodeId> = app.compose.drafts.iter().filter(|draft| draft.page_id == page).filter_map(|draft| draft.node_id).collect();
-    cards.sort_by_key(|id| id.0);
-    cards.dedup();
-    if cards.is_empty() {
+    let mut counts: Vec<(NodeId, usize)> = Vec::new();
+    for id in app.compose.drafts.iter().filter(|draft| draft.page_id == page).filter_map(|draft| draft.node_id) {
+        match counts.iter_mut().find(|(card, _)| *card == id) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((id, 1)),
+        }
+    }
+    if counts.is_empty() && selection.len() < 2 {
         return;
     }
     let zoom = app.session.ds().map(|ds| ds.view.zoom).unwrap_or(1.0) as f32;
     let clip = app.canvas.rect;
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::new("map_draft_glow"))).with_clip_rect(clip);
     let radius = (8.0 * zoom).clamp(0.0, 40.0) as u8;
-    for id in cards {
-        let Some(bounds) = doc.world_bounds(id) else { continue };
-        let min = app.to_screen(bounds.x0, bounds.y0);
-        let max = app.to_screen(bounds.x1, bounds.y1);
-        let rect = Rect::from_min_max(min, max);
-        if !rect.is_finite() || !rect.intersects(clip) {
+    let screen = |id: NodeId| {
+        let bounds = doc.world_bounds(id)?;
+        let rect = Rect::from_min_max(app.to_screen(bounds.x0, bounds.y0), app.to_screen(bounds.x1, bounds.y1));
+        rect.is_finite().then_some(rect)
+    };
+    for &(id, count) in &counts {
+        let Some(rect) = screen(id) else { continue };
+        if !rect.intersects(clip) {
             continue;
         }
-        // A soft blue halo, then the card's pale blue edge.
-        for (grow, alpha) in [(6.0, 14u8), (4.0, 26), (2.5, 40), (1.0, 60)] {
-            painter.rect_stroke(
-                rect.expand(grow),
-                CornerRadius::same(radius.saturating_add(grow as u8)),
-                Stroke::new(2.0, Color32::from_rgba_unmultiplied(0x2F, 0x6F, 0xDB, alpha)),
-                StrokeKind::Outside,
-            );
+        // An unselected card keeps the soft blue halo and pale blue edge; a selected one already
+        // wears the selection's outline.
+        if !selection.contains(&id) {
+            for (grow, alpha) in [(6.0, 14u8), (4.0, 26), (2.5, 40), (1.0, 60)] {
+                painter.rect_stroke(
+                    rect.expand(grow),
+                    CornerRadius::same(radius.saturating_add(grow as u8)),
+                    Stroke::new(2.0, Color32::from_rgba_unmultiplied(0x2F, 0x6F, 0xDB, alpha)),
+                    StrokeKind::Outside,
+                );
+            }
+            painter.rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_rgb(0xA9, 0xC2, 0xEE)), StrokeKind::Inside);
         }
-        painter.rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_rgb(0xA9, 0xC2, 0xEE)), StrokeKind::Inside);
+        let center = pin_center(rect);
+        painter.circle_filled(center, PIN_R, ACCENT);
+        painter.text(center, Align2::CENTER_CENTER, count.min(99).to_string(), mono(9.0), Color32::WHITE);
     }
+    if selection.len() > 1 {
+        let union = selection.iter().filter_map(|id| screen(*id)).reduce(|a, b| a.union(b));
+        if let Some(union) = union {
+            let label = format!("{} SELECTED", selection.len());
+            let width = painter.layout_no_wrap(label.clone(), mono(7.5), ACCENT).size().x + 20.0;
+            let chip = Rect::from_min_size(pos2(union.min.x, union.max.y + 4.0), vec2(width.max(72.0), 18.0));
+            painter.rect_filled(chip, CornerRadius::same(9), ACCENT_TINT);
+            painter.text(pos2(chip.min.x + 10.0, chip.center().y), Align2::LEFT_CENTER, label, mono(7.5), ACCENT);
+        }
+    }
+}
+
+/// The draft pin's radius on screen: an 18 px disc.
+const PIN_R: f32 = 9.0;
+
+/// Where a card's draft pin sits: inside its top-right corner, as the design draws it; on a card
+/// too small for the inset, at the corner itself.
+fn pin_center(card: Rect) -> Pos2 {
+    let inset_x = 22.0_f32.min(card.width() / 2.0);
+    let inset_y = 20.0_f32.min(card.height() / 2.0);
+    pos2(card.max.x - inset_x, card.min.y + inset_y)
 }
 
 /// The draft chips above the input: the first few, each editable and removable, then `+N`. On the
@@ -808,15 +899,17 @@ fn draft_strip(ui: &mut Ui, state: &mut State, included: &[usize], whole_page: b
     let mut action = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-        let visible = included.len().min(VISIBLE_DRAFTS);
-        for &index in included.iter().take(visible) {
+        let chips = strip_chips(&state.drafts, included);
+        let visible = chips.len().min(VISIBLE_DRAFTS);
+        for &index in chips.iter().take(visible) {
             let Some(draft) = state.drafts.get(index) else { continue };
-            let label = draft.text.replace('\n', " ");
-            if let Some(clicked) = draft_chip(ui, index, &label, state.editing == Some(index)) {
+            let cards = state.group_of(index).len();
+            let label = if cards > 1 { same_comment_label(cards) } else { draft.text.replace('\n', " ") };
+            if let Some(clicked) = draft_chip(ui, index, &label, state.editing == Some(index), cards > 1) {
                 action = Some(clicked);
             }
         }
-        let hidden = included.len().saturating_sub(visible);
+        let hidden = chips.len().saturating_sub(visible);
         if hidden > 0 {
             ui.label(egui::RichText::new(format!("+{hidden}")).font(mono(9.0)).color(MUTED));
         }
@@ -826,6 +919,25 @@ fn draft_strip(ui: &mut Ui, state: &mut State, included: &[usize], whole_page: b
         Some(DraftAction::Remove(index)) => state.remove_draft(index),
         None => {}
     }
+}
+
+/// The chips the strip shows for `included`: one per draft, except that drafts saved together on
+/// several cards show once, at the first of them.
+fn strip_chips(drafts: &[Draft], included: &[usize]) -> Vec<usize> {
+    let mut seen = HashSet::new();
+    included
+        .iter()
+        .copied()
+        .filter(|index| match drafts.get(*index).and_then(|draft| draft.group) {
+            Some(group) => seen.insert(group),
+            None => true,
+        })
+        .collect()
+}
+
+/// A comment saved on several cards, as its chip reads: `Same comment · 3 cards`.
+fn same_comment_label(cards: usize) -> String {
+    format!("Same comment · {cards} cards")
 }
 
 /// `Whole page · 3 comments`: the page's drafts folded into one chip; a click opens them.
@@ -876,7 +988,8 @@ enum DraftAction {
 }
 
 /// One draft chip: clicking its label opens the draft for editing; the × at its right removes it.
-fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool) -> Option<DraftAction> {
+/// A comment on several cards (`many`) wears the accent tint.
+fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool, many: bool) -> Option<DraftAction> {
     let shown = widgets::elide_font(ui, text, 200.0, regular(10.5));
     let width = text_width(ui, &shown, regular(10.5)) + 33.0;
     let (rect, _) = ui.allocate_exact_size(vec2(width, 20.0), Sense::hover());
@@ -889,18 +1002,27 @@ fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool) -> Option<Dra
     a11y::button(&close, &format!("Remove draft: {text}"));
     let close = close.on_hover_text("Remove");
     let hot = body.hovered() || close.hovered();
-    let fill = if active {
-        EDIT_FILL
-    } else if hot {
-        Color32::from_rgb(0xF1, 0xF0, 0xED)
-    } else {
-        SOFT
+    let fill = match (active, many, hot) {
+        (true, _, _) => EDIT_FILL,
+        (false, true, false) => ACCENT_TINT,
+        (false, true, true) => ACCENT_TINT_HOVER,
+        (false, false, true) => Color32::from_rgb(0xF1, 0xF0, 0xED),
+        (false, false, false) => SOFT,
     };
     // A pill: 20 pt tall, fully rounded.
     ui.painter().rect_filled(rect, CornerRadius::same(10), fill);
-    let border = if active { EDIT } else { BORDER };
+    let border = match (active, many) {
+        (true, _) => EDIT,
+        (false, true) => ACCENT_TINT,
+        (false, false) => BORDER,
+    };
     ui.painter().rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, border), StrokeKind::Inside);
-    ui.painter().text(pos2(rect.min.x + 9.0, rect.center().y), Align2::LEFT_CENTER, &shown, regular(10.5), if active { EDIT } else { INK });
+    let ink = match (active, many) {
+        (true, _) => EDIT,
+        (false, true) => ACCENT,
+        (false, false) => INK,
+    };
+    ui.painter().text(pos2(rect.min.x + 9.0, rect.center().y), Align2::LEFT_CENTER, &shown, regular(10.5), ink);
     let x_color = if close.hovered() { ACCENT } else { FAINT };
     ui.painter().text(pos2(rect.max.x - 9.0, rect.center().y), Align2::RIGHT_CENTER, "×", regular(10.5), x_color);
     if close.clicked() {
@@ -1332,22 +1454,21 @@ pub fn readiness(status: &str) -> Readiness {
     }
 }
 
-/// The drafts a send from this selection would carry: the subtree for a card, the page for no
-/// selection. Detached drafts on other cards and pages stay behind.
+/// The drafts a send from this selection would carry: the subtree of every selected card, the
+/// page for no selection. Detached drafts on other cards and pages stay behind.
 fn included_drafts(app: &FigApp, selection: &[NodeId], page: Option<NodeId>) -> Vec<usize> {
     let Ok(doc) = app.session.doc() else { return Vec::new() };
-    let root = selection.first().copied();
     let mut ids = HashSet::new();
-    if let Some(root) = root {
-        collect_subtree(doc, root, &mut ids);
+    for root in selection {
+        collect_subtree(doc, *root, &mut ids);
     }
     app.compose
         .drafts
         .iter()
         .enumerate()
-        .filter(|(_, draft)| match root {
-            Some(_) => draft.node_id.is_some_and(|id| ids.contains(&id)),
-            None => draft.page_id.is_some() && draft.page_id == page,
+        .filter(|(_, draft)| match selection.is_empty() {
+            false => draft.node_id.is_some_and(|id| ids.contains(&id)),
+            true => draft.page_id.is_some() && draft.page_id == page,
         })
         .map(|(index, _)| index)
         .collect()
@@ -1362,6 +1483,23 @@ fn collect_subtree(doc: &Document, id: NodeId, out: &mut HashSet<NodeId>) {
             collect_subtree(doc, *child, out);
         }
     }
+}
+
+/// The `comments` a send carries: one entry per draft, so a comment saved on several cards
+/// reaches the agent once on each card.
+fn comment_payload(drafts: &[Draft]) -> Vec<Value> {
+    drafts
+        .iter()
+        .map(|draft| {
+            json!({
+                "text": draft.text,
+                "node": draft.node,
+                "page": draft.page,
+                "node_id": draft.node_id.map(|id| id.0),
+                "page_id": draft.page_id.map(|id| id.0),
+            })
+        })
+        .collect()
 }
 
 /// Selected cards a prompt names at most; the context packet stays short.
@@ -1394,18 +1532,7 @@ fn start_send(app: &mut FigApp, ctx: &egui::Context) {
     if prompt.is_empty() && sending.is_empty() {
         return;
     }
-    let comments: Vec<Value> = sending
-        .iter()
-        .map(|draft| {
-            json!({
-                "text": draft.text,
-                "node": draft.node,
-                "page": draft.page,
-                "node_id": draft.node_id.map(|id| id.0),
-                "page_id": draft.page_id.map(|id| id.0),
-            })
-        })
-        .collect();
+    let comments = comment_payload(&sending);
     let page_id = app.session.page().ok().map(|id| id.0);
     // The prompt is about the selected cards: name them, as each draft names its own.
     let selected: Vec<u64> = selection.iter().take(MAX_SELECTED).map(|id| id.0).collect();
@@ -1585,6 +1712,10 @@ mod tests {
         time: f64,
         /// Nothing selected: the bar comments on the whole page.
         whole_page: bool,
+        /// Several selected cards, each with its name; empty for one card.
+        cards: Vec<(NodeId, Option<String>)>,
+        /// The context line the bar is given.
+        context: String,
     }
 
     impl Bar {
@@ -1598,10 +1729,19 @@ mod tests {
                     page: Some("Page".to_string()),
                     node_id: None,
                     page_id: None,
+                    group: None,
                 });
             }
             let included = (0..state.drafts.len()).collect();
-            let mut bar = Self { ctx: egui::Context::default(), state, included, time: 0.0, whole_page: false };
+            let mut bar = Self {
+                ctx: egui::Context::default(),
+                state,
+                included,
+                time: 0.0,
+                whole_page: false,
+                cards: Vec::new(),
+                context: "COMMENTING ON · Card · 0 comments".to_string(),
+            };
             bar.frame(vec![]);
             bar
         }
@@ -1618,12 +1758,19 @@ mod tests {
             let state = &mut self.state;
             let included = &self.included;
             let selected = !self.whole_page;
+            let cards = &self.cards;
+            let context = &self.context;
             let mut send = false;
             let mut out = self.ctx.run_ui(input, |ui| {
                 ui.set_width(760.0);
-                let names =
-                    Names { node: selected.then_some("Card"), page: Some("Page"), node_id: selected.then_some(NodeId(42)), page_id: Some(NodeId(7)) };
-                send = body(ui, state, "COMMENTING ON · Card · 0 comments", &names, selected, true, included, 0).send;
+                let names = Names {
+                    node: selected.then_some("Card"),
+                    page: Some("Page"),
+                    node_id: selected.then_some(NodeId(42)),
+                    page_id: Some(NodeId(7)),
+                    cards,
+                };
+                send = body(ui, state, context, &names, selected, true, included, 0).send;
             });
             out.textures_delta.clear();
             (send, flat(&out.shapes))
@@ -1790,11 +1937,99 @@ mod tests {
             (None, other, "Other page comment"),
         ] {
             app.compose.input = text.into();
-            app.compose.save_comment(&Names { node: None, page: None, node_id, page_id: Some(page_id) });
+            app.compose.save_comment(&Names { node: None, page: None, node_id, page_id: Some(page_id), cards: &[] });
         }
         assert_eq!(included_drafts(&app, &[card], Some(page)), [0, 1]);
         assert_eq!(included_drafts(&app, &[], Some(page)), [0, 1, 2, 3]);
         assert_eq!(included_drafts(&app, &[], Some(other)), [4]);
+    }
+
+    /// A bar with three cards selected and their one comment typed in the field.
+    fn three_cards() -> Bar {
+        let mut bar = Bar::new(&[]);
+        bar.cards = [(1, "Canvas and layers"), (2, "Components"), (3, "Sync")].map(|(id, name)| (NodeId(id), Some(name.to_string()))).to_vec();
+        bar.context = many_cards_context(3);
+        bar.state.input = "Same empty state, fix it once.".into();
+        bar.ctx.memory_mut(|m| m.request_focus(input_id()));
+        bar
+    }
+
+    #[test]
+    fn several_selected_cards_share_one_comment_shown_as_one_chip() {
+        let mut bar = three_cards();
+        let (_, shapes) = bar.frame(vec![]);
+        assert!(has_text(&shapes, "COMMENTING ON · 3 cards · one comment for all"));
+        assert!(has_text(&shapes, "esc back to the canvas   ·   ⏎ save   ·   ⌘⏎ send   ·   attaches to every selected card"));
+
+        assert!(!bar.key(Key::Enter, Modifiers::NONE), "saving never asks for a send");
+        assert_eq!(bar.state.drafts.len(), 3, "one draft per selected card");
+        assert!(bar.state.input.is_empty());
+        let group = bar.state.drafts[0].group;
+        assert!(group.is_some());
+        for (draft, (id, name)) in bar.state.drafts.iter().zip([(1, "Canvas and layers"), (2, "Components"), (3, "Sync")]) {
+            assert_eq!(draft.text, "Same empty state, fix it once.");
+            assert_eq!(draft.node_id, Some(NodeId(id)));
+            assert_eq!(draft.node.as_deref(), Some(name));
+            assert_eq!(draft.page_id, Some(NodeId(7)));
+            assert_eq!(draft.group, group, "saved together, kept together");
+        }
+
+        bar.included = vec![0, 1, 2];
+        let (_, shapes) = bar.frame(vec![]);
+        assert!(has_text(&shapes, "Same comment · 3 cards"), "the three drafts show as one chip");
+        assert!(!has_text(&shapes, "Same empty state, fix it once."), "the shared text is not repeated per card");
+        assert_eq!(strip_chips(&bar.state.drafts, &bar.included), [0]);
+
+        // Editing the chip edits every card's copy.
+        bar.click_chip(0);
+        assert_eq!(bar.state.editing, Some(0));
+        bar.state.input = "Fix the empty state once, for all three.".into();
+        bar.key(Key::Enter, Modifiers::NONE);
+        assert!(bar.state.drafts.iter().all(|draft| draft.text == "Fix the empty state once, for all three."));
+
+        // Its × removes all of them, and only them.
+        bar.state.drafts.push(Draft { text: "Alone".into(), node: None, page: None, node_id: None, page_id: None, group: None });
+        bar.included = vec![0, 1, 2, 3];
+        bar.frame(vec![]);
+        bar.click_remove(0);
+        assert_eq!(bar.state.drafts.len(), 1);
+        assert_eq!(bar.state.drafts[0].text, "Alone");
+    }
+
+    #[test]
+    fn sending_with_several_cards_selected_carries_the_comment_on_each() {
+        let mut app = FigApp::new(figcraft_engine::Session::new(), Box::new(crate::NoServices));
+        app.session.execute("file.new", &json!({})).unwrap();
+        let page = app.session.page().unwrap();
+        let cards: Vec<NodeId> = ["Canvas and layers", "Components", "Sync", "Agents"]
+            .iter()
+            .map(|name| NodeId(app.session.execute("frame.create", &json!({"name":name})).unwrap()["id"].as_u64().unwrap()))
+            .collect();
+        let selected: Vec<(NodeId, Option<String>)> = cards[..3].iter().map(|id| (*id, node_name(&app, *id))).collect();
+        app.compose.input = "Same empty state, fix it once.".into();
+        app.compose.save_comment(&Names { node: None, page: Some("Page"), node_id: Some(cards[0]), page_id: Some(page), cards: &selected });
+        app.compose.input = "Not this one".into();
+        app.compose.save_comment(&Names { node: None, page: Some("Page"), node_id: Some(cards[3]), page_id: Some(page), cards: &[] });
+
+        let included = included_drafts(&app, &cards[..3], Some(page));
+        assert_eq!(included, [0, 1, 2], "the drafts on every selected card travel, not just the first");
+        let sending: Vec<Draft> = included.iter().map(|index| app.compose.drafts[*index].clone()).collect();
+        let payload = comment_payload(&sending);
+        assert_eq!(payload.len(), 3, "one comment per card");
+        for (comment, id) in payload.iter().zip(&cards[..3]) {
+            assert_eq!(comment["text"], "Same empty state, fix it once.");
+            assert_eq!(comment["node_id"], id.0);
+            assert_eq!(comment["page_id"], page.0);
+        }
+        assert_eq!(payload[1]["node"], "Components");
+    }
+
+    #[test]
+    fn the_draft_pin_sits_inside_the_top_right_corner() {
+        let card = Rect::from_min_size(pos2(40.0, 105.0), vec2(260.0, 108.0));
+        assert_eq!(pin_center(card), pos2(278.0, 125.0));
+        let tiny = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 10.0));
+        assert_eq!(pin_center(tiny), pos2(5.0, 5.0));
     }
 
     #[test]

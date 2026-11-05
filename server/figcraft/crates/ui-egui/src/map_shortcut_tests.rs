@@ -77,6 +77,7 @@ fn map_escape_closes_one_overlay_before_clearing_selection_and_keeps_drafts() {
             page: None,
             node_id: None,
             page_id: u.app.session.page().ok(),
+            group: None,
         });
         u.app.ui.shortcuts_panel = true;
         press(&mut u, Key::Escape, Modifiers::NONE);

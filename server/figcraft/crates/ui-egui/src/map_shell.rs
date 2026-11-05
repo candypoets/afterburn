@@ -280,7 +280,7 @@ mod tests {
     }
 
     fn draft(text: &str) -> crate::compose::Draft {
-        crate::compose::Draft { text: text.into(), node: None, page: None, node_id: None, page_id: None }
+        crate::compose::Draft { text: text.into(), node: None, page: None, node_id: None, page_id: None, group: None }
     }
 
     #[test]

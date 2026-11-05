@@ -784,6 +784,9 @@ pub struct State {
     all_pages: bool,
     /// The page the diff was read for (`None` when it covers every page).
     page: Option<u64>,
+    /// What the Sync this widget started covers: `Some(page)` for a page and its subpages,
+    /// `Some(None)` for every page; `None` before the first one.
+    job_scope: Option<Option<u64>>,
     /// A cancel of an open record is on its thread.
     cancelling: bool,
     cancel_rx: Option<Receiver<Result<(), String>>>,
@@ -800,6 +803,13 @@ impl State {
     /// Whether a job is in flight (the button says `Syncing…`).
     fn in_flight(&self) -> bool {
         self.job.as_ref().is_some_and(Job::in_flight)
+    }
+
+    /// The pages a Sync from this widget is building right now: `Some(page)` for a page and its
+    /// subpages, `Some(None)` for every page; `None` while no Sync runs.
+    pub fn building(&self) -> Option<Option<u64>> {
+        let syncing = self.starting || self.job.as_ref().is_some_and(|job| job.in_flight() && !job.is_record());
+        if syncing { self.job_scope } else { None }
     }
 
     /// Whether the action button must stay disabled.
@@ -2127,6 +2137,7 @@ fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, _snapsho
     app.sync.starting = true;
     app.sync.error = None;
     app.sync.applied = app.sync.included(&rows);
+    app.sync.job_scope = Some(page);
     let address = node.address;
     let context = ctx.clone();
     let spawned = std::thread::Builder::new().name("figcraft-sync-start".into()).spawn(move || {
