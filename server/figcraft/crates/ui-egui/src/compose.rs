@@ -169,6 +169,9 @@ pub struct State {
     menu: agent_menu::MenuState,
     /// The agent each page last used or picked, by page.
     page_agents: HashMap<NodeId, Target>,
+    /// The agent each page was last sent a prompt to (its `target` line): while that agent is
+    /// working, the page tree shows it designing the page.
+    pub(crate) prompted: HashMap<NodeId, String>,
     /// The agent last used or picked on any page: a page with no history starts on it.
     last_used: Option<Target>,
     /// The page the chosen agent belongs to; another page selects its own agent again.
@@ -342,6 +345,22 @@ impl State {
         self.remember(self.agent_page, target.clone());
         self.target = Some(target);
         self.notice = None;
+    }
+
+    /// A prompt about `page` went to `agent` (the node's reply), sent as `sent`: a new CLI's pane
+    /// once the node names it.
+    pub(crate) fn prompted_on(&mut self, page: NodeId, sent: &Target, agent: Option<&Value>) {
+        let pane = agent.and_then(|agent| agent.get("pane")).and_then(Value::as_str).map(str::trim).filter(|pane| !pane.is_empty());
+        let line = pane.map_or_else(|| sent.line(), |pane| format!("pane:{pane}"));
+        self.prompted.insert(page, line);
+    }
+
+    /// The agent designing `page` now: the one last prompted about it, while it is working. Its
+    /// kind as the tree names it (`Claude`).
+    pub(crate) fn designing(&self, page: NodeId) -> Option<String> {
+        let line = self.prompted.get(&page)?;
+        let info = self.targets.iter().find(|info| &info.target.line() == line)?;
+        (readiness(&info.status) == Readiness::Working).then(|| agent_menu::kind_title(info.target.kind()))
     }
 
     /// `target` was used or picked on `page`.
@@ -1600,6 +1619,9 @@ fn poll_send(app: &mut FigApp) {
     let sent_to = app.compose.sent_to.take();
     match received {
         Ok(reply) if reply.ok => {
+            if let Some((Some(page), sent)) = &sent_to {
+                app.compose.prompted_on(*page, sent, reply.agent.as_ref());
+            }
             if let (Some((page, sent)), Some(agent)) = (sent_to, reply.agent.as_ref()) {
                 app.compose.started(page, &sent, agent);
             }
@@ -2141,6 +2163,23 @@ mod tests {
         assert_eq!(refresh_target(None, &gone), None, "only an empty choice takes the page's default");
         let state = State { targets: gone, ..State::default() };
         assert_eq!(pane(&state.page_default(None)).as_deref(), Some("pane:w1:p1"));
+    }
+
+    #[test]
+    fn a_page_is_being_designed_while_the_agent_it_was_sent_to_works() {
+        let mut state = State { targets: vec![agent("w1:p5", "claude", "working", None)], ..State::default() };
+        let page = NodeId(7);
+        assert_eq!(state.designing(page), None, "never prompted");
+        let sent = state.targets[0].target.clone();
+        state.prompted_on(page, &sent, None);
+        assert_eq!(state.designing(page).as_deref(), Some("Claude"));
+        state.targets = vec![agent("w1:p5", "claude", "idle", None)];
+        assert_eq!(state.designing(page), None, "done designing");
+        // A new CLI's prompt follows the pane the node started for it.
+        let other = NodeId(8);
+        state.prompted_on(other, &Target::New { kind: "codex".into() }, Some(&json!({"pane": "w1:p9", "kind": "codex"})));
+        state.targets.push(agent("w1:p9", "codex", "working", None));
+        assert_eq!(state.designing(other).as_deref(), Some("Codex"));
     }
 
     #[test]

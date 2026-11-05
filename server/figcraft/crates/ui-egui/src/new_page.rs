@@ -371,6 +371,9 @@ fn poll(app: &mut FigApp) {
             // The agent marks the page's mode; the tree says when it makes it an exploration.
             if let Some(page) = app.new_page.page_id {
                 crate::page_tree::watch_new(app, figcraft_doc::NodeId(page));
+                if let Some(target) = app.compose.target.clone() {
+                    app.compose.prompted_on(figcraft_doc::NodeId(page), &target, reply.agent.as_ref());
+                }
             }
         }
         Ok(reply) => {

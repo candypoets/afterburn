@@ -64,10 +64,11 @@ icons! {
     Boolean,
     Page,
     /// A page's mode in the page tree: state of the art (a seal with a check), exploration (a
-    /// flask), and a page a Sync is building (a hammer).
+    /// flask).
     PageCurrent,
     PageExplore,
-    PageBuild,
+    /// A paint brush: an agent designing a page.
+    Brush,
     Check,
     Close,
     /// Window buttons: minimise, maximise, restore.
@@ -638,10 +639,11 @@ fn draw(p: &P, icon: Icon) {
             p.path(&[(6.5, 2.5), (6.5, 6.5), (2.9, 12.6), (3.6, 13.5), (12.4, 13.5), (13.1, 12.6), (9.5, 6.5), (9.5, 2.5)], false);
             p.line(4.8, 10.5, 11.2, 10.5);
         }
-        PageBuild => {
-            // A hammer: a head across the handle's end.
-            p.path(&[(8.2, 2.1), (13.9, 7.8), (11.8, 9.9), (6.1, 4.2)], true);
-            p.path(&[(2.6, 13.4), (8.9, 7.1)], false);
+        Brush => {
+            // A paint brush: a handle, its ferrule, and a loaded tip sweeping down-left.
+            p.path(&[(13.5, 2.5), (10.3, 5.7)], false);
+            p.path(&[(10.3, 4.9), (11.1, 5.7), (8.4, 8.4), (7.6, 7.6)], true);
+            p.fill(&[(7.6, 7.6), (8.4, 8.4), (8.0, 10.6), (5.8, 12.4), (2.5, 13.5), (3.6, 10.2), (5.4, 8.0)]);
         }
         Check => p.poly(&[(3.0, 8.5), (6.5, 12.0), (13.0, 4.5)], false),
         Close => {

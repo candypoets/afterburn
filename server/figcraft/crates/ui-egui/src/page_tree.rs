@@ -64,7 +64,7 @@ fn note_new_explorations(app: &mut FigApp, now: f64) {
         true
     });
     if let Some(name) = marked.pop() {
-        let ink = Mode::Exploration.ink(&Skin::of(&Tokens::light()), true);
+        let ink = Mode::Exploration.ink(true);
         app.toast_with(
             format!("New page · {name} · the agent marked it Exploration"),
             crate::ToastMark { icon: crate::icons::Icon::PageExplore, ink, action: None },
@@ -89,7 +89,7 @@ pub fn built(app: &mut FigApp, scope: Option<u64>) {
         [one] => format!("Built · {one} is now the state of the art"),
         many => format!("Built · {} pages are now the state of the art", many.len()),
     };
-    let ink = Mode::Current.ink(&Skin::of(&Tokens::light()), true);
+    let ink = Mode::Current.ink(true);
     app.toast_with(msg, crate::ToastMark { icon: crate::icons::Icon::PageCurrent, ink, action: Some(crate::ToastAction::OpenSync) });
 }
 
@@ -100,8 +100,6 @@ pub enum Mode {
     Current,
     /// A new idea, not built yet.
     Exploration,
-    /// A Sync is building it now.
-    Building,
 }
 
 impl Mode {
@@ -109,21 +107,43 @@ impl Mode {
         match self {
             Mode::Current => crate::icons::Icon::PageCurrent,
             Mode::Exploration => crate::icons::Icon::PageExplore,
-            Mode::Building => crate::icons::Icon::PageBuild,
         }
     }
 
-    /// The icon's ink: blue for the state of the art, violet for an exploration, the accent
-    /// while building (lighter on the dark skin).
-    fn ink(self, s: &Skin, dark: bool) -> Color32 {
-        match (self, dark) {
+    /// The icon's ink: blue for the state of the art, violet for an exploration (lighter on the
+    /// dark skin and on toasts).
+    fn ink(self, light: bool) -> Color32 {
+        match (self, light) {
             (Mode::Current, false) => Color32::from_rgb(0x41, 0x6F, 0x91),
             (Mode::Current, true) => Color32::from_rgb(0x8F, 0xB4, 0xD1),
             (Mode::Exploration, false) => Color32::from_rgb(0x6B, 0x4F, 0xA0),
             (Mode::Exploration, true) => Color32::from_rgb(0xB3, 0x9D, 0xDB),
-            (Mode::Building, _) => s.accent,
         }
     }
+}
+
+/// What is happening to a page now, at the right of its row; its mode icon stays.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Activity {
+    /// A Sync covers it: a CD burning.
+    Burning,
+    /// An agent (`Claude`) is designing it: a brush in a turning arc.
+    Designing(String),
+}
+
+impl Activity {
+    fn tip(&self, page: &str) -> String {
+        match self {
+            Activity::Burning => format!("Burning {page} into code"),
+            Activity::Designing(agent) => format!("{agent} is designing {page}"),
+        }
+    }
+}
+
+/// `page`'s activity: burning while a Sync covers it, else designing while `designing` names
+/// the agent at work on it.
+pub fn activity(page: NodeId, building: &HashSet<NodeId>, designing: Option<String>) -> Option<Activity> {
+    if building.contains(&page) { Some(Activity::Burning) } else { designing.map(Activity::Designing) }
 }
 
 /// Whether `page` is an exploration (see [`MODE_KEY`]).
@@ -141,15 +161,9 @@ pub fn building_pages(doc: &Document, scope: Option<Option<u64>>) -> HashSet<Nod
     }
 }
 
-/// `page`'s mode: building while a Sync covers it, else what the page says it is.
-pub fn mode(doc: &Document, page: NodeId, building: &HashSet<NodeId>) -> Mode {
-    if building.contains(&page) {
-        Mode::Building
-    } else if is_exploration(doc, page) {
-        Mode::Exploration
-    } else {
-        Mode::Current
-    }
+/// `page`'s mode: what the page says it is.
+pub fn mode(doc: &Document, page: NodeId) -> Mode {
+    if is_exploration(doc, page) { Mode::Exploration } else { Mode::Current }
 }
 
 /// One row of the docked tree, and its pitch.
@@ -158,6 +172,13 @@ const ROW_H: f32 = 30.0;
 const INDENT: f32 = 16.0;
 /// The mode icon before each name.
 const ICON: f32 = 14.0;
+/// The activity mark at the right of a busy page's row, and how far × moves in beside it.
+const ACTIVITY: f32 = 18.0;
+const ACTIVITY_GAP: f32 = 24.0;
+/// The burning disc's blank and burned parts, and its rim; the designing arc's turns per second.
+const DISC: Color32 = Color32::from_rgb(0xEC, 0xE9, 0xE4);
+const DISC_RIM: Color32 = Color32::from_rgb(0xC9, 0xC4, 0xBC);
+const BURNED_SHARE: f32 = 0.62;
 
 /// The tree's state plus the orphan-cleanup clock.
 #[derive(Default)]
@@ -441,6 +462,7 @@ struct Line {
     name: String,
     kids: usize,
     mode: Mode,
+    activity: Option<Activity>,
     folded: bool,
 }
 
@@ -471,7 +493,8 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
                     level,
                     name: page_name(doc, page),
                     kids: children(doc, page).len(),
-                    mode: mode(doc, page, &building),
+                    mode: mode(doc, page),
+                    activity: activity(page, &building, app.compose.designing(page)),
                     folded: app.page_tree.collapsed.contains(&page),
                 })
                 .collect();
@@ -568,8 +591,11 @@ fn row(
         let r = Rect::from_center_size(pos2(x - 11.0, rect.center().y), vec2(16.0, ROW_H));
         ui.interact(r, Id::new(("page_tree_fold", line.page.0)), Sense::click())
     });
+    // A busy page keeps its activity at the right; × moves in beside it.
+    let busy = line.activity.is_some();
+    let delete_x = rect.max.x - 14.0 - if busy { ACTIVITY_GAP } else { 0.0 };
     let delete = ui.interact(
-        Rect::from_center_size(pos2(rect.max.x - 14.0, rect.center().y), vec2(20.0, ROW_H - 6.0)),
+        Rect::from_center_size(pos2(delete_x, rect.center().y), vec2(20.0, ROW_H - 6.0)),
         Id::new(("page_tree_delete", line.page.0)),
         Sense::click(),
     );
@@ -585,9 +611,9 @@ fn row(
     }
     // The mode icon where the name used to start; the name follows it.
     let icon = Rect::from_center_size(pos2(x + 4.0, rect.center().y), vec2(ICON, ICON));
-    crate::icons::paint(ui.painter(), icon, line.mode.icon(), line.mode.ink(s, dark));
+    crate::icons::paint(ui.painter(), icon, line.mode.icon(), line.mode.ink(dark));
     let x = x + ICON;
-    let room = (rect.max.x - 34.0 - x).max(30.0);
+    let room = (rect.max.x - 34.0 - if busy { ACTIVITY_GAP } else { 0.0 } - x).max(30.0);
     let mut end = None;
     let is_editing = editing.is_some();
     if let Some(text) = editing {
@@ -601,11 +627,18 @@ fn row(
     }
     // The right column: the depth cap on a page at the last level.
     let trail = pos2(rect.max.x - 14.0, rect.center().y);
+    if let (false, Some(activity)) = (is_editing, &line.activity) {
+        let at = Rect::from_center_size(trail, vec2(ACTIVITY, ACTIVITY));
+        paint_activity(ui, s, dark, at, activity);
+        ui.interact(at, Id::new(("page_tree_activity", line.page.0)), Sense::hover()).on_hover_text(activity.tip(&line.name));
+    }
     if is_editing {
         // The field covers the right column.
     } else if hot {
         let ink = if delete.hovered() { s.danger } else { s.faint };
-        ui.painter().text(trail, Align2::CENTER_CENTER, "×", regular(12.0), ink);
+        ui.painter().text(pos2(delete_x, rect.center().y), Align2::CENTER_CENTER, "×", regular(12.0), ink);
+    } else if busy {
+        // The activity holds the right column.
     } else if line.level + 1 >= MAX_LEVELS {
         ui.painter().text(trail, Align2::CENTER_CENTER, format!("L{}", line.level + 1), FontId::monospace(9.0), s.faint);
     }
@@ -650,6 +683,54 @@ fn row(
     (ask, outer, end)
 }
 
+/// A busy page's mark in `at`: a CD burning (its burned part turning, like a disc in a drive), or
+/// an agent's brush in a turning arc. Both move, so the tree repaints while one shows.
+fn paint_activity(ui: &Ui, s: &Skin, dark: bool, at: Rect, activity: &Activity) {
+    let t = ui.input(|i| i.time) as f32;
+    let painter = ui.painter();
+    let c = at.center();
+    let r = at.width() / 2.0;
+    match activity {
+        Activity::Burning => {
+            let (blank, rim) = if dark { (s.soft, s.faint) } else { (DISC, DISC_RIM) };
+            annulus(painter, c, r - 0.5, r * 0.26, 0.0, std::f32::consts::TAU, blank);
+            let start = -std::f32::consts::FRAC_PI_2 + t * std::f32::consts::PI * 0.6;
+            annulus(painter, c, r - 0.5, r * 0.26, start, start + BURNED_SHARE * std::f32::consts::TAU, s.accent);
+            painter.circle_stroke(c, r - 0.5, Stroke::new(0.75, rim));
+            painter.circle_stroke(c, r * 0.28, Stroke::new(0.75, rim));
+        }
+        Activity::Designing(_) => {
+            let ink = s.map_ink;
+            let start = t * std::f32::consts::TAU * 0.8;
+            let arc: Vec<egui::Pos2> = (0..=16)
+                .map(|i| start + i as f32 / 16.0 * 1.75)
+                .map(|a| c + vec2(a.cos(), a.sin()) * (r - 1.0))
+                .collect();
+            painter.add(egui::Shape::line(arc, Stroke::new(1.4, ink)));
+            crate::icons::paint(painter, Rect::from_center_size(c, vec2(12.0, 12.0)), crate::icons::Icon::Brush, ink);
+        }
+    }
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+}
+
+/// A ring from radius `inner` to `outer` around `c`, from angle `a0` to `a1`, filled.
+fn annulus(painter: &egui::Painter, c: egui::Pos2, outer: f32, inner: f32, a0: f32, a1: f32, color: Color32) {
+    let steps = ((a1 - a0).abs() / std::f32::consts::TAU * 48.0).ceil().max(2.0) as u32;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=steps {
+        let a = a0 + (a1 - a0) * i as f32 / steps as f32;
+        let d = vec2(a.cos(), a.sin());
+        mesh.colored_vertex(c + d * outer, color);
+        mesh.colored_vertex(c + d * inner, color);
+        if i > 0 {
+            let k = 2 * i;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k + 1, k);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// The Mark as items' width, the page menu's.
 const MENU_W: f32 = 210.0;
 
@@ -661,7 +742,7 @@ fn mode_item(ui: &mut Ui, s: &Skin, dark: bool, mode: Mode, label: &str, checked
         ui.painter().rect_filled(rect, CornerRadius::same(6), s.soft);
     }
     let icon = Rect::from_center_size(pos2(rect.min.x + 14.0, rect.center().y), vec2(ICON, ICON));
-    crate::icons::paint(ui.painter(), icon, mode.icon(), mode.ink(s, dark));
+    crate::icons::paint(ui.painter(), icon, mode.icon(), mode.ink(dark));
     let font = egui::TextStyle::Button.resolve(ui.style());
     ui.painter().text(pos2(rect.min.x + 30.0, rect.center().y), Align2::LEFT_CENTER, label, font, s.text);
     if checked {
@@ -708,25 +789,27 @@ mod tests {
     }
 
     #[test]
-    fn a_page_is_the_state_of_the_art_unless_marked_exploration_or_being_built() {
+    fn a_page_keeps_its_mode_and_shows_what_is_happening_to_it() {
         let mut doc = Document::new("Map");
         let overview = doc.pages[0];
         let canvas = sub(&mut doc, overview, "Canvas and layers");
         let paint = sub(&mut doc, canvas, "Paint");
         let checkout = doc.add_page("Checkout");
         doc.node_mut(checkout).unwrap().plugin_data.insert(MODE_KEY.into(), EXPLORATION.into());
-        let none = building_pages(&doc, None);
-        assert_eq!(mode(&doc, overview, &none), Mode::Current);
-        assert_eq!(mode(&doc, checkout, &none), Mode::Exploration);
-        // A page Sync builds the page and its subpages, and nothing else.
+        assert_eq!(mode(&doc, overview), Mode::Current);
+        assert_eq!(mode(&doc, checkout), Mode::Exploration);
+        // A page Sync burns the page and its subpages, and nothing else.
         let canvas_sync = building_pages(&doc, Some(Some(canvas.0)));
-        assert_eq!(mode(&doc, canvas, &canvas_sync), Mode::Building);
-        assert_eq!(mode(&doc, paint, &canvas_sync), Mode::Building);
-        assert_eq!(mode(&doc, overview, &canvas_sync), Mode::Current);
-        assert_eq!(mode(&doc, checkout, &canvas_sync), Mode::Exploration);
-        // An all-pages Sync builds every page.
+        assert_eq!(activity(canvas, &canvas_sync, None), Some(Activity::Burning));
+        assert_eq!(activity(paint, &canvas_sync, None), Some(Activity::Burning));
+        assert_eq!(activity(overview, &canvas_sync, None), None);
+        // An agent at work on a page designs it; a Sync covering it wins.
+        assert_eq!(activity(checkout, &canvas_sync, Some("Claude".into())), Some(Activity::Designing("Claude".into())));
+        assert_eq!(activity(paint, &canvas_sync, Some("Claude".into())), Some(Activity::Burning));
+        assert_eq!(Activity::Designing("Claude".into()).tip("Strokes"), "Claude is designing Strokes");
+        // An all-pages Sync burns every page.
         let all = building_pages(&doc, Some(None));
-        assert!([overview, canvas, paint, checkout].iter().all(|page| mode(&doc, *page, &all) == Mode::Building));
+        assert!([overview, canvas, paint, checkout].iter().all(|page| activity(*page, &all, None) == Some(Activity::Burning)));
     }
 
     fn app_with_pages() -> (crate::layers_drag_tests::Ui, NodeId, NodeId, NodeId) {
