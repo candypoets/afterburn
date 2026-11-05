@@ -97,8 +97,6 @@ impl eframe::App for App {
                 figcraft_ui_egui::window_tabs::set_tab_bars(fig, ctx, &synced.tabbed);
                 if !synced.settled {
                     ctx.request_repaint_after(std::time::Duration::from_millis(150));
-                } else if synced.watching {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
                 }
                 mac_chrome::unify_toolbars();
             }
