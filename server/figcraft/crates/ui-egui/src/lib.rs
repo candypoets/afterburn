@@ -552,6 +552,29 @@ pub enum ToastClock {
     Since(f64),
 }
 
+/// An icon before a toast's message, and an action after it (the page tree's mode toasts).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToastMark {
+    pub icon: icons::Icon,
+    pub ink: egui::Color32,
+    pub action: Option<ToastAction>,
+}
+
+/// What a toast's action does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToastAction {
+    /// Open the Sync sidebar.
+    OpenSync,
+}
+
+impl ToastAction {
+    fn label(self) -> &'static str {
+        match self {
+            ToastAction::OpenSync => "Open Sync",
+        }
+    }
+}
+
 /// Draw another frame `secs` from now (nothing else needs drawing until then: an idle window draws
 /// no frames).
 #[track_caller]
@@ -639,6 +662,8 @@ pub struct UiState {
     pub icon_gallery: bool,
     /// A message at the bottom of the window and how long it has been showing.
     pub toast: Option<(String, ToastClock)>,
+    /// The current toast's icon and action, when it has them.
+    pub toast_mark: Option<ToastMark>,
     pub present: Option<present::Presenter>,
     /// A presentation kept alive while its design tab or Home is in front.
     pub paused_present: Option<present::Presenter>,
@@ -793,6 +818,7 @@ impl Default for UiState {
             fullscreen: false,
             icon_gallery: false,
             toast: None,
+            toast_mark: None,
             present: None,
             paused_present: None,
             present_uid: None,
@@ -1100,6 +1126,13 @@ impl FigApp {
 
     pub fn toast(&mut self, msg: impl Into<String>) {
         self.ui.toast = Some((msg.into(), ToastClock::Raised));
+        self.ui.toast_mark = None;
+    }
+
+    /// A toast with an icon before its message and, optionally, an action after it.
+    pub fn toast_with(&mut self, msg: impl Into<String>, mark: ToastMark) {
+        self.toast(msg);
+        self.ui.toast_mark = Some(mark);
     }
 
     /// Say that `n` documents left unsaved by a crash were opened again from recovery copies.
@@ -1982,6 +2015,8 @@ impl FigApp {
     }
 
     fn toast_ui(&mut self, ctx: &egui::Context) {
+        // A toast with an action stays long enough to reach it.
+        let secs = if self.ui.toast_mark.is_some_and(|mark| mark.action.is_some()) { 2.0 * TOAST_SECS } else { TOAST_SECS };
         let Some((msg, clock)) = &mut self.ui.toast else { return };
         let now = ctx.input(|i| i.time);
         // The clock starts on the frame after the one that first draws the toast: that frame's
@@ -1991,19 +2026,22 @@ impl FigApp {
             ToastClock::Raised => {
                 *clock = ToastClock::Drawn;
                 ctx.request_repaint();
-                TOAST_SECS
+                secs
             }
             ToastClock::Drawn => {
                 *clock = ToastClock::Since(now);
-                TOAST_SECS
+                secs
             }
-            ToastClock::Since(t) => TOAST_SECS - (now - t),
+            ToastClock::Since(t) => secs - (now - t),
         };
         if left <= 0.0 {
             self.ui.toast = None;
+            self.ui.toast_mark = None;
             return;
         }
         let msg = msg.clone();
+        let mark = self.ui.toast_mark;
+        let mut acted = None;
         // Nothing moves while it shows: the next frame it needs is the one that hides it.
         if matches!(clock, ToastClock::Since(_)) {
             repaint_in(ctx, left);
@@ -2022,9 +2060,35 @@ impl FigApp {
                         // Wrapped at a readable width (the area alone would wrap at a sliver).
                         let width = (screen.width() - 64.0).clamp(120.0, 480.0);
                         let galley = ui.painter().layout(msg, theme::regular(12.0), egui::Color32::WHITE, width);
-                        ui.label(galley);
+                        let Some(mark) = mark else {
+                            ui.label(galley);
+                            return;
+                        };
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            let (icon, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                            icons::paint(ui.painter(), icon, mark.icon, mark.ink);
+                            ui.label(galley);
+                            if let Some(action) = mark.action {
+                                ui.add_space(16.0);
+                                let link = egui::RichText::new(action.label()).font(theme::regular(12.0)).color(egui::Color32::from_rgb(0xF2, 0xB8, 0xA8));
+                                let resp = ui.add(egui::Label::new(link).sense(egui::Sense::click()));
+                                crate::a11y::button(&resp, action.label());
+                                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                    acted = Some(action);
+                                }
+                            }
+                        });
                     });
             });
+        match acted {
+            Some(ToastAction::OpenSync) => {
+                self.sync.open = true;
+                self.ui.toast = None;
+                self.ui.toast_mark = None;
+            }
+            None => {}
+        }
     }
 
     /// UI state as JSON (control channel `ui.inspect`).

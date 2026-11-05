@@ -27,6 +27,72 @@ pub const MODE_KEY: &str = "mindmap.page_mode";
 /// The [`MODE_KEY`] value of an exploration page.
 pub const EXPLORATION: &str = "exploration";
 
+/// Mark `page` an exploration, or the state of the art (the mode is removed).
+pub fn set_mode(app: &mut FigApp, page: NodeId, exploration: bool) {
+    let mode = if exploration { serde_json::Value::from(EXPLORATION) } else { serde_json::Value::Null };
+    // Page data, like the tree's own links: allowed in map mode, where drawing is not.
+    let params = serde_json::json!({"ids": [page.0], "pluginData": {MODE_KEY: mode}});
+    if let Err(error) = app.session.execute("node.set", &params) {
+        app.toast(format!("The page's mode could not be set: {error}"));
+    }
+}
+
+/// Watch `page`, just made with a first prompt: when its agent marks it an exploration, a toast
+/// says so.
+pub fn watch_new(app: &mut FigApp, page: NodeId) {
+    app.page_tree.new_pages.retain(|(id, _)| *id != page);
+    app.page_tree.new_pages.push((page, None));
+}
+
+/// Say which watched new pages their agent marked an exploration; forget them, and any watched
+/// too long or gone.
+fn note_new_explorations(app: &mut FigApp, now: f64) {
+    if app.page_tree.new_pages.is_empty() {
+        return;
+    }
+    let Ok(doc) = app.session.doc() else { return };
+    let mut marked = Vec::new();
+    app.page_tree.new_pages.retain_mut(|(page, since)| {
+        let since = *since.get_or_insert(now);
+        if doc.node(*page).is_none() || now - since > NEW_PAGE_WATCH {
+            return false;
+        }
+        if is_exploration(doc, *page) {
+            marked.push(page_name(doc, *page));
+            return false;
+        }
+        true
+    });
+    if let Some(name) = marked.pop() {
+        let ink = Mode::Exploration.ink(&Skin::of(&Tokens::light()), true);
+        app.toast_with(
+            format!("New page · {name} · the agent marked it Exploration"),
+            crate::ToastMark { icon: crate::icons::Icon::PageExplore, ink, action: None },
+        );
+    }
+}
+
+/// After a Sync of `scope` (see `sync::State::building`) finished: its exploration pages are
+/// built, so they are the state of the art now. Says which.
+pub fn built(app: &mut FigApp, scope: Option<u64>) {
+    let Ok(doc) = app.session.doc() else { return };
+    let pages: Vec<NodeId> = building_pages(doc, Some(scope)).into_iter().filter(|page| is_exploration(doc, *page)).collect();
+    let mut names: Vec<String> = pages.iter().map(|page| page_name(doc, *page)).collect();
+    if pages.is_empty() {
+        return;
+    }
+    for page in &pages {
+        set_mode(app, *page, false);
+    }
+    names.sort();
+    let msg = match names.as_slice() {
+        [one] => format!("Built · {one} is now the state of the art"),
+        many => format!("Built · {} pages are now the state of the art", many.len()),
+    };
+    let ink = Mode::Current.ink(&Skin::of(&Tokens::light()), true);
+    app.toast_with(msg, crate::ToastMark { icon: crate::icons::Icon::PageCurrent, ink, action: Some(crate::ToastAction::OpenSync) });
+}
+
 /// What a page's icon in the tree says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -108,7 +174,13 @@ pub struct State {
     select_name: bool,
     /// The rows as last drawn: each page and its rect.
     pub(crate) drawn: Vec<(NodeId, Rect)>,
+    /// Pages just made with a first prompt, and when: the agent marks an exploration, and the
+    /// tree says so once.
+    pub(crate) new_pages: Vec<(NodeId, Option<f64>)>,
 }
+
+/// How long a new page is watched for the agent marking it an exploration (seconds).
+const NEW_PAGE_WATCH: f64 = 30.0 * 60.0;
 
 /// The rename field's selected text: a soft accent behind ink.
 const SELECTION: Color32 = Color32::from_rgb(0xF3, 0xDC, 0xD5);
@@ -306,6 +378,7 @@ pub fn maintain(app: &mut FigApp, ctx: &egui::Context) {
         return;
     }
     app.page_tree.last_cleanup = ctx.input(|input| input.time);
+    note_new_explorations(app, ctx.input(|input| input.time));
     let orphans: Vec<NodeId> = match app.session.doc() {
         Ok(doc) => doc
             .pages
@@ -377,6 +450,8 @@ enum Ask {
     Fold(NodeId),
     Delete(NodeId),
     Rename(NodeId),
+    /// Mark as: an exploration (`true`) or the state of the art.
+    Mark(NodeId, bool),
     NewPage,
 }
 
@@ -465,6 +540,7 @@ pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
             }
         }
         Some(Ask::Delete(page)) => app.page_delete = Some(page),
+        Some(Ask::Mark(page, exploration)) => set_mode(app, page, exploration),
         Some(Ask::NewPage) => app.new_page.start(total + 1),
         None => {}
     }
@@ -555,12 +631,44 @@ fn row(
             ask = Some(Ask::Rename(line.page));
             ui.close();
         }
-        if ui.button("Delete page…").clicked() {
+        ui.separator();
+        ui.label(egui::RichText::new("MARK AS").font(FontId::monospace(8.0)).color(s.faint));
+        let exploration = line.mode == Mode::Exploration;
+        for (mode, label) in [(Mode::Current, "State of the art"), (Mode::Exploration, "Exploration")] {
+            let checked = (mode == Mode::Exploration) == exploration;
+            if mode_item(ui, s, dark, mode, label, checked) {
+                ask = Some(Ask::Mark(line.page, mode == Mode::Exploration));
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button(egui::RichText::new("Delete page…").color(s.accent)).clicked() {
             ask = Some(Ask::Delete(line.page));
             ui.close();
         }
     });
     (ask, outer, end)
+}
+
+/// The Mark as items' width, the page menu's.
+const MENU_W: f32 = 210.0;
+
+/// One Mark as item: the mode's icon, its name, and a check on the page's current mode.
+fn mode_item(ui: &mut Ui, s: &Skin, dark: bool, mode: Mode, label: &str, checked: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(vec2(MENU_W, 26.0), Sense::click());
+    crate::a11y::button(&resp, &format!("Mark as {label}"));
+    if resp.hovered() || checked {
+        ui.painter().rect_filled(rect, CornerRadius::same(6), s.soft);
+    }
+    let icon = Rect::from_center_size(pos2(rect.min.x + 14.0, rect.center().y), vec2(ICON, ICON));
+    crate::icons::paint(ui.painter(), icon, mode.icon(), mode.ink(s, dark));
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    ui.painter().text(pos2(rect.min.x + 30.0, rect.center().y), Align2::LEFT_CENTER, label, font, s.text);
+    if checked {
+        let tick = Rect::from_center_size(pos2(rect.max.x - 14.0, rect.center().y), vec2(12.0, 12.0));
+        crate::icons::paint(ui.painter(), tick, crate::icons::Icon::Check, s.text);
+    }
+    resp.clicked() && !checked
 }
 
 /// The fold mark: ⌄ when open, › when folded.
@@ -619,6 +727,69 @@ mod tests {
         // An all-pages Sync builds every page.
         let all = building_pages(&doc, Some(None));
         assert!([overview, canvas, paint, checkout].iter().all(|page| mode(&doc, *page, &all) == Mode::Building));
+    }
+
+    fn app_with_pages() -> (crate::layers_drag_tests::Ui, NodeId, NodeId, NodeId) {
+        let mut session = figcraft_engine::Session::new();
+        let second = session.execute("page.add", &serde_json::json!({"name": "Onboarding"})).unwrap()["id"].as_u64().unwrap();
+        let third = session.execute("page.add", &serde_json::json!({"name": "Pricing"})).unwrap()["id"].as_u64().unwrap();
+        let first = session.doc().unwrap().pages[0];
+        let u = crate::layers_drag_tests::Ui::new(session);
+        (u, first, NodeId(second), NodeId(third))
+    }
+
+    #[test]
+    fn mark_as_sets_and_clears_a_pages_mode() {
+        crate::with_map_mode(|| {
+            let (mut u, first, _, _) = app_with_pages();
+            set_mode(&mut u.app, first, true);
+            assert!(is_exploration(u.app.session.doc().unwrap(), first));
+            set_mode(&mut u.app, first, false);
+            let doc = u.app.session.doc().unwrap();
+            assert!(!is_exploration(doc, first));
+            assert!(!doc.node(first).unwrap().plugin_data.contains_key(MODE_KEY), "the state of the art is unmarked");
+        });
+    }
+
+    #[test]
+    fn a_build_makes_the_explorations_it_covered_the_state_of_the_art() {
+        crate::with_map_mode(|| {
+            let (mut u, _, onboarding, pricing) = app_with_pages();
+            set_mode(&mut u.app, onboarding, true);
+            set_mode(&mut u.app, pricing, true);
+            built(&mut u.app, Some(onboarding.0));
+            let doc = u.app.session.doc().unwrap();
+            assert!(!is_exploration(doc, onboarding));
+            assert!(is_exploration(doc, pricing), "a page the Sync did not cover stays an exploration");
+            assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Built · Onboarding is now the state of the art"));
+            assert_eq!(u.app.ui.toast_mark.and_then(|mark| mark.action), Some(crate::ToastAction::OpenSync));
+            // A build with no exploration in it says nothing more.
+            u.app.ui.toast = None;
+            built(&mut u.app, Some(onboarding.0));
+            assert!(u.app.ui.toast.is_none());
+        });
+    }
+
+    #[test]
+    fn a_new_page_its_agent_marks_an_exploration_is_announced_once() {
+        crate::with_map_mode(|| {
+            let (mut u, _, onboarding, _) = app_with_pages();
+            watch_new(&mut u.app, onboarding);
+            note_new_explorations(&mut u.app, 10.0);
+            assert!(u.app.ui.toast.is_none(), "not marked yet");
+            set_mode(&mut u.app, onboarding, true);
+            note_new_explorations(&mut u.app, 12.0);
+            assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("New page · Onboarding · the agent marked it Exploration"));
+            assert!(u.app.page_tree.new_pages.is_empty());
+            // Watched too long: forgotten without a word.
+            u.app.ui.toast = None;
+            watch_new(&mut u.app, onboarding);
+            set_mode(&mut u.app, onboarding, false);
+            note_new_explorations(&mut u.app, 0.0);
+            note_new_explorations(&mut u.app, NEW_PAGE_WATCH + 1.0);
+            assert!(u.app.page_tree.new_pages.is_empty());
+            assert!(u.app.ui.toast.is_none());
+        });
     }
 
     #[test]

@@ -58,6 +58,12 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
         ));
         if request.new_page {
             out.push_str("This page was just created for the prompt below.\n");
+            out.push_str(&format!(
+                "Mark its mode before designing: an exploration (a new idea the code does not have) is \
+                 session.command node.set {{\"ids\":[{}],\"pluginData\":{{\"mindmap.page_mode\":\"exploration\"}}}}; \
+                 a page that describes the code as it is stays unmarked (state of the art).\n",
+                page.0
+            ));
         }
     } else {
         out.push_str("Scope: the whole map; the request names no page.\n");
@@ -389,5 +395,23 @@ mod tests {
         assert!(cut
             .lines()
             .all(|line| line.starts_with("line ") || line.starts_with('…')));
+    }
+
+    #[test]
+    fn a_new_page_asks_the_agent_to_mark_its_mode() {
+        let (doc, backend, _, _) = doc();
+        let text = render(
+            &doc,
+            &Request {
+                new_page: true,
+                ..request(Some(backend), &[])
+            },
+        );
+        assert!(text.contains("Mark its mode before designing"), "{text}");
+        assert!(
+            text.contains(&format!("{{\"ids\":[{}],\"pluginData\":{{\"mindmap.page_mode\":\"exploration\"}}}}", backend.0)),
+            "{text}"
+        );
+        assert!(!render(&doc, &request(Some(backend), &[])).contains("Mark its mode"));
     }
 }

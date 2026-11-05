@@ -2346,6 +2346,12 @@ fn apply_job(app: &mut FigApp, ctx: &egui::Context, received: JobMsg) {
                         app.sync.current = None;
                         let cards = app.sync.applied;
                         app.toast(if cards == 0 { "Synced".to_string() } else { format!("Synced · {}", plural(cards, "card")) });
+                        // An exploration this Sync covered is built: the state of the art now.
+                        if let Some(scope) = app.sync.job_scope
+                            && !app.sync.job.as_ref().is_some_and(Job::is_record)
+                        {
+                            crate::page_tree::built(app, scope);
+                        }
                     }
                     "failed" => {
                         let reason = app.sync.job.as_ref().and_then(|job| job.reason.clone()).unwrap_or_else(|| "The sync failed.".to_string());

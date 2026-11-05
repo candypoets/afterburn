@@ -866,3 +866,24 @@ fn a_card_only_moved_or_slightly_resized_is_not_waiting() {
     node.transform = node.transform * figcraft_doc::geom::Affine::rotate(0.3);
     assert_eq!(waiting(&doc), (false, vec![card.0]));
 }
+
+#[test]
+fn marking_a_pages_mode_never_waits_for_a_sync() {
+    let repo = Repo::new();
+    let (doc, page, _, _) = design();
+    repo.marker(&doc, &format!("page={} job=a", page.0));
+    let mut live = doc.clone();
+    live.node_mut(page)
+        .unwrap()
+        .plugin_data
+        .insert(PAGE_MODE_KEY.into(), "exploration".into());
+    let drift = design_drift(&repo.0, &live, Some(page.0)).unwrap();
+    assert!(drift.is_empty(), "{:?}", drift.changes);
+    // Any other page data still does.
+    live.node_mut(page)
+        .unwrap()
+        .plugin_data
+        .insert("mindmap.parent_page".into(), "7".into());
+    let drift = design_drift(&repo.0, &live, Some(page.0)).unwrap();
+    assert!(!drift.is_empty());
+}

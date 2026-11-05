@@ -467,6 +467,7 @@ pub fn design_drift(path: &Path, live: &Document, page: Option<u64>) -> Result<D
         .changes
         .into_iter()
         .filter(|c| scoped_change(c, &old, live, &ids, page))
+        .filter(|c| !page_mode_only(c, &old, live))
         .collect();
     let added: Vec<Value> = after
         .difference(&before)
@@ -512,6 +513,34 @@ pub fn design_drift(path: &Path, live: &Document, page: Option<u64>) -> Result<D
         removed,
         cards,
     })
+}
+
+/// A page's mode (`mindmap.page_mode`: state of the art or exploration) says whether its design
+/// has been built, not what it designs: marking a page, or a build marking it built, never waits
+/// for a Sync.
+pub const PAGE_MODE_KEY: &str = "mindmap.page_mode";
+
+/// A change to a page's plugin data that only marks its mode.
+fn page_mode_only(change: &Change, old: &Document, live: &Document) -> bool {
+    let Change::Set {
+        id,
+        prop: figcraft_collab::change::Prop::PluginData,
+        ..
+    } = change
+    else {
+        return false;
+    };
+    let (Some(was), Some(now)) = (old.node(*id), live.node(*id)) else {
+        return false;
+    };
+    if !now.is_page() {
+        return false;
+    }
+    let others = |data| -> Vec<(&String, &String)> {
+        let data: &BTreeMap<String, String> = data;
+        data.iter().filter(|(key, _)| key.as_str() != PAGE_MODE_KEY).collect()
+    };
+    others(&was.plugin_data) == others(&now.plugin_data)
 }
 
 /// The most a card may grow or shrink, as a share of its size, and still count as arranged.

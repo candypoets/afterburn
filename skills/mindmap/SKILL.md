@@ -47,6 +47,15 @@ other pages are out of scope. Preserve card names and page IDs unless the task r
 change. Use existing components and layout conventions. Do not rebuild the whole map for a
 local edit.
 
+## Page modes
+
+A page is the **state of the art** (it describes the code as it is) or an **exploration** (a new
+idea the code does not have yet). When a prompt creates a page, mark its mode before designing:
+an exploration gets `node.set {"ids":[PAGE],"pluginData":{"mindmap.page_mode":"exploration"}}`;
+the state of the art stays unmarked. Comments never change a page's mode. A Sync of an
+exploration builds it; once that Sync finishes, the page is the state of the art. The mode is
+never a waiting change.
+
 ## Show, don't tell
 
 The canvas is the medium. An image is worth a thousand words: design one. Carry each idea with a

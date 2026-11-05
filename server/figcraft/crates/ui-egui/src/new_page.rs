@@ -368,6 +368,10 @@ fn poll(app: &mut FigApp) {
             app.new_page.open = false;
             let agent = reply.agent.as_ref().and_then(|agent| agent.get("kind").and_then(serde_json::Value::as_str)).unwrap_or("the agent");
             app.toast(format!("Created {}; prompt sent to {agent}", app.new_page.name.trim()));
+            // The agent marks the page's mode; the tree says when it makes it an exploration.
+            if let Some(page) = app.new_page.page_id {
+                crate::page_tree::watch_new(app, figcraft_doc::NodeId(page));
+            }
         }
         Ok(reply) => {
             app.new_page.error = Some(reply.error.unwrap_or_else(|| "The prompt was refused.".to_string()));
