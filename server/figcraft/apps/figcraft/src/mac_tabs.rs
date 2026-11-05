@@ -45,6 +45,10 @@ pub struct MacTabs {
     joined: HashSet<isize>,
     native: HashSet<isize>,
     waiting: u32,
+    /// Full screen: the title bar and tabs auto-hide (this set the app's presentation options).
+    auto_hiding: bool,
+    /// AppKit refused the auto-hiding options once: full screen keeps its tab bar.
+    refused: bool,
 }
 
 /// The app's own windows (not panels or menus), the background tabs of a group included.
@@ -105,7 +109,7 @@ impl MacTabs {
             if bar {
                 tabbed.push(title);
             }
-            Self::full_screen_bar(w, mask.contains(NSWindowStyleMask::FullScreen));
+            self.full_screen_bar(w, mask.contains(NSWindowStyleMask::FullScreen));
         }
         let numbers: HashSet<isize> = windows.iter().map(|w| w.windowNumber()).collect();
         self.joined.retain(|n| numbers.contains(n));
@@ -119,28 +123,33 @@ impl MacTabs {
     /// Full screen with several tabs: the title bar and its tab bar auto-hide, coming back with
     /// the menu bar while the pointer is at the top of the screen (as Safari's "Always Show Toolbar
     /// in Full Screen" off). AppKit refuses to hide a tab bar holding several tabs, so the whole
-    /// band hides instead.
-    fn full_screen_bar(w: &NSWindow, full: bool) {
+    /// band hides instead. Should AppKit refuse the options (it raises), they are not tried again.
+    fn full_screen_bar(&mut self, w: &NSWindow, full: bool) {
         let Some(mtm) = MainThreadMarker::new() else { return };
-        if !w.isKeyWindow() {
+        if !w.isKeyWindow() || self.refused {
             return;
         }
         let tabs = w.tabbedWindows().is_some_and(|t| t.count() > 1);
         let app = NSApplication::sharedApplication(mtm);
-        let options = app.presentationOptions();
-        // AppKit raises (aborting the app) unless full screen and an auto-hiding menu bar go with it.
-        let allowed = options.contains(NSApplicationPresentationOptions::FullScreen | NSApplicationPresentationOptions::AutoHideMenuBar);
-        let want = full && tabs && allowed;
-        let has = options.contains(NSApplicationPresentationOptions::AutoHideToolbar);
-        if want != has && (allowed || has) {
-            app.setPresentationOptions(if want {
-                options | NSApplicationPresentationOptions::AutoHideToolbar
-            } else {
-                options & !NSApplicationPresentationOptions::AutoHideToolbar
-            });
-        }
-        if std::env::var_os("MINDMAP_DEBUG_TABS").is_some() {
-            eprintln!("mac_tabs: full={full} tabs={tabs} options={options:?} want={want}");
+        let system = app.currentSystemPresentationOptions();
+        // Only valid with full screen and an auto-hiding menu bar (the system's while full screen).
+        let base = NSApplicationPresentationOptions::FullScreen | NSApplicationPresentationOptions::AutoHideMenuBar;
+        let want = full && tabs && system.contains(base);
+        let next = if want {
+            Some(system | NSApplicationPresentationOptions::AutoHideToolbar).filter(|_| !self.auto_hiding)
+        } else if self.auto_hiding {
+            let left = app.presentationOptions() & !NSApplicationPresentationOptions::AutoHideToolbar;
+            Some(if full { left } else { left & !NSApplicationPresentationOptions::FullScreen })
+        } else {
+            None
+        };
+        if let Some(options) = next {
+            let set = objc2::exception::catch(std::panic::AssertUnwindSafe(|| app.setPresentationOptions(options)));
+            self.refused = set.is_err();
+            self.auto_hiding = want && set.is_ok();
+            if std::env::var_os("MINDMAP_DEBUG_TABS").is_some() {
+                eprintln!("mac_tabs: full={full} tabs={tabs} system={system:?} set={options:?} ok={}", set.is_ok());
+            }
         }
     }
 }
