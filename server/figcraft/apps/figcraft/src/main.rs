@@ -98,7 +98,7 @@ impl eframe::App for App {
                 if !synced.settled {
                     ctx.request_repaint_after(std::time::Duration::from_millis(150));
                 } else if synced.watching {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
                 }
                 mac_chrome::unify_toolbars();
             }

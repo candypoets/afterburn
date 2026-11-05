@@ -19,10 +19,14 @@
 //! instead.
 
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSApplication, NSWindow, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility};
+use objc2_app_kit::{
+    NSAnimatablePropertyContainer, NSAnimationContext, NSApplication, NSWindow, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode,
+    NSWindowTitleVisibility,
+};
 use objc2_foundation::NSString;
 
 /// The tab group every project window joins.
@@ -34,6 +38,13 @@ const EDGE: f64 = 4.0;
 /// Full screen: how far down (points) the shown title bar and tabs stay while the pointer is in
 /// them.
 const REVEALED: f64 = 80.0;
+
+/// Full screen: how long (seconds) the title bar and tabs take to fade in, and out.
+const FADE_IN: f64 = 0.16;
+const FADE_OUT: f64 = 0.24;
+
+/// Full screen: after this, a fade is over (a band AppKit showed again meanwhile is hidden again).
+const FADE_SETTLED: Duration = Duration::from_millis(400);
 
 /// How many frames a window may take to appear before the group stops looking for it.
 const PATIENCE: u32 = 20;
@@ -59,6 +70,8 @@ pub struct MacTabs {
     full_inset: HashSet<isize>,
     /// Full screen: the title bar and tabs are see-through until the pointer reaches the top.
     band_hidden: bool,
+    /// When the title bar and tabs last started to fade.
+    faded: Option<Instant>,
 }
 
 /// The app's own windows (not panels or menus), the background tabs of a group included.
@@ -159,8 +172,7 @@ impl MacTabs {
         let Some(w) = key else {
             if std::mem::take(&mut self.band_hidden) {
                 for band in &bands {
-                    band.setAlphaValue(1.0);
-                    band.setIgnoresMouseEvents(false);
+                    fade(band, true);
                 }
             }
             return false;
@@ -176,12 +188,14 @@ impl MacTabs {
         let y = w.mouseLocationOutsideOfEventStream().y;
         let band = if self.band_hidden { EDGE } else { REVEALED };
         let reveal = y.is_finite() && y >= top - band;
-        if reveal == self.band_hidden || bands.iter().any(|b| (b.alphaValue() > 0.5) != reveal) {
+        // AppKit may show the band again on its own: once a fade is over, put it back.
+        let settled = self.faded.is_none_or(|at| at.elapsed() > FADE_SETTLED);
+        if reveal == self.band_hidden || (settled && bands.iter().any(|b| (b.alphaValue() > 0.5) != reveal)) {
             for b in &bands {
-                b.setAlphaValue(if reveal { 1.0 } else { 0.0 });
-                b.setIgnoresMouseEvents(!reveal);
+                fade(b, reveal);
             }
             self.band_hidden = !reveal;
+            self.faded = Some(Instant::now());
         }
         if std::env::var_os("MINDMAP_DEBUG_TABS").is_some() {
             let names: Vec<String> = bands.iter().map(|b| b.class().name().to_string_lossy().into_owned()).collect();
@@ -189,6 +203,15 @@ impl MacTabs {
         }
         true
     }
+}
+
+/// Full screen: fade the title bar and tabs in (`show`) or out; hidden, clicks pass through them.
+fn fade(band: &NSWindow, show: bool) {
+    band.setIgnoresMouseEvents(!show);
+    NSAnimationContext::beginGrouping();
+    NSAnimationContext::currentContext().setDuration(if show { FADE_IN } else { FADE_OUT });
+    band.animator().setAlphaValue(if show { 1.0 } else { 0.0 });
+    NSAnimationContext::endGrouping();
 }
 
 /// The title bar AppKit draws above a tab bar: the title shown, the traffic lights in it, the
