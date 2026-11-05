@@ -358,9 +358,16 @@ pub(crate) fn current_name(app: &FigApp) -> String {
     groups(app, "").into_iter().flat_map(|g| g.rows).rfind(|row| row.open).map(|row| row.name).unwrap_or_else(|| "this workspace".to_string())
 }
 
-/// Open `row`: with a map, switch the map in place (the palette shows the switch until it is
-/// done); without one, open the browser on it for Init. The open row just closes the switcher.
+/// Open `row` the default way: in a new native window tab ([`crate::window_tabs::open_row`]),
+/// or its window comes to the front when it is open already.
 pub fn choose(app: &mut FigApp, ctx: &egui::Context, row: &Row) {
+    crate::window_tabs::open_row(app, ctx, row);
+}
+
+/// ⌘↵ (⌘-click) on a workspace or worktree row: with a map, switch this window's map in place
+/// (the palette shows the switch until it is done); without one, open the browser on it for Init.
+/// The open row just closes the switcher.
+pub fn switch_here(app: &mut FigApp, ctx: &egui::Context, row: &Row) {
     if crate::window_tabs::take_armed(app, ctx, row) {
         return;
     }
@@ -392,11 +399,6 @@ pub fn choose(app: &mut FigApp, ctx: &egui::Context, row: &Row) {
         app.ws.worktree_init = row.nested;
         app.ui.home = true;
     }
-}
-
-/// ⌘↵ in the workspace or worktree list: open it in a new native window tab.
-pub fn choose_in_new_window(app: &mut FigApp, ctx: &egui::Context, row: &Row) {
-    crate::window_tabs::open_row(app, ctx, row);
 }
 
 /// Try the failed switch again.

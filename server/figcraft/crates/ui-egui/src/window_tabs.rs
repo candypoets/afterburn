@@ -4,13 +4,13 @@
 //! desktop app's `mac_tabs`); elsewhere they are separate windows.
 //!
 //! A project window is a [`crate::windows`] window holding the project's document. Opening one:
-//! ⌘↵ on a workspace row ([`open_row`]), ⌘T then a workspace ([`request_new_tab`]), or the control
+//! choosing a workspace row ([`open_row`]), ⌘T then a workspace ([`request_new_tab`]), or the control
 //! channel's `window.openWorkspace`. A project already open is never joined twice: its window comes
 //! to the front instead (a node connection has one peer per session).
 //!
 //! The workspace browser and its Open request are shared by every window, so an Open is followed
 //! here ([`Pending`]): when its map arrives (in whichever window's frame), it moves to the window
-//! that asked for it, a new one for ⌘↵, and the main window keeps what it showed.
+//! that asked for it, a new one for a plain choice, and the main window keeps what it showed.
 //!
 //! Titles: the window is `<workspace> — <branch>`, its tab `<workspace> · <branch>` ([`titles`]).
 
@@ -176,13 +176,13 @@ pub fn set_tab_bars(app: &mut FigApp, ctx: &Context, tabbed: &[String]) {
     }
 }
 
-/// ⌘↵ on a workspace row: open it in a new window (tab). A row without a map can't open a window
+/// Choosing a workspace row (click or ↵): open it in a new window (tab). A row without a map can't open a window
 /// of its own yet: it goes to the browser for Init, as a plain choice does.
 pub fn open_row(app: &mut FigApp, ctx: &Context, row: &Row) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         if row.map != crate::workspaces::MapState::Map || ctx.embed_viewports() {
-            crate::switcher::choose(app, ctx, row);
+            crate::switcher::switch_here(app, ctx, row);
             return;
         }
         crate::switcher::close(app);
@@ -202,7 +202,7 @@ pub fn open_row(app: &mut FigApp, ctx: &Context, row: &Row) {
         open_workspace(app, ctx, &crate::workspaces::service_addr(), &row.id);
     }
     #[cfg(target_arch = "wasm32")]
-    crate::switcher::choose(app, ctx, row);
+    crate::switcher::switch_here(app, ctx, row);
 }
 
 /// Open project `workspace` (on the machine in use, `address`) in a new window, or bring its window
@@ -280,7 +280,7 @@ pub fn request_new_tab(app: &mut FigApp) {
 }
 
 /// The switcher's choice after ⌘T: `true` when it opened in a new window (the caller is done).
-/// The hook at the top of [`crate::switcher::choose`].
+/// The hook at the top of [`crate::switcher::switch_here`].
 pub fn take_armed(app: &mut FigApp, ctx: &Context, row: &Row) -> bool {
     if !std::mem::take(&mut app.ui.new_tab_armed) {
         return false;

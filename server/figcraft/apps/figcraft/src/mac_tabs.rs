@@ -11,6 +11,10 @@
 //! above the content, the traffic lights in the title bar, and the content drops its own band for
 //! them (`UiState::native_tab_bar`). Alone again, it gets the inset look back (`mac_chrome`).
 //!
+//! In full screen the tab bar would lie over the map's own header, so it hides and comes back only
+//! while the pointer is at the top of the screen (with the menu bar), as a full-screen title bar
+//! does; leaving full screen gives it back.
+//!
 //! Only safe AppKit calls (no `unsafe`). AppKit's `+` button in the tab bar needs a
 //! `newWindowForTab:` responder, i.e. an Objective-C class of our own (`unsafe`): ⌘T opens a tab
 //! instead.
@@ -28,12 +32,21 @@ const TABBING_ID: &str = "dev.mindmap.client.project";
 /// How many frames a window may take to appear before the group stops looking for it.
 const PATIENCE: u32 = 20;
 
+/// Full screen: the band at the top of the screen (points) that brings the hidden tab bar back.
+const EDGE: f64 = 3.0;
+
+/// Full screen: how far down (points) the revealed tab bar stays while the pointer is in it (the
+/// menu bar, the title bar and the tab bar).
+const REVEALED: f64 = 90.0;
+
 /// What the windows look like after [`MacTabs::sync`].
 pub struct Synced {
     /// The titles of the windows showing a tab bar.
     pub tabbed: Vec<String>,
     /// Every project window was found and grouped (else: look again shortly).
     pub settled: bool,
+    /// A full-screen window's tab bar follows the pointer (look again shortly).
+    pub watching: bool,
 }
 
 /// The windows already grouped and the ones wearing the native title bar, by window number.
@@ -41,6 +54,8 @@ pub struct Synced {
 pub struct MacTabs {
     joined: HashSet<isize>,
     native: HashSet<isize>,
+    /// Full-screen windows whose tab bar this hid (shown again when they leave full screen).
+    hidden: HashSet<isize>,
     waiting: u32,
 }
 
@@ -57,7 +72,7 @@ impl MacTabs {
     /// Group the windows, title their tabs (`projects`: each window's title and its tab's) and give
     /// the tabbed ones the native title bar. Cheap enough for every frame: only changes touch AppKit.
     pub fn sync(&mut self, projects: &[(String, String)]) -> Synced {
-        let Some(mtm) = MainThreadMarker::new() else { return Synced { tabbed: Vec::new(), settled: true } };
+        let Some(mtm) = MainThreadMarker::new() else { return Synced { tabbed: Vec::new(), settled: true, watching: false } };
         let windows = app_windows(mtm);
         let id = NSString::from_str(TABBING_ID);
         let mut anchor = NSApplication::sharedApplication(mtm)
@@ -65,6 +80,7 @@ impl MacTabs {
             .filter(|k| self.joined.contains(&k.windowNumber()))
             .or_else(|| windows.iter().find(|w| self.joined.contains(&w.windowNumber())).cloned());
         let mut tabbed = Vec::new();
+        let mut watching = false;
         for w in &windows {
             let n = w.windowNumber();
             if w.tabbingIdentifier().to_string() != TABBING_ID {
@@ -102,14 +118,42 @@ impl MacTabs {
             if bar {
                 tabbed.push(title);
             }
+            watching |= self.full_screen_bar(w, mask.contains(NSWindowStyleMask::FullScreen));
         }
         let numbers: HashSet<isize> = windows.iter().map(|w| w.windowNumber()).collect();
         self.joined.retain(|n| numbers.contains(n));
         self.native.retain(|n| numbers.contains(n));
+        self.hidden.retain(|n| numbers.contains(n));
         let titles: Vec<String> = windows.iter().map(|w| w.title().to_string()).collect();
         let found = projects.iter().all(|(t, _)| titles.contains(t));
         self.waiting = if found { 0 } else { self.waiting.saturating_add(1) };
-        Synced { tabbed, settled: found || self.waiting > PATIENCE }
+        Synced { tabbed, settled: found || self.waiting > PATIENCE, watching }
+    }
+
+    /// Full screen: the tab bar shows only while the pointer is at the top of the key window's
+    /// screen. Out of full screen, a bar this hid comes back. `true` while it follows the pointer.
+    fn full_screen_bar(&mut self, w: &NSWindow, full: bool) -> bool {
+        let n = w.windowNumber();
+        let Some(group) = w.tabGroup() else { return false };
+        let shown = group.isTabBarVisible();
+        if !full {
+            if self.hidden.remove(&n) && !shown && w.tabbedWindows().is_some_and(|t| t.count() > 1) {
+                w.toggleTabBar(None);
+            }
+            return false;
+        }
+        if !w.isKeyWindow() || !w.tabbedWindows().is_some_and(|t| t.count() > 1) {
+            return false;
+        }
+        let top = w.frame().size.height;
+        let y = w.mouseLocationOutsideOfEventStream().y;
+        let band = if shown { REVEALED } else { EDGE };
+        let reveal = y.is_finite() && y >= top - band && y <= top + 1.0;
+        if reveal != shown {
+            w.toggleTabBar(None);
+        }
+        self.hidden.insert(n);
+        true
     }
 }
 

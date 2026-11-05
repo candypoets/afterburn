@@ -666,7 +666,7 @@ fn workspace_view(app: &FigApp, query: &str) -> View {
         chip: Some("Workspace".to_string()),
         placeholder: "Switch workspace…".to_string(),
         sections,
-        hints: format!("↑↓ choose   ↵ open   {}↵ new window tab   ⌫ back", cmd()),
+        hints: format!("↑↓ choose   ↵ new window tab   {}↵ open here   ⌫ back", cmd()),
         count: format!("{listed} workspace{}", plural(listed)),
         enter_cap: false,
     }
@@ -698,7 +698,7 @@ fn worktree_view(app: &FigApp, query: &str, address: &str, id: &str, name: &str,
     let hints = if current {
         "↑↓ choose   ↵ open   ⌫ back".to_string()
     } else {
-        format!("↑↓ choose   ↵ open   {}↵ new window tab   ⌫ back", cmd())
+        format!("↑↓ choose   ↵ new window tab   {}↵ open here   ⌫ back", cmd())
     };
     View {
         chip: Some(format!("{name} › Worktree")),
@@ -920,7 +920,8 @@ fn show_in_herdr(app: &FigApp) {
     let _ = app;
 }
 
-/// Do what choosing `pick` asks; `new_tab` when ⌘↵ chose it.
+/// Do what choosing `pick` asks; `new_tab` when ⌘↵ chose it (for a workspace or worktree, which
+/// opens in a new window tab by default, ⌘↵ switches this window in place).
 pub(crate) fn choose(app: &mut FigApp, ctx: &egui::Context, pick: Pick, text: &str, new_tab: bool) {
     match pick {
         Pick::Page(page) => {
@@ -937,14 +938,14 @@ pub(crate) fn choose(app: &mut FigApp, ctx: &egui::Context, pick: Pick, text: &s
             if row.worktrees > 1 {
                 push(app, Scope::Worktree { address: row.address.clone(), id: row.id.clone(), name: row.name.clone(), current: row.open });
             } else if new_tab {
-                crate::switcher::choose_in_new_window(app, ctx, &row);
+                crate::switcher::switch_here(app, ctx, &row);
             } else {
                 crate::switcher::choose(app, ctx, &row);
             }
         }
         Pick::Worktree(row) => {
             if new_tab {
-                crate::switcher::choose_in_new_window(app, ctx, &row)
+                crate::switcher::switch_here(app, ctx, &row)
             } else {
                 crate::switcher::choose(app, ctx, &row)
             }
