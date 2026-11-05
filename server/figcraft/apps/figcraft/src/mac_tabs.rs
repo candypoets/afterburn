@@ -11,8 +11,8 @@
 //! above the content, the traffic lights in the title bar, and the content drops its own band for
 //! them (`UiState::native_tab_bar`). Alone again, it gets the inset look back (`mac_chrome`).
 //!
-//! In full screen the tab bar would lie over the map's own header, so the title bar and tabs hide
-//! and come back only while the pointer is at the top of the screen, with the menu bar.
+//! In full screen the title bar and tabs would lie over the map's own header, so the content takes
+//! the whole screen and they show only while the pointer is at the top of the screen.
 //!
 //! Only safe AppKit calls (no `unsafe`). AppKit's `+` button in the tab bar needs a
 //! `newWindowForTab:` responder, i.e. an Objective-C class of our own (`unsafe`): ⌘T opens a tab
@@ -22,11 +22,18 @@ use std::collections::HashSet;
 
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSApplication, NSApplicationPresentationOptions, NSWindow, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility};
+use objc2_app_kit::{NSApplication, NSWindow, NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility};
 use objc2_foundation::NSString;
 
 /// The tab group every project window joins.
 const TABBING_ID: &str = "dev.mindmap.client.project";
+
+/// Full screen: the band at the top of the screen (points) that brings the hidden tab bar back.
+const EDGE: f64 = 4.0;
+
+/// Full screen: how far down (points) the shown title bar and tabs stay while the pointer is in
+/// them.
+const REVEALED: f64 = 80.0;
 
 /// How many frames a window may take to appear before the group stops looking for it.
 const PATIENCE: u32 = 20;
@@ -37,6 +44,8 @@ pub struct Synced {
     pub tabbed: Vec<String>,
     /// Every project window was found and grouped (else: look again shortly).
     pub settled: bool,
+    /// Full screen: the title bar and tabs follow the pointer (look again shortly).
+    pub watching: bool,
 }
 
 /// The windows already grouped and the ones wearing the native title bar, by window number.
@@ -45,10 +54,11 @@ pub struct MacTabs {
     joined: HashSet<isize>,
     native: HashSet<isize>,
     waiting: u32,
-    /// Full screen: the title bar and tabs auto-hide (this set the app's presentation options).
-    auto_hiding: bool,
-    /// AppKit refused the auto-hiding options once: full screen keeps its tab bar.
-    refused: bool,
+    /// Full-screen windows given a full-size content view here (the native title bar takes it back
+    /// when they leave full screen).
+    full_inset: HashSet<isize>,
+    /// Full screen: the title bar and tabs are see-through until the pointer reaches the top.
+    band_hidden: bool,
 }
 
 /// The app's own windows (not panels or menus), the background tabs of a group included.
@@ -64,7 +74,7 @@ impl MacTabs {
     /// Group the windows, title their tabs (`projects`: each window's title and its tab's) and give
     /// the tabbed ones the native title bar. Cheap enough for every frame: only changes touch AppKit.
     pub fn sync(&mut self, projects: &[(String, String)]) -> Synced {
-        let Some(mtm) = MainThreadMarker::new() else { return Synced { tabbed: Vec::new(), settled: true } };
+        let Some(mtm) = MainThreadMarker::new() else { return Synced { tabbed: Vec::new(), settled: true, watching: false } };
         let windows = app_windows(mtm);
         let id = NSString::from_str(TABBING_ID);
         let mut anchor = NSApplication::sharedApplication(mtm)
@@ -109,48 +119,75 @@ impl MacTabs {
             if bar {
                 tabbed.push(title);
             }
-            self.full_screen_bar(w, mask.contains(NSWindowStyleMask::FullScreen));
         }
+        let watching = self.full_screen_bar(mtm, &windows);
         let numbers: HashSet<isize> = windows.iter().map(|w| w.windowNumber()).collect();
         self.joined.retain(|n| numbers.contains(n));
         self.native.retain(|n| numbers.contains(n));
+        self.full_inset.retain(|n| numbers.contains(n));
         let titles: Vec<String> = windows.iter().map(|w| w.title().to_string()).collect();
         let found = projects.iter().all(|(t, _)| titles.contains(t));
         self.waiting = if found { 0 } else { self.waiting.saturating_add(1) };
-        Synced { tabbed, settled: found || self.waiting > PATIENCE }
+        Synced { tabbed, settled: found || self.waiting > PATIENCE, watching }
     }
 
-    /// Full screen with several tabs: the title bar and its tab bar auto-hide, coming back with
-    /// the menu bar while the pointer is at the top of the screen (as Safari's "Always Show Toolbar
-    /// in Full Screen" off). AppKit refuses to hide a tab bar holding several tabs, so the whole
-    /// band hides instead. Should AppKit refuse the options (it raises), they are not tried again.
-    fn full_screen_bar(&mut self, w: &NSWindow, full: bool) {
-        let Some(mtm) = MainThreadMarker::new() else { return };
-        if !w.isKeyWindow() || self.refused {
-            return;
-        }
-        let tabs = w.tabbedWindows().is_some_and(|t| t.count() > 1);
-        let app = NSApplication::sharedApplication(mtm);
-        let system = app.currentSystemPresentationOptions();
-        // Only valid with full screen and an auto-hiding menu bar (the system's while full screen).
-        let base = NSApplicationPresentationOptions::FullScreen | NSApplicationPresentationOptions::AutoHideMenuBar;
-        let want = full && tabs && system.contains(base);
-        let next = if want {
-            Some(system | NSApplicationPresentationOptions::AutoHideToolbar).filter(|_| !self.auto_hiding)
-        } else if self.auto_hiding {
-            let left = app.presentationOptions() & !NSApplicationPresentationOptions::AutoHideToolbar;
-            Some(if full { left } else { left & !NSApplicationPresentationOptions::FullScreen })
-        } else {
-            None
-        };
-        if let Some(options) = next {
-            let set = objc2::exception::catch(std::panic::AssertUnwindSafe(|| app.setPresentationOptions(options)));
-            self.refused = set.is_err();
-            self.auto_hiding = want && set.is_ok();
-            if std::env::var_os("MINDMAP_DEBUG_TABS").is_some() {
-                eprintln!("mac_tabs: full={full} tabs={tabs} system={system:?} set={options:?} ok={}", set.is_ok());
+    /// Full screen with several tabs: the content reaches the top of the screen and the band AppKit
+    /// draws above it (the title bar and the tab bar, a window of its own) shows only while the
+    /// pointer is at the top. AppKit refuses to hide a tab bar holding several tabs, and the window
+    /// delegate's auto-hiding options need `unsafe`, so the band is made see-through and lets
+    /// clicks pass instead. Out of full screen everything is as it was. `true` while the band
+    /// follows the pointer.
+    fn full_screen_bar(&mut self, mtm: MainThreadMarker, windows: &[Retained<NSWindow>]) -> bool {
+        let key = windows
+            .iter()
+            .find(|w| w.isKeyWindow() && w.styleMask().contains(NSWindowStyleMask::FullScreen) && w.tabbedWindows().is_some_and(|t| t.count() > 1));
+        // Back out of full screen: the native title bar keeps the content below it.
+        for w in windows {
+            let n = w.windowNumber();
+            if !w.styleMask().contains(NSWindowStyleMask::FullScreen) && self.full_inset.remove(&n) && self.native.contains(&n) {
+                native_chrome(w);
             }
         }
+        let bands: Vec<Retained<NSWindow>> = NSApplication::sharedApplication(mtm)
+            .windows()
+            .iter()
+            .filter(|w| {
+                let class = w.class().name().to_string_lossy();
+                class.contains("FullScreen") && (class.contains("Toolbar") || class.contains("Titlebar"))
+            })
+            .collect();
+        let Some(w) = key else {
+            if std::mem::take(&mut self.band_hidden) {
+                for band in &bands {
+                    band.setAlphaValue(1.0);
+                    band.setIgnoresMouseEvents(false);
+                }
+            }
+            return false;
+        };
+        let n = w.windowNumber();
+        if !w.styleMask().contains(NSWindowStyleMask::FullSizeContentView) {
+            let mask = w.styleMask() | NSWindowStyleMask::FullSizeContentView;
+            if objc2::exception::catch(std::panic::AssertUnwindSafe(|| w.setStyleMask(mask))).is_ok() {
+                self.full_inset.insert(n);
+            }
+        }
+        let top = w.frame().size.height;
+        let y = w.mouseLocationOutsideOfEventStream().y;
+        let band = if self.band_hidden { EDGE } else { REVEALED };
+        let reveal = y.is_finite() && y >= top - band;
+        if reveal == self.band_hidden || bands.iter().any(|b| (b.alphaValue() > 0.5) != reveal) {
+            for b in &bands {
+                b.setAlphaValue(if reveal { 1.0 } else { 0.0 });
+                b.setIgnoresMouseEvents(!reveal);
+            }
+            self.band_hidden = !reveal;
+        }
+        if std::env::var_os("MINDMAP_DEBUG_TABS").is_some() {
+            let names: Vec<String> = bands.iter().map(|b| b.class().name().to_string_lossy().into_owned()).collect();
+            eprintln!("mac_tabs: y={y} top={top} reveal={reveal} bands={names:?}");
+        }
+        true
     }
 }
 
