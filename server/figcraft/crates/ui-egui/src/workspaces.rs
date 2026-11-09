@@ -21,7 +21,7 @@ use crate::widgets;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-/// Where the node listens unless `MINDMAP_NODE` or `--node` says otherwise.
+/// Where the node listens unless `AFTERBURN_NODE` or `--node` says otherwise.
 const DEFAULT_SERVICE: &str = "127.0.0.1:47822";
 
 /// The list's width (the detail gets the rest of the window).
@@ -53,12 +53,12 @@ pub fn set_service(address: &str) {
     }
 }
 
-/// The node's address: `--node`, then `MINDMAP_NODE`, then the default.
+/// The node's address: `--node`, then `AFTERBURN_NODE`, then the default.
 pub fn service_addr() -> String {
     if let Some(address) = SERVICE.get() {
         return address.read().unwrap_or_else(|p| p.into_inner()).clone();
     }
-    std::env::var("MINDMAP_NODE")
+    std::env::var("AFTERBURN_NODE")
         .ok()
         .map(|address| address.trim().to_string())
         .filter(|address| !address.is_empty())
@@ -2095,10 +2095,10 @@ fn explanation(kind: MapState) -> &'static str {
     match kind {
         MapState::Map => "The map is attached to the workspace, not to a link. Open it, or ask the agents working there.",
         MapState::Empty => {
-            "A document exists but its map is still empty. Init starts an agent with the mindmap skill; it reads the repository and draws the first overview."
+            "A document exists but its map is still empty. Init starts an agent with the afterburn skill; it reads the repository and draws the first overview."
         }
         MapState::None => {
-            "No document yet. Init opens a live design and starts an agent with the mindmap skill; it reads the repository and draws the first overview."
+            "No document yet. Init opens a live design and starts an agent with the afterburn skill; it reads the repository and draws the first overview."
         }
     }
 }
@@ -2212,7 +2212,7 @@ fn status_color(status: &str, s: &Skin) -> Color32 {
     }
 }
 
-/// LAST SYNC: the newest Mindmap-Sync commit on the workspace's branch.
+/// LAST SYNC: the newest Afterburn-Sync commit on the workspace's branch.
 fn sync_block(ui: &mut Ui, s: &Skin, w: &Workspace) {
     eyebrow(ui, s, "LAST SYNC");
     ui.add_space(4.0);
@@ -2546,8 +2546,8 @@ mod detail_tests {
     #[test]
     fn agent_task_drops_spinners_and_keeps_the_task_of_a_status_title() {
         assert_eq!(agent_task("✦ 🐋 Finalize Pane 2 Claude work and install"), "finalize pane 2 claude work and install");
-        assert_eq!(agent_task("mindmap | Ready | Sync backend mindmap | main"), "sync backend mindmap");
-        assert_eq!(agent_task("Alzette mindmap overview"), "alzette mindmap overview");
+        assert_eq!(agent_task("afterburn | Ready | Sync backend afterburn | main"), "sync backend afterburn");
+        assert_eq!(agent_task("Alzette afterburn overview"), "alzette afterburn overview");
         assert_eq!(agent_task("⠇ "), "");
     }
 
@@ -2563,7 +2563,7 @@ mod detail_tests {
     #[test]
     fn the_sync_line_shortens_the_subject() {
         assert_eq!(
-            short_subject("Mindmap client: onboarding, machine and workspace setup, worktree status bar"),
+            short_subject("Afterburn client: onboarding, machine and workspace setup, worktree status bar"),
             "onboarding, machine and workspace setup, worktree"
         );
         assert_eq!(short_subject("node cleanup"), "node cleanup");

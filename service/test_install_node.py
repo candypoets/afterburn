@@ -108,9 +108,9 @@ class InstallTests(unittest.TestCase):
         result = installer.install(self.args)
         self.assertEqual(result['status'], 'installed')
         self.assertEqual(self.supervisor.actions, ['start'])
-        target = self.home / '.local/lib/mindmap/node' / NEW / 'mindmap-node'
+        target = self.home / '.local/lib/afterburn/node' / NEW / 'afterburn-node'
         self.assertEqual(target.read_bytes(), b'native candidate')
-        self.assertEqual((self.home / '.local/bin/mindmap-node').resolve(), target)
+        self.assertEqual((self.home / '.local/bin/afterburn-node').resolve(), target)
         self.binary.unlink()
         self.assertTrue(target.is_file(), 'bundle removal must not remove installed helper')
 
@@ -174,7 +174,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(self.supervisor.actions, [])
 
     def test_immutable_build_collision_refused(self):
-        path = self.home / '.local/lib/mindmap/node' / NEW / 'mindmap-node'
+        path = self.home / '.local/lib/afterburn/node' / NEW / 'afterburn-node'
         path.parent.mkdir(parents=True)
         path.write_bytes(b'another binary')
         self.assert_refused(1)
@@ -184,11 +184,11 @@ class InstallTests(unittest.TestCase):
 class ConfigAndAssetTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('systemd-analyze'), 'requires systemd unit parser')
     def test_generated_unit_is_accepted_by_real_systemd_parser(self):
-        with tempfile.TemporaryDirectory(prefix='mindmap home ') as directory:
+        with tempfile.TemporaryDirectory(prefix='afterburn home ') as directory:
             home = Path(directory)
             supervisor = installer.Supervisor.__new__(installer.Supervisor)
             supervisor.home, supervisor.scope, supervisor.mac = home, 'user', False
-            supervisor.path = home / 'mindmap-node.service'
+            supervisor.path = home / 'afterburn-node.service'
             supervisor.path.write_bytes(supervisor.config(Path('/usr/bin/true')))
             result = subprocess.run(['systemd-analyze', 'verify', '--man=no', str(supervisor.path)], text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -220,7 +220,7 @@ class ConfigAndAssetTests(unittest.TestCase):
             root = Path(directory)
             platform = root / 'assets/linux-x64'
             platform.mkdir(parents=True)
-            binary = platform / 'mindmap-node'
+            binary = platform / 'afterburn-node'
             binary.write_bytes(b'foreign executable must never run')
             info = {**INFO, 'platform': 'linux-x64', 'sha256': assets.digest(binary)}
             sidecar = platform / 'build-info.json'
@@ -228,7 +228,7 @@ class ConfigAndAssetTests(unittest.TestCase):
             output = root / 'destination'
             with patch.object(assets.subprocess, 'check_output', side_effect=AssertionError('foreign exec')):
                 assets.copy_assets(platform.parent, INFO, output, 'darwin-arm64')
-                self.assertEqual((output / 'linux-x64/mindmap-node').read_bytes(), binary.read_bytes())
+                self.assertEqual((output / 'linux-x64/afterburn-node').read_bytes(), binary.read_bytes())
                 for key, value in (('build_id', OLD), ('sha256', '0' * 64), ('platform', 'darwin-x64')):
                     with self.subTest(key=key):
                         sidecar.write_text(json.dumps({**info, key: value}))
@@ -253,7 +253,7 @@ with open(os.environ['TEST_BUILD_LOG'], 'a') as stream:
 output = pathlib.Path(args[args.index('--target-dir') + 1]) / 'debug'
 output.mkdir(parents=True, exist_ok=True)
 info = {'build_id': 'a' * 64, 'version': '0.1.0', 'protocol': 1}
-node = output / 'mindmap-node'
+node = output / 'afterburn-node'
 node.write_text('#!/usr/bin/env python3\nprint(' + repr(json.dumps(info)) + ')\n')
 node.chmod(0o755)
 app = output / 'figcraft'
@@ -269,7 +269,7 @@ app.chmod(0o755)
             uname.write_text('#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac\n')
             uname.chmod(0o755)
             environment = {**os.environ, 'PATH': str(commands) + os.pathsep + os.environ['PATH'],
-                           'APP': str(temporary / 'Mindmap.app'), 'CARGO_TARGET_DIR': str(temporary / 'target'),
+                           'APP': str(temporary / 'Afterburn.app'), 'CARGO_TARGET_DIR': str(temporary / 'target'),
                            'PROFILE': 'debug', 'INSTALL_NODE': '0', 'TEST_BUILD_LOG': str(log)}
             for key in ('CARGO_BUILD_TARGET', 'NODE_ASSETS', 'UPGRADE_NODE'):
                 environment.pop(key, None)
@@ -279,25 +279,25 @@ app.chmod(0o755)
             # The build id's crate is cleaned first, so its hash is always recomputed.
             self.assertEqual(len(calls), 2)
             self.assertIn('clean', calls[0])
-            self.assertIn('mindmap-build', calls[0])
+            self.assertIn('afterburn-build', calls[0])
             self.assertIn('figcraft', calls[1])
-            self.assertIn('mindmap-node', calls[1])
-            resources = temporary / 'Mindmap.app/Contents/Resources'
+            self.assertIn('afterburn-node', calls[1])
+            resources = temporary / 'Afterburn.app/Contents/Resources'
             self.assertTrue((resources / 'install-node.sh').is_file())
             self.assertTrue((resources / 'install-node.py').is_file())
             sidecar = json.loads((resources / 'node/darwin-arm64/build-info.json').read_text())
             self.assertEqual(sidecar['build_id'], NEW)
-            self.assertEqual(sidecar['sha256'], assets.digest(resources / 'node/darwin-arm64/mindmap-node'))
+            self.assertEqual(sidecar['sha256'], assets.digest(resources / 'node/darwin-arm64/afterburn-node'))
             result = subprocess.run(['bash', str(root / 'service/build-node.sh'), str(temporary / 'headless')], env=environment, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             self.assertEqual(len(calls), 3)
             self.assertNotIn('figcraft', calls[2])
-            self.assertIn('mindmap-node', calls[2])
+            self.assertIn('afterburn-node', calls[2])
             self.assertTrue((temporary / 'headless/darwin-arm64/build-info.json').is_file())
             # A package's companion root includes installers, which must be ignored as assets.
             assets.copy_assets(temporary / 'headless', INFO, temporary / 'copied', 'linux-x64')
-            self.assertTrue((temporary / 'copied/darwin-arm64/mindmap-node').is_file())
+            self.assertTrue((temporary / 'copied/darwin-arm64/afterburn-node').is_file())
 
 
 if __name__ == '__main__':

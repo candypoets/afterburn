@@ -1,7 +1,7 @@
 //! Paths and environment overrides.
 //!
-//! The crate lives inside the Mindmap repository during development, but the binary is meant to be
-//! installed. `MINDMAP_ROOT` is the explicit override; otherwise we walk up from the current
+//! The crate lives inside the Afterburn repository during development, but the binary is meant to be
+//! installed. `AFTERBURN_ROOT` is the explicit override; otherwise we walk up from the current
 //! directory to find the checkout that contains `service/assets/empty.figcraft`, and finally fall
 //! back to the compile-time manifest parent (which is right for `cargo run` and for a checkout).
 
@@ -25,7 +25,7 @@ impl Config {
         let current_dir = env::current_dir().map_err(|error| {
             crate::error::Error::new(format!("cannot read the current directory: {error}"))
         })?;
-        let root = env_path("MINDMAP_ROOT")
+        let root = env_path("AFTERBURN_ROOT")
             .or_else(|| {
                 current_dir
                     .ancestors()
@@ -46,9 +46,9 @@ impl Config {
             .unwrap_or(current_dir);
 
         Ok(Self {
-            figcraft_cli: env_path("MINDMAP_FIGCRAFT_CLI")
+            figcraft_cli: env_path("AFTERBURN_FIGCRAFT_CLI")
                 .unwrap_or_else(|| root.join("target/release/figcraft-cli")),
-            herdr_bin: env_path("MINDMAP_HERDR").unwrap_or_else(|| PathBuf::from("herdr")),
+            herdr_bin: env_path("AFTERBURN_HERDR").unwrap_or_else(|| PathBuf::from("herdr")),
         })
     }
 }

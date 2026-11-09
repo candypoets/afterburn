@@ -1,6 +1,6 @@
-# Mindmap desktop client
+# Afterburn desktop client
 
-Mindmap's app (`figcraft`) and backend (`mindmap-node`) belong to the root Cargo workspace.
+Afterburn's app (`figcraft`) and backend (`afterburn-node`) belong to the root Cargo workspace.
 The only FigCraft source tree is `server/figcraft/`; the node crate is `service/`. Both use the
 root `Cargo.lock` and root `target/`. The old ignored `client-src/` checkout and source overlays
 are not build inputs. Edit the canonical source directly.
@@ -12,21 +12,21 @@ installed:
 
 ```sh
 ./client/build-mac.sh
-open "$HOME/Applications/Mindmap.app" --args --map-mode --node 127.0.0.1:47822
+open "$HOME/Applications/Afterburn.app" --args --map-mode --node 127.0.0.1:47822
 ```
 
-The build script runs **one** `cargo +1.97.1 build --locked -p figcraft -p mindmap-node` invocation
-(with the release profile by default). It creates and ad-hoc signs `Mindmap.app`, bundles the
+The build script runs **one** `cargo +1.97.1 build --locked -p figcraft -p afterburn-node` invocation
+(with the release profile by default). It creates and ad-hoc signs `Afterburn.app`, bundles the
 native node produced by that invocation, and runs the bundled helper's installer. The helper
-is copied to `~/.local/lib/mindmap/node/<build-id>/mindmap-node`; launchd points directly to that
-immutable copy. `~/.local/bin/mindmap-node` is a CLI symlink to it. Quitting or replacing the app
+is copied to `~/.local/lib/afterburn/node/<build-id>/afterburn-node`; launchd points directly to that
+immutable copy. `~/.local/bin/afterburn-node` is a CLI symlink to it. Quitting or replacing the app
 leaves the helper and shared Herdr running.
 
 `APP` selects a bundle destination, `PROFILE=debug` selects debug binaries, and `CARGO_TOOLCHAIN`
 overrides the pinned toolchain. `INSTALL_NODE=0` builds a package without registering a helper;
 this is not a completed full install. macOS user installation requires a logged-in GUI user
 and Python 3.9+. The helper is a LaunchAgent, so login starts it; it is not a machine-wide boot
-service before login. Logs are in `~/Library/Logs/Mindmap/`.
+service before login. Logs are in `~/Library/Logs/Afterburn/`.
 
 A running node from a different build is left untouched unless the user approves an upgrade:
 
@@ -34,7 +34,7 @@ A running node from a different build is left untouched unless the user approves
 # Explicitly approved full install and helper upgrade:
 UPGRADE_NODE=1 ./client/build-mac.sh
 # Or upgrade the helper from an already-built app:
-./service/install-mac-node.sh "$HOME/Applications/Mindmap.app" --upgrade
+./service/install-mac-node.sh "$HOME/Applications/Afterburn.app" --upgrade
 ```
 
 A prepared Sync or ready merge prevents an upgrade. The installer checks `session.list`, verifies
@@ -53,10 +53,10 @@ UPGRADE_NODE=1 ./client/deploy-mac.sh macbook
 ```
 
 Deployment copies the current canonical workspace, lockfile, sources, assets and packaging scripts
-into an isolated `~/.cache/mindmap/builds/full.*/source` snapshot on the Mac. It includes new
+into an isolated `~/.cache/afterburn/builds/full.*/source` snapshot on the Mac. It includes new
 nonignored source files, so uncommitted work can be deployed. It does not reconstruct an overlay,
 copy `client-src`, overwrite a worktree, or copy private design/server state. The remote root
-build uses `~/.cache/mindmap/target` as its shared build cache. Snapshots are retained for inspection.
+build uses `~/.cache/afterburn/target` as its shared build cache. Snapshots are retained for inspection.
 The Mac needs the same build prerequisites as a local build; the deploying host needs Git,
 Python 3, SSH and rsync. SSH host keys/authentication use the user's configuration.
 
@@ -86,7 +86,7 @@ host libc/runtime requirements. Windows nodes and cross compilation are not pack
 ## Nodes and host selection
 
 Use `--map-mode --node 127.0.0.1:47822` locally or `--node ssh:befree` for an SSH config alias.
-`MINDMAP_NODE` supplies the default address; `--service` remains an alias for `--node`. Remote
+`AFTERBURN_NODE` supplies the default address; `--service` remains an alias for `--node`. Remote
 connections use SSH to a loopback listener. Workspaces open by session ID, worktree path and
 branch; no owner links or server keys are used.
 
@@ -100,7 +100,7 @@ bundled companion asset.
 
 Herdr installation needs separate approval when missing. Setup uses the shared Herdr session
 and preserves `HERDR_SESSION`/`HERDR_SOCKET_PATH`; it never starts a private Herdr daemon. Saved
-hosts live in `~/.config/mindmap/hosts.json`, for example:
+hosts live in `~/.config/afterburn/hosts.json`, for example:
 
 ```json
 [{"name":"befree","address":"ssh:befree","ssh":"befree"}]

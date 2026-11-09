@@ -1,12 +1,12 @@
 ---
-name: mindmap
-description: Maintain live repository designs through a local Mindmap node and implement scoped design changes with Git-backed Sync.
+name: afterburn
+description: Maintain live repository designs through a local Afterburn node and implement scoped design changes with Git-backed Sync.
 ---
 
-# Mindmap
+# Afterburn
 
 The node on the repository's machine owns the live design. Git owns its committed copy at
-`.mindmap/map.figcraft`. Agents edit the session; only the node writes that file. No owner
+`.afterburn/map.figcraft`. Agents edit the session; only the node writes that file. No owner
 links, server keys or `projects.json` records are needed.
 
 ## Connect and inspect
@@ -14,7 +14,7 @@ links, server keys or `projects.json` records are needed.
 Start the stdio MCP adapter on the machine that owns the worktree:
 
 ```sh
-mindmap-node mcp --path /absolute/worktree
+afterburn-node mcp --path /absolute/worktree
 ```
 
 Tools: `inspect_document`, `get_node`, `create_node`, `set_properties`, `run_command`,
@@ -26,10 +26,10 @@ look at your work with `screenshot` (a PNG of layers or a page; it writes nothin
 The CLI also exposes the protocol:
 
 ```sh
-mindmap-node request '{"method":"open","path":"/absolute/worktree"}'
-mindmap-node request '{"method":"session.inspect","session":"SESSION","depth":8}'
-mindmap-node request '{"method":"diff","session":"SESSION","page":123,"offset":0,"limit":200}'
-mindmap-node request '{"method":"session.command","session":"SESSION","command":"node.set","params":{"ids":[123],"name":"New name"}}'
+afterburn-node request '{"method":"open","path":"/absolute/worktree"}'
+afterburn-node request '{"method":"session.inspect","session":"SESSION","depth":8}'
+afterburn-node request '{"method":"diff","session":"SESSION","page":123,"offset":0,"limit":200}'
+afterburn-node request '{"method":"session.command","session":"SESSION","command":"node.set","params":{"ids":[123],"name":"New name"}}'
 ```
 
 Use the actual session ID returned by `open`. `--address` selects a node reached through an
@@ -51,7 +51,7 @@ local edit.
 
 A page is the **state of the art** (it describes the code as it is) or an **exploration** (a new
 idea the code does not have yet). When a prompt creates a page, mark its mode before designing:
-an exploration gets `node.set {"ids":[PAGE],"pluginData":{"mindmap.page_mode":"exploration"}}`;
+an exploration gets `node.set {"ids":[PAGE],"pluginData":{"afterburn.page_mode":"exploration"}}`;
 the state of the art stays unmarked. Comments never change a page's mode. A Sync of an
 exploration builds it; once that Sync finishes, the page is the state of the art. The mode is
 never a waiting change.
@@ -66,7 +66,7 @@ diagram that explains it. Check the result with `screenshot`.
 
 Every factual card needs a repository source. Read the implementation before claiming behavior.
 Keep one claim per card and explain it plainly. Label proposals as proposals. Do not edit
-`.mindmap/map.figcraft` directly or use the obsolete model renderer for live jobs.
+`.afterburn/map.figcraft` directly or use the obsolete model renderer for live jobs.
 
 ## Three kinds of comment work
 
@@ -90,10 +90,10 @@ Waiting cards are proposals, not current behaviour; do not describe them as what
 To record, after the last map edit of the request:
 
 ```sh
-mindmap-node request '{"method":"record","session":"SESSION","request":"REQUEST","kind":"explain","page":123}'
+afterburn-node request '{"method":"record","session":"SESSION","request":"REQUEST","kind":"explain","page":123}'
 # explain: commit only the staged map; fix: commit the code with it. Trailer last.
 # Cannot commit? {"method":"sync.cancel","job":"JOB"}: an open record blocks Sync.
-mindmap-node request '{"method":"sync.finish","job":"JOB","commit":"SHA"}'
+afterburn-node request '{"method":"sync.finish","job":"JOB","commit":"SHA"}'
 ```
 
 `record` commits the last recorded map plus only this request's edits: design edits that were
@@ -102,14 +102,14 @@ the reply lists those cards (`kept_waiting`). Without an earlier record for the 
 as the request found it is recorded too, which declares it current. Init is one big
 explanation and ends with a `record` of the whole map. `record.start` keeps a starting point for
 work that did not come from a comment. An open record blocks Sync; `sync.cancel` releases it.
-`mindmap-node` adds your Herdr pane to `record`, so the node cancels the record if you exit, and
+`afterburn-node` adds your Herdr pane to `record`, so the node cancels the record if you exit, and
 the Sync panel shows it (kind, agent, age) with a Cancel button.
 
 ## Sync implements the design
 
 Sync freezes the authoritative design at job start. Its prompt lists the waiting design changes
 and the code committed since the last Sync. The design baseline is the last reachable record of
-any kind (`Mindmap-Sync:` trailer ending in nothing, `explain` or `fix`); the code baseline is
+any kind (`Afterburn-Sync:` trailer ending in nothing, `explain` or `fix`); the code baseline is
 the last Sync. A page-specific marker does not declare other pages synced. The node compares all FigCraft properties, including geometry,
 arrows, styles and document-level data. Follow `diff` pagination to read the entire change list.
 Read code drift with Git from that commit; the prompt is an entry point, not all the evidence.
@@ -123,16 +123,16 @@ After implementation and verification:
 1. Call `sync.prepare` with the job ID. The node gates file saves, writes the frozen start design
    into the worktree and stages its exact Git blob. Live edits continue in the session/cache.
 2. Stage the implementation files. Inspect the index, then commit code and
-   `.mindmap/map.figcraft` together with the **exact trailer returned by `sync.prepare`**. Do not
+   `.afterburn/map.figcraft` together with the **exact trailer returned by `sync.prepare`**. Do not
    invent a marker or mark unrelated pages complete. The trailer contains job ID and scope.
 3. Call `sync.finish` with job ID and commit SHA. The node verifies the frozen blob, branch,
    ancestry and trailer before reporting success. It then saves the current live design; edits
    made during the job remain uncommitted drift for the next sync.
 
 ```sh
-mindmap-node request '{"method":"sync.prepare","job":"JOB"}'
+afterburn-node request '{"method":"sync.prepare","job":"JOB"}'
 # Stage implementation files and commit with the returned trailer.
-mindmap-node request '{"method":"sync.finish","job":"JOB","commit":"SHA"}'
+afterburn-node request '{"method":"sync.finish","job":"JOB","commit":"SHA"}'
 ```
 
 Call `sync.cancel` to release the save gate without declaring success if the job is cancelled.

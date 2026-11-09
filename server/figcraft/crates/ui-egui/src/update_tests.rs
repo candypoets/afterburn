@@ -20,8 +20,8 @@ fn feed_json(version: &str) -> serde_json::Value {
         "notes": ["Faster map open and sync checks", "Update from the app, no terminal", "Smaller node, cleaner logs"],
         "platforms": {
             "darwin-arm64": {
-                "app": {"url": "https://releases.example/Mindmap-0.8.0.zip", "sha256": SHA},
-                "node": {"url": "https://releases.example/mindmap-node", "sha256": SHA, "build_id": "3a1c07e5b2"}
+                "app": {"url": "https://releases.example/Afterburn-0.8.0.zip", "sha256": SHA},
+                "node": {"url": "https://releases.example/afterburn-node", "sha256": SHA, "build_id": "3a1c07e5b2"}
             }
         }
     })
@@ -150,11 +150,11 @@ fn the_available_sheet_says_what_the_design_says() {
     let mut state = State::at(Phase::Available(release()));
     state.node_build = Some("fe9dca42".into());
     let shown = view(&state, "0.7.0", true);
-    assert_eq!(shown.title, "Mindmap 0.8.0 is ready");
+    assert_eq!(shown.title, "Afterburn 0.8.0 is ready");
     assert_eq!(shown.body, "The app and its node update together. Agents keep running; a prepared Sync waits until the restart.");
     assert_eq!(
         shown.rows,
-        vec![("Mindmap", "0.7.0  →  0.8.0".to_string()), ("Node", "fe9dca  →  3a1c07".to_string()), ("Agents", "Herdr keeps running".to_string())]
+        vec![("Afterburn", "0.7.0  →  0.8.0".to_string()), ("Node", "fe9dca  →  3a1c07".to_string()), ("Agents", "Herdr keeps running".to_string())]
     );
     assert_eq!(shown.notes, ["Faster map open and sync checks", "Update from the app, no terminal", "Smaller node, cleaner logs"]);
     let primary = shown.primary.unwrap();
@@ -184,7 +184,7 @@ fn the_node_installers_exit_21_means_the_update_waits() {
 #[test]
 fn downloads_are_checked_against_their_sha256() {
     use sha2::{Digest, Sha256};
-    let path = std::env::temp_dir().join(format!("mindmap-update-test-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("afterburn-update-test-{}", std::process::id()));
     std::fs::write(&path, b"synthetic release").unwrap();
     assert_eq!(crate::update_install::sha256_file(&path).unwrap(), format!("{:x}", Sha256::digest(b"synthetic release")));
     let _ = std::fs::remove_file(&path);
@@ -226,11 +226,11 @@ fn the_sheet_draws_the_available_release_with_install_and_later() {
     };
     run(&mut app);
     let shown = run(&mut app);
-    let versions = format!("{}  →  0.8.0", mindmap_build::VERSION);
+    let versions = format!("{}  →  0.8.0", afterburn_build::VERSION);
     for needle in [
         "UPDATE",
-        "Mindmap 0.8.0 is ready",
-        "Mindmap",
+        "Afterburn 0.8.0 is ready",
+        "Afterburn",
         versions.as_str(),
         "fe9dca  →  3a1c07",
         "Herdr keeps running",
@@ -259,7 +259,7 @@ fn curl_takes_the_url_last_and_reads_a_local_feed() {
     let command = crate::update_install::curl("https://releases.example/feed.json", &["--max-time", "30"]);
     let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
     assert_eq!(args[args.len() - 4..], ["--max-time", "30", "--", "https://releases.example/feed.json"], "options before `--`");
-    let path = std::env::temp_dir().join(format!("mindmap-update-feed-{}.json", std::process::id()));
+    let path = std::env::temp_dir().join(format!("afterburn-update-feed-{}.json", std::process::id()));
     std::fs::write(&path, feed_json("0.8.0").to_string()).unwrap();
     if let Ok(text) = crate::update_install::fetch_text(&format!("file://{}", path.display())) {
         assert_eq!(parse_feed(&text).unwrap().version, "0.8.0");

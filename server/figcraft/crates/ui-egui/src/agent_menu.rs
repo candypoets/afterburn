@@ -1,7 +1,7 @@
 //! The one agent button and its menu, the same on every screen that asks for an agent: the
 //! composer, the Sync panel and Init (the Empty map screen).
 //!
-//! Design: `State Agent menu` on the Mindmap page. The button is a component whose label is the
+//! Design: `State Agent menu` on the Afterburn page. The button is a component whose label is the
 //! selected agent (`Backend · Codex · p1 · idle ⌄`); clicking it opens a search field
 //! (`Find an agent…`), the workspace's agents in a list that scrolls, and the CLIs a new agent can
 //! start pinned below. Init shows busy (working or blocked) agents disabled; the composer lets the

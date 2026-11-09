@@ -113,7 +113,7 @@ fn fetch_verified(url: &str, sha256: &str, to: &Path, what: &str) -> Result<(), 
     Ok(())
 }
 
-/// The `.app` this process runs from (`…/Mindmap.app/Contents/MacOS/<exe>`).
+/// The `.app` this process runs from (`…/Afterburn.app/Contents/MacOS/<exe>`).
 fn running_bundle() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|_| "Could not find the running app.".to_string())?;
     let exe = exe.canonicalize().unwrap_or(exe);
@@ -121,7 +121,7 @@ fn running_bundle() -> Result<PathBuf, String> {
         .nth(3)
         .filter(|bundle| bundle.extension().is_some_and(|e| e == "app"))
         .map(Path::to_path_buf)
-        .ok_or_else(|| "Mindmap isn't running from an app bundle, so it can't replace itself. Install the release by hand.".into())
+        .ok_or_else(|| "Afterburn isn't running from an app bundle, so it can't replace itself. Install the release by hand.".into())
 }
 
 fn stop_if_cancelled(cancelled: &AtomicBool) -> Result<(), Installed> {
@@ -130,7 +130,7 @@ fn stop_if_cancelled(cancelled: &AtomicBool) -> Result<(), Installed> {
 
 fn install(release: &Release, cancelled: &AtomicBool) -> Installed {
     if !cfg!(target_os = "macos") {
-        return Installed::Failed("Updates install from the Mindmap app on a Mac.".into());
+        return Installed::Failed("Updates install from the Afterburn app on a Mac.".into());
     }
     let bundle = match running_bundle() {
         Ok(bundle) => bundle,
@@ -140,10 +140,10 @@ fn install(release: &Release, cancelled: &AtomicBool) -> Installed {
         return Installed::Failed("Could not find the app's folder.".into());
     };
     // Staged beside the app so the swap is a rename on one volume.
-    let staging = parent.join(format!(".mindmap-update-{}", std::process::id()));
+    let staging = parent.join(format!(".afterburn-update-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     if std::fs::create_dir(&staging).is_err() {
-        return Installed::Failed(format!("Mindmap can't write to {}. Move the app to a folder you own, then try again.", parent.display()));
+        return Installed::Failed(format!("Afterburn can't write to {}. Move the app to a folder you own, then try again.", parent.display()));
     }
     let outcome = staged(release, &bundle, &staging, cancelled);
     if outcome != Installed::Restarting {
@@ -158,7 +158,7 @@ fn staged(release: &Release, bundle: &Path, staging: &Path, cancelled: &AtomicBo
         let archive = staging.join("app.zip");
         fetch_verified(&release.app.url, &release.app.sha256, &archive, "app").map_err(failed)?;
         stop_if_cancelled(cancelled)?;
-        let node = staging.join("mindmap-node");
+        let node = staging.join("afterburn-node");
         fetch_verified(&release.node.url, &release.node.sha256, &node, "node").map_err(failed)?;
         set_executable(&node).map_err(failed)?;
         stop_if_cancelled(cancelled)?;
@@ -243,7 +243,7 @@ pub(crate) fn installer_outcome(code: Option<i32>) -> Result<(), Installed> {
             Err(Installed::Waits("A prepared Sync or a pending merge is open. Finish or cancel it on every workspace, then try again.".into()))
         }
         Some(22) => Err(Installed::Failed(
-            "The running node isn't managed by Mindmap's service, so it wasn't replaced. Stop or migrate it, then try again.".into(),
+            "The running node isn't managed by Afterburn's service, so it wasn't replaced. Stop or migrate it, then try again.".into(),
         )),
         _ => Err(Installed::Failed("The node installer failed; the app was not replaced.".into())),
     }
@@ -266,7 +266,7 @@ fn swap(bundle: &Path, new_app: &Path, staging: &Path) -> Result<(), String> {
 fn relaunch(bundle: &Path, staging: &Path) -> Result<(), String> {
     let script = "while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; rm -rf -- \"$2\"; open -- \"$3\"";
     Command::new("sh")
-        .args(["-c", script, "mindmap-relaunch"])
+        .args(["-c", script, "afterburn-relaunch"])
         .arg(std::process::id().to_string())
         .arg(staging)
         .arg(bundle)
@@ -275,5 +275,5 @@ fn relaunch(bundle: &Path, staging: &Path) -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
-        .map_err(|_| "The update is installed; open Mindmap again to finish.".into())
+        .map_err(|_| "The update is installed; open Afterburn again to finish.".into())
 }

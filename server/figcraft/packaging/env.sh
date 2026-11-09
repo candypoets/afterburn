@@ -3,7 +3,7 @@
 #
 # Exports:
 #   ROOT                  FigCraft source and asset root
-#   WORKSPACE_ROOT        Mindmap Cargo workspace root
+#   WORKSPACE_ROOT        Afterburn Cargo workspace root
 #   VERSION               [workspace.package] version from Cargo.toml (override: FIGCRAFT_VERSION)
 #   DIST                  output directory for release artifacts (default: $ROOT/dist/release)
 #   FIGCRAFT_BUILD_SHA    git commit baked into the binaries (apps/figcraft/build.rs)

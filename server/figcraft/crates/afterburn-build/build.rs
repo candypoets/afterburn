@@ -24,7 +24,7 @@ fn collect(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), Box<dyn Error>> 
 
 fn main() -> Result<(), Box<dyn Error>> {
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").ok_or("missing manifest directory")?);
-    let root = manifest.ancestors().find(|path| path.join("service/src/node_main.rs").is_file()).ok_or("missing canonical Mindmap workspace")?;
+    let root = manifest.ancestors().find(|path| path.join("service/src/node_main.rs").is_file()).ok_or("missing canonical Afterburn workspace")?;
     let mut files = Vec::new();
     for relative in [
         "Cargo.toml",
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "rust-toolchain.toml",
         "service/Cargo.toml",
         "service/src",
-        "skills/mindmap",
+        "skills/afterburn",
         "server/figcraft/crates",
         "server/figcraft/apps",
     ] {
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     files.sort();
     let mut digest = Sha256::new();
-    digest.update(b"mindmap-source-v1\0");
+    digest.update(b"afterburn-source-v1\0");
     for path in files {
         let relative = path.strip_prefix(root)?.to_str().ok_or("source path is not UTF-8")?.replace('\\', "/");
         let bytes = std::fs::read(&path)?;
@@ -51,6 +51,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         digest.update((bytes.len() as u64).to_le_bytes());
         digest.update(&bytes);
     }
-    println!("cargo:rustc-env=MINDMAP_BUILD_ID={:x}", digest.finalize());
+    println!("cargo:rustc-env=AFTERBURN_BUILD_ID={:x}", digest.finalize());
     Ok(())
 }

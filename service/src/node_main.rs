@@ -1,4 +1,4 @@
-//! The per-machine Mindmap node. Repositories own designs; this process owns live sessions.
+//! The per-machine Afterburn node. Repositories own designs; this process owns live sessions.
 
 mod agent;
 mod agent_tools;
@@ -23,7 +23,7 @@ use std::net::TcpStream;
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("mindmap-node: {error}");
+        eprintln!("afterburn-node: {error}");
         std::process::exit(1);
     }
 }
@@ -33,7 +33,7 @@ fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let address = option(&args, "--bind")
         .or_else(|| option(&args, "--address"))
-        .or_else(|| std::env::var("MINDMAP_NODE").ok())
+        .or_else(|| std::env::var("AFTERBURN_NODE").ok())
         .unwrap_or_else(|| "127.0.0.1:47822".into());
     match args.first().map(String::as_str).unwrap_or("help") {
         "serve" => node::serve(&address),
@@ -57,21 +57,21 @@ fn run() -> Result<()> {
         "build-info" => {
             println!(
                 "{}",
-                json!({"build_id":mindmap_build::BUILD_ID,"version":mindmap_build::VERSION,"protocol":node::PROTOCOL})
+                json!({"build_id":afterburn_build::BUILD_ID,"version":afterburn_build::VERSION,"protocol":node::PROTOCOL})
             );
             Ok(())
         }
         "--version" | "version" => {
             println!(
-                "mindmap-node {} protocol {} build {}",
+                "afterburn-node {} protocol {} build {}",
                 env!("CARGO_PKG_VERSION"),
                 node::PROTOCOL,
-                mindmap_build::BUILD_ID
+                afterburn_build::BUILD_ID
             );
             Ok(())
         }
         "help" | "--help" | "-h" => {
-            println!("mindmap-node serve [--bind 127.0.0.1:47822]\nmindmap-node request '<JSON>' [--address HOST:PORT]\nmindmap-node mcp [--path WORKTREE] [--address HOST:PORT]\n\nOne node per machine; remote clients use one SSH tunnel to its loopback socket.\nRequest methods: hello, host.status, host.ensure, workspaces, workspace.create, workspace.focus, open, init, send, diff, sync, sync_status, sync.prepare, sync.finish, session.inspect, session.command, session.save, merge.plan, merge.apply.\nHerdr installation requires host.ensure with install_herdr:true. Designs live in .mindmap/map.figcraft; no owner link or server key is needed.");
+            println!("afterburn-node serve [--bind 127.0.0.1:47822]\nafterburn-node request '<JSON>' [--address HOST:PORT]\nafterburn-node mcp [--path WORKTREE] [--address HOST:PORT]\n\nOne node per machine; remote clients use one SSH tunnel to its loopback socket.\nRequest methods: hello, host.status, host.ensure, workspaces, workspace.create, workspace.focus, open, init, send, diff, sync, sync_status, sync.prepare, sync.finish, session.inspect, session.command, session.save, merge.plan, merge.apply.\nHerdr installation requires host.ensure with install_herdr:true. Designs live in .afterburn/map.figcraft; no owner link or server key is needed.");
             Ok(())
         }
         command => Err(Error::new(format!("unknown command {command:?}"))),
@@ -168,7 +168,7 @@ fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
         let Some(id) = value.get("id") else { continue };
         let result = match value["method"].as_str().unwrap_or("") {
             "initialize" => {
-                json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"mindmap-node","version":env!("CARGO_PKG_VERSION")}})
+                json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"afterburn-node","version":env!("CARGO_PKG_VERSION")}})
             }
             "ping" => json!({}),
             "tools/list" => json!({"tools":[

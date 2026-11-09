@@ -1,4 +1,4 @@
-//! What an agent needs before Init can ask it for a map: the mindmap skill and the node's MCP
+//! What an agent needs before Init can ask it for a map: the afterburn skill and the node's MCP
 //! server, installed for each agent CLI on this machine.
 //!
 //! The skill ships inside the node, so it is always the version the node speaks. The MCP entry
@@ -13,13 +13,13 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
-/// The skill, compiled in from `skills/mindmap/SKILL.md` (part of the build id; Mac deploys copy it).
-const SKILL: &str = include_str!("../../skills/mindmap/SKILL.md");
+/// The skill, compiled in from `skills/afterburn/SKILL.md` (part of the build id; Mac deploys copy it).
+const SKILL: &str = include_str!("../../skills/afterburn/SKILL.md");
 
 /// The MCP server's name in each CLI's configuration.
-const SERVER: &str = "mindmap";
+const SERVER: &str = "afterburn";
 
-/// The address `mindmap-node` reaches without `--address`.
+/// The address `afterburn-node` reaches without `--address`.
 const DEFAULT_ADDRESS: &str = "127.0.0.1:47822";
 
 /// The agent CLIs whose skill and MCP setup the node manages, and where each reads its skills.
@@ -59,7 +59,7 @@ fn mcp_command(address: &str) -> Result<Vec<String>> {
     Ok(command)
 }
 
-/// Whether `kind` has an MCP entry named `mindmap` that runs exactly `command`.
+/// Whether `kind` has an MCP entry named `afterburn` that runs exactly `command`.
 fn mcp_registered(home: &Path, kind: &str, command: &[String]) -> bool {
     match kind {
         "claude" => std::fs::read_to_string(home.join(".claude.json"))
@@ -87,7 +87,7 @@ fn mcp_registered(home: &Path, kind: &str, command: &[String]) -> bool {
     }
 }
 
-/// The `[mcp_servers.mindmap]` table names this command and these args.
+/// The `[mcp_servers.afterburn]` table names this command and these args.
 fn codex_registered(config: &str, command: &[String]) -> bool {
     let header = format!("[mcp_servers.{SERVER}]");
     let Some(start) = config.find(&header) else {
@@ -147,7 +147,7 @@ pub fn ensure(address: &str) -> Result<Vec<String>> {
     Ok(before)
 }
 
-/// Replace `kind`'s `mindmap` MCP entry with `command`, through the CLI's own `mcp` commands.
+/// Replace `kind`'s `afterburn` MCP entry with `command`, through the CLI's own `mcp` commands.
 fn register(kind: &str, command: &[String]) -> Result<()> {
     let scope: &[&str] = if kind == "claude" {
         &["-s", "user"]
@@ -183,14 +183,14 @@ mod tests {
 
     #[test]
     fn the_skill_is_compiled_in() {
-        assert!(SKILL.starts_with("---\nname: mindmap"));
+        assert!(SKILL.starts_with("---\nname: afterburn"));
     }
 
     /// Runs the real `claude` and `codex` CLIs against a scratch HOME.
     #[test]
     #[ignore = "runs the installed agent CLIs"]
     fn ensure_installs_what_missing_reports_into_a_fresh_home() {
-        let home = std::env::temp_dir().join(format!("mindmap-tools-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("afterburn-tools-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         std::env::set_var("HOME", &home);
         let before = missing(DEFAULT_ADDRESS);
@@ -210,14 +210,14 @@ mod tests {
 
     #[test]
     fn a_codex_entry_must_run_this_binary() {
-        let command = vec!["/opt/mindmap-node".to_owned(), "mcp".to_owned()];
-        let ok = "[other]\nx = 1\n\n[mcp_servers.mindmap]\ncommand = \"/opt/mindmap-node\"\nargs = [\"mcp\"]\n\n[mcp_servers.else]\nargs = []\n";
+        let command = vec!["/opt/afterburn-node".to_owned(), "mcp".to_owned()];
+        let ok = "[other]\nx = 1\n\n[mcp_servers.afterburn]\ncommand = \"/opt/afterburn-node\"\nargs = [\"mcp\"]\n\n[mcp_servers.else]\nargs = []\n";
         assert!(codex_registered(ok, &command));
         let moved = ok.replace("/opt/", "/old/");
         assert!(!codex_registered(&moved, &command), "an older binary");
         assert!(!codex_registered("[mcp_servers.else]\n", &command));
         let addressed = vec![
-            "/opt/mindmap-node".to_owned(),
+            "/opt/afterburn-node".to_owned(),
             "mcp".to_owned(),
             "--address".to_owned(),
             "127.0.0.1:1".to_owned(),

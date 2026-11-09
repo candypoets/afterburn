@@ -1,5 +1,5 @@
 //! The map client's native menu bar (design: `Widget Menu bar` and `Menu bar states` on the
-//! Mindmap page): the menus, their items, separators and shortcuts, without any platform code.
+//! Afterburn page): the menus, their items, separators and shortcuts, without any platform code.
 //! macOS builds it with AppKit (`apps/figcraft/src/mac_menu.rs`); this model is what tests check.
 //!
 //! Each item is a command id from the map catalog ([`crate::map_action_catalog`]), the registry
@@ -126,9 +126,9 @@ impl Native {
     /// The item's title, as the design writes it.
     pub fn label(self) -> &'static str {
         match self {
-            Native::About => "About Mindmap",
-            Native::Hide => "Hide Mindmap",
-            Native::Quit => "Quit Mindmap",
+            Native::About => "About Afterburn",
+            Native::Hide => "Hide Afterburn",
+            Native::Quit => "Quit Afterburn",
             Native::Minimize => "Minimize",
             Native::Zoom => "Zoom",
             Native::BringAllToFront => "Bring All to Front",
@@ -171,7 +171,7 @@ fn titled(id: &'static str, label: &'static str) -> Entry {
 pub fn menus() -> Vec<Menu> {
     vec![
         Menu {
-            title: "Mindmap",
+            title: "Afterburn",
             role: Role::App,
             entries: vec![
                 Entry::Native(Native::About),

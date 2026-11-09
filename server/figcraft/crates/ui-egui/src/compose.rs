@@ -2337,7 +2337,7 @@ mod tests {
             pane: pane.into(),
             kind: "codex".into(),
             tab: tab.map(str::to_owned),
-            title: Some("mindmap | Ready | Sync backend mindmap | main".into()),
+            title: Some("afterburn | Ready | Sync backend afterburn | main".into()),
             ..workspaces::AgentDetail::default()
         };
         let targets = agent_menu::targets_of(vec![detail("w1:p1", Some("small brain")), detail("w1:p4", None)], &[]);

@@ -73,7 +73,7 @@ pub struct WorkspaceView {
     pub tabs: Option<u64>,
     /// Number of panes.
     pub panes: Option<u64>,
-    /// The last Mindmap-Sync commit on the checked-out branch, when the workspace has a map.
+    /// The last Afterburn-Sync commit on the checked-out branch, when the workspace has a map.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<LastSync>,
 }

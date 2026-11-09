@@ -120,8 +120,8 @@ fn workspace() -> Workspace {
 #[test]
 fn inventory_keeps_legacy_shape_and_uses_checkout_then_focused_shell_cwd() {
     let fixture = Fixture::new();
-    fs::create_dir_all(fixture.0.join(".mindmap")).unwrap();
-    fs::write(fixture.0.join(".mindmap/map.figcraft"), b"presence only").unwrap();
+    fs::create_dir_all(fixture.0.join(".afterburn")).unwrap();
+    fs::write(fixture.0.join(".afterburn/map.figcraft"), b"presence only").unwrap();
     let panes = [
         pane(Some("/unfocused"), false),
         pane(fixture.0.to_str(), true),

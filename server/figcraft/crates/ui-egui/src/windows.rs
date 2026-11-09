@@ -140,8 +140,8 @@ impl FigApp {
     pub fn title(&self) -> String {
         let shown = self.session.ds().ok().filter(|d| self.shows(d.uid));
         if crate::map_mode() {
-            // A project window: `mindmap — main` (its tab: `mindmap · main`).
-            return crate::window_tabs::window_title(self, shown.filter(|_| !self.ui.home).map(|d| d.uid)).unwrap_or_else(|| "Mindmap".to_string());
+            // A project window: `afterburn — main` (its tab: `afterburn · main`).
+            return crate::window_tabs::window_title(self, shown.filter(|_| !self.ui.home).map(|d| d.uid)).unwrap_or_else(|| "Afterburn".to_string());
         }
         title_of(shown)
     }
@@ -314,7 +314,7 @@ pub fn list(app: &FigApp) -> Value {
                 "id": id,
                 "main": id == 0,
                 "title": if crate::map_mode() {
-                    crate::window_tabs::window_title(app, shown.map(|d| d.uid)).unwrap_or_else(|| "Mindmap".to_string())
+                    crate::window_tabs::window_title(app, shown.map(|d| d.uid)).unwrap_or_else(|| "Afterburn".to_string())
                 } else {
                     title_of(shown)
                 },
@@ -458,7 +458,7 @@ pub(crate) fn repaint_others(app: &FigApp, ctx: &Context) {
 pub(crate) fn show(app: &FigApp, ctx: &Context) {
     for w in &app.windows.list {
         let title = if crate::map_mode() {
-            crate::window_tabs::window_title(app, w.active.filter(|_| !w.pane.ui.home)).unwrap_or_else(|| "Mindmap".to_string())
+            crate::window_tabs::window_title(app, w.active.filter(|_| !w.pane.ui.home)).unwrap_or_else(|| "Afterburn".to_string())
         } else {
             title_of(app.session.docs.iter().find(|d| Some(d.uid) == w.active))
         };

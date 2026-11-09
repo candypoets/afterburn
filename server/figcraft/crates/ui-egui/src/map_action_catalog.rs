@@ -18,7 +18,7 @@ macro_rules! action {
 }
 
 pub const ACTIONS: &[Action] = &[
-    action!("map.actions", "Actions palette", "Workspaces + app", "Shift+Cmd+P", "Ctrl+Shift+P", "App: search and run Mindmap actions."),
+    action!("map.actions", "Actions palette", "Workspaces + app", "Shift+Cmd+P", "Ctrl+Shift+P", "App: search and run Afterburn actions."),
     action!("map.help", "Keyboard shortcuts", "Workspaces + app", "Ctrl+Shift+?", "Ctrl+Shift+?", "App: show shortcuts and their scope."),
     action!("map.search", "Search this map", "Workspaces + app", "Cmd+F", "Ctrl+F", "Map: find card text and names; open a result."),
     action!(
@@ -88,7 +88,7 @@ pub const ACTIONS: &[Action] = &[
         "Pages + navigation",
         "Shift+F10",
         "Shift+F10",
-        "Canvas: open the selected card's Mindmap context menu."
+        "Canvas: open the selected card's Afterburn context menu."
     ),
     action!("map.zoomIn", "Zoom in", "Canvas + zoom", "Shift+Cmd+=", "Ctrl+Shift+=", "Canvas: increase zoom."),
     action!("map.zoomOut", "Zoom out", "Canvas + zoom", "Cmd+-", "Ctrl+-", "Canvas: decrease zoom."),
@@ -226,7 +226,7 @@ pub const ACTIONS: &[Action] = &[
         "Workspaces + app",
         "",
         "",
-        "App: look for a new Mindmap release; install the app and its node together."
+        "App: look for a new Afterburn release; install the app and its node together."
     ),
     action!(
         "map.switchWorkspace",

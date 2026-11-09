@@ -29,7 +29,7 @@ fn cargo() -> Command {
     cmd
 }
 
-/// FigCraft's source/assets remain under server/figcraft in the Mindmap workspace.
+/// FigCraft's source/assets remain under server/figcraft in the Afterburn workspace.
 fn root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().map(|p| p.to_path_buf()).unwrap_or_default()
 }

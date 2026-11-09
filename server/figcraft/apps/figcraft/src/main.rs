@@ -7,7 +7,7 @@
 //! `{"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":0,"y":0,"width":100,"height":100}}}`
 //! → `{"id":1,"ok":true,"result":{…}}`. Methods: `figcraft_ui_egui::control`.
 //!
-//! `--node <address>` (or `MINDMAP_NODE`) selects the map client's node (loopback or ssh:alias); launched with `open --args`, the Mac app gets it this way.
+//! `--node <address>` (or `AFTERBURN_NODE`) selects the map client's node (loopback or ssh:alias); launched with `open --args`, the Mac app gets it this way.
 //!
 //! `--automation-read-root <dir>` / `--automation-write-root <dir>` (each repeatable) confine the
 //! files the window and the control channel read and write (`figcraft_engine::file_access`); the
@@ -161,7 +161,7 @@ fn main() -> eframe::Result {
     }
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!(
-            "Mindmap {}{}",
+            "Afterburn {}{}",
             env!("CARGO_PKG_VERSION"),
             option_env!("FIGCRAFT_BUILD_SHA").filter(|s| !s.is_empty()).map(|s| format!(" ({s})")).unwrap_or_default()
         );
@@ -184,7 +184,7 @@ fn main() -> eframe::Result {
         (true, _) => None,
         (false, Ok(r)) => Some(Arc::new(r)),
         (false, Err(e)) => {
-            eprintln!("Mindmap: {e}");
+            eprintln!("Afterburn: {e}");
             std::process::exit(2);
         }
     };
@@ -265,8 +265,8 @@ fn main() -> eframe::Result {
     // The app id is the Wayland app_id and the X11 window class on Linux: the desktop entry's name
     // and StartupWMClass (FreeBSD's package matches the binary's name instead).
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("Mindmap")
-        .with_app_id("dev.mindmap.client")
+        .with_title("Afterburn")
+        .with_app_id("dev.afterburn.client")
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([800.0, 500.0])
         .with_drag_and_drop(true);
@@ -294,7 +294,7 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
     let result = eframe::run_native(
-        "Mindmap",
+        "Afterburn",
         options,
         Box::new(move |_cc| {
             #[cfg(target_os = "linux")]

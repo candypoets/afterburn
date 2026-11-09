@@ -24,7 +24,7 @@ pub fn migrate(address: &str, records: &Path) -> Result<()> {
                 "workspace {workspace} checkout is unavailable"
             )));
         }
-        if root.join(".mindmap/map.figcraft").exists() {
+        if root.join(".afterburn/map.figcraft").exists() {
             println!(
                 "{}",
                 json!({"workspace":workspace,"state":"kept_existing_repository_design"})
@@ -59,7 +59,7 @@ pub fn migrate(address: &str, records: &Path) -> Result<()> {
             return Err(Error::new("migration target must be a Git worktree"));
         }
         let cache = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
-            .join("mindmap-migration");
+            .join("afterburn-migration");
         std::fs::create_dir_all(&cache)?;
         let export = cache.join("legacy.figcraft");
         client
@@ -81,7 +81,7 @@ pub fn migrate(address: &str, records: &Path) -> Result<()> {
         }
         let (before, _) =
             figcraft_format::load_file(&export).map_err(|e| Error::new(e.to_string()))?;
-        let (after, _) = figcraft_format::load_file(&root.join(".mindmap/map.figcraft"))
+        let (after, _) = figcraft_format::load_file(&root.join(".afterburn/map.figcraft"))
             .map_err(|e| Error::new(e.to_string()))?;
         let drift = figcraft_collab::diff(&figcraft_collab::Replica::new(before), &after)
             .map_err(|e| Error::new(e.to_string()))?;

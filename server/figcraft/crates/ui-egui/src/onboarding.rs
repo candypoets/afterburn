@@ -1,7 +1,7 @@
 //! The first-run onboarding flow: Welcome, Herdr found, Setup check, No project yet.
 //!
 //! Shown in map mode when the app has never been set up. The design is `Onboarding section` on
-//! the Mindmap page: a title bar with the wordmark, then one centred column per screen.
+//! the Afterburn page: a title bar with the wordmark, then one centred column per screen.
 //!
 //! Which screen comes first follows the design's rule: when Herdr already runs workspaces the
 //! tour is skipped and "Herdr found" lists them; otherwise Welcome. The setup check asks the
@@ -54,7 +54,7 @@ impl Step {
     }
 }
 
-/// The Mindmap node line of the setup check.
+/// The Afterburn node line of the setup check.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum NodeCheck {
     #[default]
@@ -352,11 +352,11 @@ fn first_run(done: bool, saved_hosts: bool, live: bool) -> bool {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Persistence: a small marker next to the saved hosts (`~/.config/mindmap/onboarding.json`).
+// Persistence: a small marker next to the saved hosts (`~/.config/afterburn/onboarding.json`).
 
 #[cfg(not(target_arch = "wasm32"))]
 fn config_path(file: &str) -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join("mindmap").join(file))
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config").join("afterburn").join(file))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -655,7 +655,7 @@ fn titlebar(app: &FigApp, ui: &mut Ui, p: &Pal, screen: Rect) -> Rect {
         crate::titlebar_drag(ui, bar);
     }
     let x = bar.min.x + if inset { crate::MAC_BUTTONS_W } else { 16.0 };
-    ui.painter().text(pos2(x, bar.center().y), Align2::LEFT_CENTER, "Mindmap", semibold(13.0), p.text);
+    ui.painter().text(pos2(x, bar.center().y), Align2::LEFT_CENTER, "Afterburn", semibold(13.0), p.text);
     bar
 }
 
@@ -669,14 +669,14 @@ fn at(ui: &mut Ui, origin: f32, y: f32) {
 
 fn welcome(ui: &mut Ui, p: &Pal, origin: f32) -> Option<Action> {
     at(ui, origin, 0.0);
-    eyebrow(ui, p, "WELCOME TO MINDMAP");
+    eyebrow(ui, p, "WELCOME TO AFTERBURN");
     at(ui, origin, 22.0);
     title(ui, p, "Edit the design. Agents write the code.", 34.0);
     at(ui, origin, 66.0);
     body(
         ui,
         p,
-        "Mindmap is a code editor built on a live map of your project. You change the map and comment on it; agents change the code; Sync keeps the two in step.",
+        "Afterburn is a code editor built on a live map of your project. You change the map and comment on it; agents change the code; Sync keeps the two in step.",
         14.0,
         21.0,
     );
@@ -708,7 +708,7 @@ fn welcome(ui: &mut Ui, p: &Pal, origin: f32) -> Option<Action> {
 
 fn herdr_found(app: &FigApp, ui: &mut Ui, p: &Pal, origin: f32) -> Option<Action> {
     at(ui, origin, 0.0);
-    eyebrow(ui, p, "WELCOME TO MINDMAP  ·  HERDR FOUND ON THIS MAC");
+    eyebrow(ui, p, "WELCOME TO AFTERBURN  ·  HERDR FOUND ON THIS MAC");
     at(ui, origin, 27.0);
     title(ui, p, "Your Herdr workspaces are ready to open", 28.0);
     at(ui, origin, 62.0);
@@ -717,7 +717,7 @@ fn herdr_found(app: &FigApp, ui: &mut Ui, p: &Pal, origin: f32) -> Option<Action
         ui,
         p,
         &format!(
-            "Mindmap found Herdr running with {count} workspace{}. Open one to see its map; the agents already running there stay where they are.",
+            "Afterburn found Herdr running with {count} workspace{}. Open one to see its map; the agents already running there stay where they are.",
             if count == 1 { "" } else { "s" }
         ),
         13.5,
@@ -815,7 +815,7 @@ fn no_project(app: &mut FigApp, ui: &mut Ui, p: &Pal, body_rect: Rect) -> Option
             body(
                 ui,
                 p,
-                "A project is a folder of code. Mindmap keeps its map inside the folder, in .mindmap/, so it travels with the code and its branches.",
+                "A project is a folder of code. Afterburn keeps its map inside the folder, in .afterburn/, so it travels with the code and its branches.",
                 13.5,
                 20.0,
             );
@@ -824,7 +824,7 @@ fn no_project(app: &mut FigApp, ui: &mut Ui, p: &Pal, body_rect: Rect) -> Option
                 (
                     "01",
                     "Open a folder on this Mac",
-                    "Pick a repository. Mindmap creates the project and asks an agent to draw the first map.",
+                    "Pick a repository. Afterburn creates the project and asks an agent to draw the first map.",
                     Action::NewProject,
                 ),
                 ("02", "Connect a machine", "Projects on a server reached with SSH, such as a build box.", Action::AddMachine),
@@ -859,12 +859,12 @@ fn checklist(app: &FigApp, ui: &mut Ui, p: &Pal) -> Option<Action> {
     let o = &app.onboarding;
     let address = crate::workspaces::service_addr();
     let node = match &o.node {
-        NodeCheck::Checking => Item::new(Mark::Pending, "Mindmap node", "Checking…".into()),
-        NodeCheck::Running => Item::new(Mark::Ok, "Mindmap node", format!("Running on this Mac · {address}")),
+        NodeCheck::Checking => Item::new(Mark::Pending, "Afterburn node", "Checking…".into()),
+        NodeCheck::Running => Item::new(Mark::Ok, "Afterburn node", format!("Running on this Mac · {address}")),
         NodeCheck::Failed(error) => Item {
             danger: true,
             button: Some(("Retry", Action::CheckAgain, false)),
-            ..Item::new(Mark::Failed, "Mindmap node", format!("Not reachable: {error}"))
+            ..Item::new(Mark::Failed, "Afterburn node", format!("Not reachable: {error}"))
         },
     };
     let herdr_title = "Herdr, which runs your agents";
@@ -875,7 +875,7 @@ fn checklist(app: &FigApp, ui: &mut Ui, p: &Pal) -> Option<Action> {
         HerdrCheck::Missing => Item {
             attention: true,
             button: Some(("Install Herdr", Action::InstallHerdr, true)),
-            ..Item::new(Mark::Missing, herdr_title, "Not installed. Mindmap installs it for you, as you, with no admin rights.".into())
+            ..Item::new(Mark::Missing, herdr_title, "Not installed. Afterburn installs it for you, as you, with no admin rights.".into())
         },
         HerdrCheck::Starting => Item::new(Mark::Pending, herdr_title, "Installed · starting it…".into()),
         HerdrCheck::Installing => Item::new(Mark::Pending, herdr_title, "Installing… about 20 seconds".into()),
@@ -956,7 +956,7 @@ fn agents_item(app: &FigApp) -> Item {
         return Item {
             attention: true,
             button: Some(("Check again", Action::CheckAgain, false)),
-            ..Item::new(Mark::Missing, "AI agents", "None found. Install claude, codex or kimi; Mindmap never installs agents.".into())
+            ..Item::new(Mark::Missing, "AI agents", "None found. Install claude, codex or kimi; Afterburn never installs agents.".into())
         };
     }
     let mut detail = format!("Found {}.", and_list(&found));
@@ -1310,7 +1310,7 @@ mod tests {
 
     fn temp_dir(tag: &str) -> Option<PathBuf> {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|time| time.as_nanos()).unwrap_or_default();
-        let path = std::env::temp_dir().join(format!("mindmap-onboarding-{tag}-{}-{nanos}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("afterburn-onboarding-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&path).ok().map(|_| path)
     }
 
@@ -1526,8 +1526,8 @@ mod tests {
             (
                 Step::Welcome,
                 &[
-                    "Mindmap",
-                    "WELCOME TO MINDMAP",
+                    "Afterburn",
+                    "WELCOME TO AFTERBURN",
                     "Edit the design. Agents write the code.",
                     "The map",
                     "Agents",
@@ -1543,7 +1543,7 @@ mod tests {
                 &[
                     "STEP 1 OF 2  ·  THIS MAC",
                     "Getting this Mac ready",
-                    "Mindmap node",
+                    "Afterburn node",
                     "Running on this Mac",
                     "Herdr, which runs your agents",
                     "Install Herdr",

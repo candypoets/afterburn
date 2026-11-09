@@ -27,7 +27,7 @@ fn menu(title: &str) -> Menu {
 fn the_bar_is_app_file_workspace_edit_view_window_help() {
     let bar = menus();
     let titles: Vec<_> = bar.iter().map(|m| m.title).collect();
-    assert_eq!(titles, ["Mindmap", "File", "Workspace", "Edit", "View", "Window", "Help"]);
+    assert_eq!(titles, ["Afterburn", "File", "Workspace", "Edit", "View", "Window", "Help"]);
     let roles: Vec<_> = bar.iter().map(|m| m.role).collect();
     assert_eq!(roles, [Role::App, Role::Plain, Role::Plain, Role::Plain, Role::Plain, Role::Window, Role::Help]);
 }
@@ -35,7 +35,7 @@ fn the_bar_is_app_file_workspace_edit_view_window_help() {
 #[test]
 fn app_window_and_help_menus_follow_the_design() {
     assert_eq!(
-        menu("Mindmap").entries,
+        menu("Afterburn").entries,
         [
             Entry::Native(Native::About),
             Entry::Item { id: CHECK_FOR_UPDATES, label: "Check for Updates…" },

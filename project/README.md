@@ -9,7 +9,7 @@ detail of the project service.
 | Object | Holds |
 |---|---|
 | **Project** | id, name, folder (`/path` or `host:/path`), host, document id on our server, the edit token, the Herdr workspace id, created/updated. |
-| **Agent host** | the machine that owns the folder and runs the private Herdr session (one per Mindmap server). |
+| **Agent host** | the machine that owns the folder and runs the private Herdr session (one per Afterburn server). |
 | **Document** | the FigCraft file on the 0.7.0 fork; pages = the map's altitudes. |
 
 Stored server-side (a small JSON store or SQLite under `server/data/projects/`), never shown to the
@@ -73,7 +73,7 @@ the commands but the panel is still hidden.
 
 A **workspace is the project**, not the other way round:
 
-- Mindmap lists the Herdr workspaces on the host(s) — label, repo/worktree path, agents and their
+- Afterburn lists the Herdr workspaces on the host(s) — label, repo/worktree path, agents and their
   states — including workspaces that have no map yet.
 - A map is attached to a workspace by identity (`host` + worktree path + branch), not by a link.
   No map → the canvas shows an empty state with **Init map**.
@@ -91,13 +91,13 @@ The agent does not push hundreds of nodes into FigCraft. It writes a **model** a
 renders it, the same way `design/build_map.py` does today:
 
 ```
-agent: read repo → write .mindmap/model.json → run `mindmap render` → look at the PNG → iterate
+agent: read repo → write .afterburn/model.json → run `afterburn render` → look at the PNG → iterate
 service: validate sources → build components/anchors/pages → publish to the project document
 ```
 
 That keeps quality (components, slots, anchors, layout) in code we control, keeps layer ids out of
 the agent's context, and makes the map updatable: a code change means re-reading the repo, editing
-the model, and rendering again. The **mindmap skill** (`skills/mindmap/SKILL.md`) is the contract
+the model, and rendering again. The **Afterburn skill** (`skills/afterburn/SKILL.md`) is the contract
 for that model: what an area is, how many, what a source must be, when to open a detail page.
 
 ## Init flow, end to end
@@ -106,7 +106,7 @@ for that model: what an area is, how many, what a source must be, when to open a
 workspace selected (Herdr) ─▶ project record (host + worktree + branch)
   ├─ document exists?  no → publish an empty page (the empty state lives in the canvas)
   ├─ agent in the workspace?  no → start the first detected CLI
-  └─ prompt: "use the mindmap skill on this repo; model at .mindmap/model.json;
+  └─ prompt: "use the afterburn skill on this repo; model at .afterburn/model.json;
              render into project <id>; stop when the overview has 6–12 sourced areas"
 ```
 
@@ -120,20 +120,20 @@ The Python reference was scaffolding and has been removed. The product service i
 [`service/`](../service/README.md), a Rust binary (serde only, std TCP), and the client browser is
 in `client-workspaces.patch`.
 
-- **Workspace inventory**: `mindmap-service list` reads Herdr's workspaces and agents and marks
+- **Workspace inventory**: `afterburn-service list` reads Herdr's workspaces and agents and marks
   each `map` / `empty` / `none`.
-- **In-app browser**: Mindmap opens on the workspace list (map mode): rows with label, path,
+- **In-app browser**: Afterburn opens on the workspace list (map mode): rows with label, path,
   agents and MAP/EMPTY/INIT badges; the right pane opens the map or starts Init.
-- **No links**: `mindmap-service` publishes the skeleton, keeps the join link in
+- **No links**: `afterburn-service` publishes the skeleton, keeps the join link in
   `service/data/projects.json`, and the app joins the returned link through `collab.join`. The
   human never sees it.
 - **Init with a choice**: publishes the document, then prompts a chosen agent already in the
   workspace (`pane:<id>`) or starts a chosen CLI (`kind:<codex>`) in a background tab, accepts a
-  first-run folder-trust prompt, and submits the mindmap skill prompt. Auto still picks the
+  first-run folder-trust prompt, and submits the afterburn skill prompt. Auto still picks the
   focused/non-blocked agent or the first installed CLI. Verified on disposable worktrees: a fresh
   codex accepted trust; kimi started by kind; the same kimi prompted by pane.
-- **Adopt**: `mindmap-service adopt <workspace> <file>` publishes an already-built map and marks
-  the workspace ready. Used to give `mindmap` (wX) its first map: "Mindmap · mindmap" with the
+- **Adopt**: `afterburn-service adopt <workspace> <file>` publishes an already-built map and marks
+  the workspace ready. Used to give `afterburn` (wX) its first map: "Afterburn · afterburn" with the
   System, Screens and Product pages (including this picker design).
 - **TCP API** on `47821`: `health`, `workspaces`, `open`, `init` (newline JSON).
 
@@ -142,7 +142,7 @@ a send carries the selected card's subtree (or the whole page with no selection)
 drafts leave the bar on success, and a page-level comment works with no selection. The Sync
 widget/backend is in progress; the model renderer, remote hosts, auth and a systemd unit remain. Still to come:
 persisting drafts as shared FigCraft comment threads, the model renderer (the agent prompt points
-at `mindmap render`, which does not exist yet), remote hosts, auth on the service socket, and a
+at `afterburn render`, which does not exist yet), remote hosts, auth on the service socket, and a
 systemd unit.
 
 ### What the sync diff can really know
@@ -165,7 +165,7 @@ agent's job, using both lists. The UI numbers are derived from snapshots and git
 rename/delete and document edits arrive live). The design *pipeline* was the problem: importing a
 multi-page `.figcraft` into a live document flattens its nodes onto the current page and appends
 empty pages, so an importer replacing all pages can leave the viewer on an empty page. The
-workspace map is now one page (`Mindmap`) with the latest design, and that is the page to keep
+workspace map is now one page (`Afterburn`) with the latest design, and that is the page to keep
 updating in place; a page-aware sync is the next tooling fix.
 
 ### Comments and sync (designed)

@@ -6,19 +6,21 @@ struct Repo(PathBuf);
 impl Repo {
     fn new() -> Self {
         let id = NEXT_FREEZE.fetch_add(1, Ordering::Relaxed);
-        let path =
-            std::env::temp_dir().join(format!("mindmap-node-git-test-{}-{id}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "afterburn-node-git-test-{}-{id}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).unwrap();
         git(&path, &["init", "-b", "main"]).unwrap();
         git(&path, &["config", "user.email", "test@example.invalid"]).unwrap();
-        git(&path, &["config", "user.name", "Mindmap test"]).unwrap();
+        git(&path, &["config", "user.name", "Afterburn test"]).unwrap();
         git(&path, &["config", "commit.gpgsign", "false"]).unwrap();
         git(&path, &["config", "core.hooksPath", "/dev/null"]).unwrap();
         Self(path)
     }
 
     fn write_design(&self, doc: &Document) {
-        fs::create_dir_all(self.0.join(".mindmap")).unwrap();
+        fs::create_dir_all(self.0.join(".afterburn")).unwrap();
         fs::write(
             self.0.join(DESIGN_PATH),
             figcraft_format::save_bytes(doc, None).unwrap(),
@@ -34,7 +36,7 @@ impl Repo {
     }
 
     fn marker(&self, doc: &Document, scope: &str) -> String {
-        self.commit(doc, &format!("Sync design\n\nMindmap-Sync: {scope}"))
+        self.commit(doc, &format!("Sync design\n\nAfterburn-Sync: {scope}"))
     }
 }
 
@@ -63,7 +65,7 @@ fn baselines_are_reachable_scoped_and_actual_trailers() {
     let selected = repo.marker(&doc, &format!("page={}", page.0));
     repo.commit(
         &doc,
-        "Body only\n\nMindmap-Sync: all\nThis is prose, not a trailer block.\n\nA final paragraph.",
+        "Body only\n\nAfterburn-Sync: all\nThis is prose, not a trailer block.\n\nA final paragraph.",
     );
     repo.marker(&doc, "implemented some things");
     assert_eq!(
@@ -107,7 +109,7 @@ fn property_diff_scope_pagination_and_code_paths_are_complete() {
     doc.get_mut(subpage)
         .unwrap()
         .plugin_data
-        .insert("mindmap.parent_page".into(), page.0.to_string());
+        .insert("afterburn.parent_page".into(), page.0.to_string());
     let child = doc
         .create(subpage, NodeKind::Rectangle, "Child", 0.0, 0.0, 5.0, 5.0)
         .unwrap();
@@ -172,7 +174,7 @@ fn frozen_native_bytes_survive_save_load_and_do_not_touch_live_file() {
         figcraft_format::save_bytes(&loaded, None).unwrap(),
         "document gate may reserialize without changing the frozen blob"
     );
-    assert!(!frozen.snapshot.starts_with(repo.0.join(".mindmap")));
+    assert!(!frozen.snapshot.starts_with(repo.0.join(".afterburn")));
     assert!(fs::metadata(&frozen.snapshot)
         .unwrap()
         .permissions()
@@ -254,7 +256,7 @@ fn wrong_blob_wrong_job_extra_scope_and_branch_switch_are_rejected() {
     assert!(verify_completed(&repo.0, &frozen, &wrong).is_err());
     let wrong = repo.commit(
         &original,
-        &format!("Too broad\n\n{}\nMindmap-Sync: all", frozen.trailer),
+        &format!("Too broad\n\n{}\nAfterburn-Sync: all", frozen.trailer),
     );
     assert!(verify_completed(&repo.0, &frozen, &wrong).is_err());
     let correct = repo.commit(&original, &format!("Correct\n\n{}", frozen.trailer));
@@ -440,7 +442,7 @@ fn linked_worktree_owns_its_frozen_cache_and_rejects_cross_worktree_job() {
     let frozen = freeze(&linked, &doc, Some(page.0)).unwrap();
     assert!(frozen
         .snapshot
-        .starts_with(repo.0.join(".git/worktrees/linked/mindmap-sync")));
+        .starts_with(repo.0.join(".git/worktrees/linked/afterburn-sync")));
     assert!(prepare_commit(&repo.0, &frozen).is_err());
     assert!(prepare_commit(&linked, &frozen).is_ok());
 }
@@ -552,7 +554,7 @@ fn explanations_and_fixes_move_the_design_baseline_but_only_syncs_move_the_code_
     let frozen = freeze_as(&repo.0, &doc, Some(page.0), "explain").unwrap();
     assert!(frozen.trailer.ends_with(" explain"), "{}", frozen.trailer);
     assert_eq!(
-        trailer_scope(frozen.trailer.strip_prefix("Mindmap-Sync: ").unwrap()),
+        trailer_scope(frozen.trailer.strip_prefix("Afterburn-Sync: ").unwrap()),
         Some(Some(page.0))
     );
     assert!(freeze_as(&repo.0, &doc, Some(page.0), "proposal").is_err());
@@ -647,7 +649,7 @@ fn cards_design() -> (Document, NodeId, [NodeId; 5]) {
         )
         .unwrap();
     let tab = doc
-        .create(tabs, NodeKind::Frame, "tab Mindmap", 0.0, 0.0, 50.0, 20.0)
+        .create(tabs, NodeKind::Frame, "tab Afterburn", 0.0, 0.0, 50.0, 20.0)
         .unwrap();
     let underline = doc
         .create(tab, NodeKind::Rectangle, "underline", 0.0, 18.0, 50.0, 2.0)
@@ -717,7 +719,7 @@ fn waiting_layers_group_under_their_cards_with_counts_and_fields() {
     assert_eq!(
         layers,
         [
-            ("tab Mindmap", "changed"),
+            ("tab Afterburn", "changed"),
             ("underline", "changed"),
             ("separator", "added")
         ]
@@ -883,7 +885,7 @@ fn marking_a_pages_mode_never_waits_for_a_sync() {
     live.node_mut(page)
         .unwrap()
         .plugin_data
-        .insert("mindmap.parent_page".into(), "7".into());
+        .insert("afterburn.parent_page".into(), "7".into());
     let drift = design_drift(&repo.0, &live, Some(page.0)).unwrap();
     assert!(!drift.is_empty());
 }

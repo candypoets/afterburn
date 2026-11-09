@@ -19,7 +19,7 @@ use crate::theme::{regular, semibold};
 use crate::workspaces;
 
 /// The node metadata key that points a component at its detail page.
-pub const DETAIL_PAGE_KEY: &str = "mindmap.detail_page";
+pub const DETAIL_PAGE_KEY: &str = "afterburn.detail_page";
 
 #[allow(non_snake_case)]
 fn PANEL() -> Color32 {

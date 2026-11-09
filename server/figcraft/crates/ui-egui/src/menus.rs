@@ -1,5 +1,5 @@
 //! The main menu (from the engine's menu catalog), the canvas/layer context menu and the
-//! Actions palette (⌘K / ⌘/; Mindmap's is ⇧⌘P, see `map_palette`).
+//! Actions palette (⌘K / ⌘/; Afterburn's is ⇧⌘P, see `map_palette`).
 
 use egui::{Align2, Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use figcraft_engine::catalog::{MENU, SEP};
@@ -993,7 +993,7 @@ const PALETTE_H: f32 = 450.0;
 
 /// Open the Actions palette afresh (empty search, All tab, first row highlighted), or close it.
 pub fn set_palette(ui: &mut crate::UiState, open: bool) {
-    // Mindmap's palette opens on its actions (`>` typed); ⌘P opens it on the pages.
+    // Afterburn's palette opens on its actions (`>` typed); ⌘P opens it on the pages.
     ui.palette = open.then(|| if crate::map_mode() { ">".to_string() } else { String::new() });
     ui.palette_box = crate::map_palette::State::default();
     // A colour theme previewed in the box goes with it.
@@ -1499,7 +1499,7 @@ pub(crate) fn activate_map_action(app: &mut FigApp, ctx: &egui::Context, id: &st
     ran
 }
 
-/// Mindmap's Actions palette ([`crate::map_palette`]).
+/// Afterburn's Actions palette ([`crate::map_palette`]).
 pub(crate) fn map_palette(app: &mut FigApp, ctx: &egui::Context) {
     crate::map_palette::show(app, ctx);
 }

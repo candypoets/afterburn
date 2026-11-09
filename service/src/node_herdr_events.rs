@@ -44,7 +44,7 @@ impl HerdrMonitor {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = Arc::clone(&stop);
         let worker = thread::Builder::new()
-            .name("mindmap-herdr-events".into())
+            .name("afterburn-herdr-events".into())
             .spawn(move || {
                 let mut backoff = Duration::from_millis(250);
                 let mut disconnected = false;

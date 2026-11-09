@@ -51,7 +51,7 @@ def build(path: Path):
     doc.nodes[str(page)]["height"] = 1920
     doc.place(page, R(W, 1920, fill=BG, name="Page bounds"), 0, 0)
     doc.place(page, t("Backend code", 36, DISP, "Regular", TEXT, x=0, y=0, name="title"), 64, 48)
-    doc.place(page, t("The Rust service and document engine behind Mindmap. Frontend, UI and the "
+    doc.place(page, t("The Rust service and document engine behind Afterburn. Frontend, UI and the "
                       "Python authoring tooling are deliberately out of scope.", 13, SANS, "Regular",
                       MUTED, x=0, y=0, w=1760, lh=19, name="lede"), 64, 100)
     doc.place(page, F("Boundary",
@@ -105,7 +105,7 @@ def build(path: Path):
                           ("crates/ui-egui · client-src · apps/figcraft-web", "Excluded frontend/UI; listed here only to mark the boundary.")]), X2, Y[2])
     doc.place(page, card(64, 1460, "07 · PAGE TREE & SUBPAGES", "A page tree stored in document metadata",
                          "Subpages are not a new document format. They are page nodes with two plugin-data keys; the client derives the tree, breadcrumb and centered switcher, and deletes orphaned subtrees.",
-                         [("pluginData: mindmap.parent_page · mindmap.source_node", "A subpage points at its parent page and the component that owns it; root pages have no parent key."),
+                         [("pluginData: afterburn.parent_page · afterburn.source_node", "A subpage points at its parent page and the component that owns it; root pages have no parent key."),
                           ("src/page_tree.rs (client)", "Builds roots/children/path, draws the centered switcher (focused main tab, right-click tab, ⌘⇧O / Ctrl+Shift+O) and the breadcrumb is read-only."),
                           ("src/new_page.rs · src/page_delete.rs", "A component page is created as a subpage, then linked on the source card; deleting a page deletes its descendants and clears links."),
                           ("maintenance + server context", "An orphan subpage whose source card or parent page is gone is removed; the new-page context names the source page and component.")],

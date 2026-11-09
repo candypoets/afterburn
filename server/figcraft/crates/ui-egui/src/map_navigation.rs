@@ -283,8 +283,10 @@ fn copy_text(doc: &Document, page: NodeId, selection: &[NodeId]) -> String {
             // Sources are usually text layers, already included below. Preserve explicit source
             // metadata too, without leaking unrelated plugin state into the clipboard.
             for (key, value) in &node.plugin_data {
-                if matches!(key.as_str(), "source" | "context" | "mindmap.source" | "mindmap.source_path" | "mindmap.source_url" | "mindmap.context")
-                    && !value.trim().is_empty()
+                if matches!(
+                    key.as_str(),
+                    "source" | "context" | "afterburn.source" | "afterburn.source_path" | "afterburn.source_url" | "afterburn.context"
+                ) && !value.trim().is_empty()
                 {
                     block.push_str(&format!("\n{key}: {value}"));
                 }
@@ -625,14 +627,14 @@ mod tests {
         let page = doc.pages[0];
         let first = card(&mut doc, page, "Evidence", "Readable body", 0.0, 0.0);
         let child = doc.node(first).unwrap().children[0];
-        doc.node_mut(first).unwrap().plugin_data.insert("mindmap.source".into(), "src/example.rs:12".into());
+        doc.node_mut(first).unwrap().plugin_data.insert("afterburn.source".into(), "src/example.rs:12".into());
         let hidden = doc.create(first, NodeKind::Text(TextData::new("Hidden body")), "hidden", 0.0, 0.0, 80.0, 20.0).unwrap();
         doc.node_mut(hidden).unwrap().visible = false;
         let text = copy_text(&doc, page, &[child, first, child]);
         assert_eq!(text.matches("Readable body").count(), 1);
         assert!(text.contains("Map: Example map"));
         assert!(text.contains(&format!("Page: {}", doc.node(page).unwrap().name)));
-        assert!(text.contains("mindmap.source: src/example.rs:12"));
+        assert!(text.contains("afterburn.source: src/example.rs:12"));
         assert!(!text.contains("Hidden body"));
         assert!(copy_text(&doc, page, &[]).is_empty());
     }

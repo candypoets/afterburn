@@ -106,7 +106,7 @@ fn the_widget_names_the_page_scope_and_the_code_it_covers() {
     app.sync.open = true;
     app.sync.diff = Some(DiffReply {
         ok: true,
-        code: CodeDiff { scope: vec!["service/src".to_string(), "skills/mindmap".to_string()], ..CodeDiff::default() },
+        code: CodeDiff { scope: vec!["service/src".to_string(), "skills/afterburn".to_string()], ..CodeDiff::default() },
         ..DiffReply::default()
     });
     run(&mut app);
@@ -115,9 +115,9 @@ fn the_widget_names_the_page_scope_and_the_code_it_covers() {
         assert!(shown.iter().any(|text| text == needle), "{needle:?} not in {shown:?}");
     }
     // The code folds to one line; unfolded, it names the paths it is limited to.
-    assert!(!shown.iter().any(|text| text == "in service/src, skills/mindmap"), "{shown:?}");
+    assert!(!shown.iter().any(|text| text == "in service/src, skills/afterburn"), "{shown:?}");
     app.sync.code_open = true;
     run(&mut app);
     let shown = run(&mut app);
-    assert!(shown.iter().any(|text| text == "in service/src, skills/mindmap"), "{shown:?}");
+    assert!(shown.iter().any(|text| text == "in service/src, skills/afterburn"), "{shown:?}");
 }

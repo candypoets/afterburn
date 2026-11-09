@@ -157,7 +157,7 @@ pub(crate) fn show_map(app: &mut FigApp, ctx: &Context) {
     let platform = crate::shortcuts::platform();
     let width = (ctx.content_rect().width() - 48.0).clamp(280.0, 900.0);
     let mut open = true;
-    crate::dialogs::window("Mindmap keyboard shortcuts", ctx).open(&mut open).show(ctx, |ui| {
+    crate::dialogs::window("Afterburn keyboard shortcuts", ctx).open(&mut open).show(ctx, |ui| {
         ui.set_width(width);
         ui.label("Canvas keys pause while typing. Text fields keep their own Copy, Cut, Paste, Select all and Undo/Redo.");
         ui.label("Escape closes the active popup or interaction first; on the canvas it clears selection and keeps drafts.");

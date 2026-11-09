@@ -21,7 +21,7 @@ use figcraft_collab::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub const PROTOCOL: u64 = mindmap_build::PROTOCOL;
+pub const PROTOCOL: u64 = afterburn_build::PROTOCOL;
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 const MAX_CONNECTIONS: usize = 128;
 
@@ -98,14 +98,14 @@ pub fn serve(address: &str) -> Result<()> {
     });
     let background = node.clone();
     thread::Builder::new()
-        .name("mindmap-node-maintenance".into())
+        .name("afterburn-node-maintenance".into())
         .spawn(move || loop {
             if let Err(error) = background.maintain() {
-                eprintln!("mindmap-node: {error}");
+                eprintln!("afterburn-node: {error}");
             }
             thread::sleep(Duration::from_millis(250));
         })?;
-    println!("mindmap-node protocol {PROTOCOL} on {bound}");
+    println!("afterburn-node protocol {PROTOCOL} on {bound}");
     for incoming in listener.incoming() {
         let stream = incoming?;
         if lock(&node.connections)?.len() >= MAX_CONNECTIONS {
@@ -114,10 +114,10 @@ pub fn serve(address: &str) -> Result<()> {
         let connection = node.next_connection.fetch_add(1, Ordering::Relaxed);
         let shared = node.clone();
         thread::Builder::new()
-            .name(format!("mindmap-node-client-{connection}"))
+            .name(format!("afterburn-node-client-{connection}"))
             .spawn(move || {
                 if let Err(error) = handle_connection(stream, connection, &shared) {
-                    eprintln!("mindmap-node connection {connection}: {error}");
+                    eprintln!("afterburn-node connection {connection}: {error}");
                 }
                 let _ = shared.disconnect(connection);
             })?;
@@ -139,7 +139,7 @@ fn handle_connection(stream: TcpStream, id: u64, node: &Arc<Node>) -> Result<()>
         },
     );
     thread::Builder::new()
-        .name(format!("mindmap-node-writer-{id}"))
+        .name(format!("afterburn-node-writer-{id}"))
         .spawn(move || {
             for value in rx {
                 let bytes = match serde_json::to_vec(&value) {
@@ -196,7 +196,7 @@ fn handle_connection(stream: TcpStream, id: u64, node: &Arc<Node>) -> Result<()>
         if slow {
             let shared = node.clone();
             thread::Builder::new()
-                .name(format!("mindmap-node-job-{id}"))
+                .name(format!("afterburn-node-job-{id}"))
                 .spawn(move || shared.dispatch(id, request))?;
         } else {
             node.dispatch(id, request);
@@ -317,7 +317,7 @@ impl Node {
                 Path::new(path)
                     .file_name()
                     .and_then(|s| s.to_str())
-                    .unwrap_or("Mindmap")
+                    .unwrap_or("Afterburn")
                     .to_string(),
                 PathBuf::from(path),
             )
@@ -339,7 +339,7 @@ impl Node {
         }
         self.restore_jobs(&metadata.id, &metadata.worktree)?;
         Ok(
-            json!({"session":metadata.id,"path":metadata.worktree,"branch":metadata.branch,"name":format!("Mindmap · {label}"),"workspace":workspace,"label":label}),
+            json!({"session":metadata.id,"path":metadata.worktree,"branch":metadata.branch,"name":format!("Afterburn · {label}"),"workspace":workspace,"label":label}),
         )
     }
 
@@ -353,7 +353,7 @@ impl Node {
         }
         match method {
             "hello" | "health" => Ok(
-                json!({"service":"mindmap-node","protocol":PROTOCOL,"version_name":env!("CARGO_PKG_VERSION"),"build_id":mindmap_build::BUILD_ID,"pid":std::process::id(),"capabilities":["collaboration","git-sync","merge","herdr-events"]}),
+                json!({"service":"afterburn-node","protocol":PROTOCOL,"version_name":env!("CARGO_PKG_VERSION"),"build_id":afterburn_build::BUILD_ID,"pid":std::process::id(),"capabilities":["collaboration","git-sync","merge","herdr-events"]}),
             ),
             "host.status" => Ok(serde_json::to_value(self.herdr.status()?)?),
             "upgrade.prepare" => self.prepare_upgrade(),
@@ -897,7 +897,7 @@ impl Node {
             frozen,
             session,
             workspace: req["workspace"].as_str().unwrap_or("").into(),
-            // The agent's pane (sent by `mindmap-node` from Herdr's environment) lets the agent
+            // The agent's pane (sent by `afterburn-node` from Herdr's environment) lets the agent
             // watcher cancel the record when that agent exits.
             agent: json!({"kind":"external","state":"existing","prompted":false,"pane":req["pane"].as_str().unwrap_or("")}),
             state: "in_flight".into(),
@@ -922,9 +922,9 @@ impl Node {
             self.broadcast(json!({"version":PROTOCOL,"event":"job","job":job_view(job)}));
         }
         let commit = if kind == "fix" {
-            "Commit your code together with the staged .mindmap/map.figcraft"
+            "Commit your code together with the staged .afterburn/map.figcraft"
         } else {
-            "Commit only the staged .mindmap/map.figcraft"
+            "Commit only the staged .afterburn/map.figcraft"
         };
         Ok(json!({
             "job": id,
@@ -1047,7 +1047,7 @@ impl Node {
             return Ok(());
         }
         let root =
-            PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()).join("mindmap-sync");
+            PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()).join("afterburn-sync");
         fn visit(path: &Path, out: &mut Vec<PathBuf>, depth: usize) {
             if depth == 0 {
                 return;
@@ -1140,7 +1140,7 @@ impl Node {
         node_git::stage_design(&metadata.worktree)?;
         match node_git::commit_merge(
             &metadata.worktree,
-            "Merge branch design and code through Mindmap",
+            "Merge branch design and code through Afterburn",
         ) {
             Ok(commit) => {
                 let outgoing = lock(&self.docs)?.finish_sync(&session)?;
@@ -1180,7 +1180,7 @@ impl Node {
             &metadata.worktree,
             req["message"]
                 .as_str()
-                .unwrap_or("Merge branch design and code through Mindmap"),
+                .unwrap_or("Merge branch design and code through Afterburn"),
         )?;
         let outgoing = lock(&self.docs)?.finish_sync(&session)?;
         self.deliver(&session, outgoing);

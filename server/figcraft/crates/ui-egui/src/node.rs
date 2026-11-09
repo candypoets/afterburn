@@ -1,4 +1,4 @@
-//! Mindmap's versioned node transport. One persistent socket (and at most one SSH tunnel)
+//! Afterburn's versioned node transport. One persistent socket (and at most one SSH tunnel)
 //! per machine carries requests, replies and collaboration events. No invite credentials.
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -13,7 +13,7 @@ use figcraft_engine::live::{Event, HostOptions, LiveLink, Presence, Resume, Role
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const PROTOCOL: u64 = mindmap_build::PROTOCOL;
+pub const PROTOCOL: u64 = afterburn_build::PROTOCOL;
 const MAX_FRAME: u64 = 16 * 1024 * 1024;
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 type Reply = Result<Value, String>;
@@ -71,21 +71,21 @@ impl Pool {
         let slot = {
             let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
             if self.closed.load(Ordering::SeqCst) {
-                return Err("The Mindmap node transport has shut down.".into());
+                return Err("The Afterburn node transport has shut down.".into());
             }
             slots.entry(address.into()).or_insert_with(|| Arc::new(Mutex::new(None))).clone()
         };
         let mut slot = slot.lock().unwrap_or_else(|p| p.into_inner());
         if self.closed.load(Ordering::SeqCst) {
-            return Err("The Mindmap node transport has shut down.".into());
+            return Err("The Afterburn node transport has shut down.".into());
         }
         if let Some(connection) = slot.as_ref().filter(|c| !c.closed.load(Ordering::SeqCst)) {
             return Ok(connection.clone());
         }
         let connection = Connection::open(address)?;
         if self.closed.load(Ordering::SeqCst) {
-            connection.fail("The Mindmap node transport has shut down.");
-            return Err("The Mindmap node transport has shut down.".into());
+            connection.fail("The Afterburn node transport has shut down.");
+            return Err("The Afterburn node transport has shut down.".into());
         }
         *slot = Some(connection.clone());
         Ok(connection)
@@ -109,7 +109,7 @@ impl Pool {
         for (_, slot) in slots {
             // Wait for any in-flight connection setup before terminating its tunnel.
             if let Some(connection) = slot.lock().unwrap_or_else(|p| p.into_inner()).take() {
-                connection.fail("The Mindmap node transport has shut down.");
+                connection.fail("The Afterburn node transport has shut down.");
             }
         }
     }
@@ -134,10 +134,10 @@ pub struct SessionRef {
 impl SessionRef {
     /// Private engine routing marker; contains no authority or secret.
     pub fn route(&self) -> String {
-        format!("mindmap-node://{}", serde_json::to_string(self).unwrap_or_default())
+        format!("afterburn-node://{}", serde_json::to_string(self).unwrap_or_default())
     }
     pub fn parse(route: &str) -> Result<Self, String> {
-        let body = route.strip_prefix("mindmap-node://").ok_or("Open a workspace from a Mindmap node.")?;
+        let body = route.strip_prefix("afterburn-node://").ok_or("Open a workspace from an Afterburn node.")?;
         let target: Self = serde_json::from_str(body).map_err(|_| "Invalid node session reference.")?;
         if target.address.is_empty() || target.session.is_empty() {
             return Err("Incomplete node session reference.".into());
@@ -199,19 +199,19 @@ impl Connection {
             events: Mutex::new(BTreeMap::new()),
         });
         let weak = Arc::downgrade(&connection);
-        std::thread::Builder::new().name("mindmap-node-reader".into()).spawn(move || read_frames(reader, weak)).map_err(|e| e.to_string())?;
-        let hello = connection.request(json!({"method":"hello","build_id":mindmap_build::BUILD_ID}), Duration::from_secs(10))?;
+        std::thread::Builder::new().name("afterburn-node-reader".into()).spawn(move || read_frames(reader, weak)).map_err(|e| e.to_string())?;
+        let hello = connection.request(json!({"method":"hello","build_id":afterburn_build::BUILD_ID}), Duration::from_secs(10))?;
         if hello.get("protocol").and_then(Value::as_u64) != Some(PROTOCOL) || hello.get("ok") != Some(&Value::Bool(true)) {
-            connection.fail("Incompatible Mindmap node protocol; update the app and node together.");
-            return Err("Incompatible Mindmap node protocol; update the app and node together.".into());
+            connection.fail("Incompatible Afterburn node protocol; update the app and node together.");
+            return Err("Incompatible Afterburn node protocol; update the app and node together.".into());
         }
-        let reason = if hello.get("build_id").and_then(Value::as_str) == Some(mindmap_build::BUILD_ID) {
+        let reason = if hello.get("build_id").and_then(Value::as_str) == Some(afterburn_build::BUILD_ID) {
             None
         } else {
             Some(format!(
                 "Update node: this host runs build {}; this app requires {}. Select the host and approve Update node before opening workspaces.",
                 hello.get("build_id").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("unknown (legacy node)"),
-                mindmap_build::BUILD_ID
+                afterburn_build::BUILD_ID
             ))
         };
         let _ = connection.update_required.set(reason);
@@ -310,7 +310,7 @@ fn read_frames(stream: TcpStream, weak: Weak<Connection>) {
             return;
         };
         if value.get("version").and_then(Value::as_u64) != Some(PROTOCOL) {
-            connection.fail("Incompatible Mindmap node protocol; update the app and node together.");
+            connection.fail("Incompatible Afterburn node protocol; update the app and node together.");
             return;
         }
         if value.get("event").is_some() {
@@ -413,7 +413,7 @@ fn accepted(reply: Value) -> Reply {
     }
 }
 
-/// Engine live transport used only by Mindmap mode. All methods return immediately to the UI;
+/// Engine live transport used only by Afterburn mode. All methods return immediately to the UI;
 /// one ordered worker per session multiplexes its messages through the machine connection.
 pub struct NodeLiveLink {
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -434,7 +434,7 @@ impl LiveLink for NodeLiveLink {
         false
     }
     fn host(&mut self, _: SessionId, _: HostOptions) -> Result<SessionInfo, String> {
-        Err("Mindmap nodes host workspaces; open a workspace first.".into())
+        Err("Afterburn nodes host workspaces; open a workspace first.".into())
     }
     fn join(&mut self, id: SessionId, route: &str, name: &str) -> Result<(), String> {
         self.join_resuming(id, route, name, None)
@@ -448,7 +448,7 @@ impl LiveLink for NodeLiveLink {
         let name = name.to_string();
         let recovery = register_recovery(&target);
         std::thread::Builder::new()
-            .name("mindmap-node-session".into())
+            .name("afterburn-node-session".into())
             .spawn(move || {
                 let emit = |event| {
                     let _ = events.send((id, event));
@@ -611,7 +611,7 @@ fn session_connection(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if heartbeat.elapsed() >= Duration::from_secs(15) {
-            accepted(connection.request(json!({"method":"hello","build_id":mindmap_build::BUILD_ID}), Duration::from_secs(5))?)?;
+            accepted(connection.request(json!({"method":"hello","build_id":afterburn_build::BUILD_ID}), Duration::from_secs(5))?)?;
             heartbeat = Instant::now();
         }
     }

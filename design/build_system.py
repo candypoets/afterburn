@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the mindmap system (client, server, private Herdr) and publish it to the 0.7.0 fork."""
+"""Draw the afterburn system (client, server, private Herdr) and publish it to the 0.7.0 fork."""
 from __future__ import annotations
 
 import json
@@ -48,7 +48,7 @@ def lane(title, body, w, ink):
 
 
 def build():
-    doc = Doc("Mindmap · system")
+    doc = Doc("Afterburn · system")
     page = doc.page("System", bg=K.BG)
 
     doc.place(page, K.heading(
@@ -84,10 +84,10 @@ def build():
     host = Vt(
         label("HOST · BEFREE"),
         _t("One service", 30, K.DISP, "Regular", K.FG, w=940 - 48, name="title", lh=34),
-        _t("mindmap-server 0.7.0 — the document plane and the agent host in the same process.",
+        _t("afterburn-server 0.7.0 — the document plane and the agent host in the same process.",
            14, K.SANS, "Regular", K.MUTED, w=940 - 48, name="body", lh=20),
         H(doc_lane, run_lane, gap=16, name="Lanes"),
-        _t("unit: server/systemd/mindmap-server.service · today the document plane is "
+        _t("unit: server/systemd/afterburn-server.service · today the document plane is "
            "containerised and the host unit adds the agents", 11, K.MONO, "Regular", K.FG,
            w=940 - 48, name="facts", lh=18),
         gap=10, pad=24, w=940, fill=K.SURF, stroke=K.BORDER, radius=14, name="Host")
@@ -117,7 +117,7 @@ def build():
 def main():
     doc, page = build()
     OUT.mkdir(exist_ok=True)
-    raw = OUT / "mindmap-system.raw.figcraft"
+    raw = OUT / "afterburn-system.raw.figcraft"
     doc.save(str(raw))
 
     build_map.CLI = CLI
@@ -135,13 +135,13 @@ def main():
             s.tool("batch", commands=plan[i:i + 400], label="relayout")
         # place below the measured heading
         h = s.tool("get_node", id=page, depth=0)  # noqa: F841 (page exists)
-        out = OUT / "mindmap-system.figcraft"
+        out = OUT / "afterburn-system.figcraft"
         s.tool("save_file", path=str(out))
         print("wrote", out)
 
         if "--no-publish" in sys.argv:
             return
-        s.cmd("collab.publish", server=f"{ADDRESS}/?key={KEY}", name="Mindmap · system")
+        s.cmd("collab.publish", server=f"{ADDRESS}/?key={KEY}", name="Afterburn · system")
         for _ in range(30):
             time.sleep(0.5)
             peers = s.cmd("collab.peers")
@@ -194,7 +194,7 @@ def _appbar(w, workspace, tabs=None, active=None, people=("JL", "MK", "TS"), liv
             x=w - 320, y=14, w=(90 if sync_label == "Sync" else 104), h=28, fill=UI_ACCENT, radius=6))
     return F(
         "App bar",
-        _ui("Mindmap", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=19),
+        _ui("Afterburn", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=19),
         _ui(f"Herdr  /  {workspace}", 11, K.MONO, "Regular", UI_MUTED, name="crumb", x=112, y=22),
         *tab_nodes,
         *sync_node,
@@ -207,9 +207,9 @@ def _appbar(w, workspace, tabs=None, active=None, people=("JL", "MK", "TS"), liv
         x=0, y=0, w=w, h=56, fill=UI_PANEL, effects=[shadow(y=2, blur=10, color="#00000010")])
 
 def _workspace_header(w, section="Workspaces", address="100.104.9.15:47821"):
-    """The browser's real header: Mindmap · Workspaces, Refresh, address."""
+    """The browser's real header: Afterburn · Workspaces, Refresh, address."""
     return F("Header",
-             _ui("Mindmap", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=18),
+             _ui("Afterburn", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=18),
              _ui("·  " + section, 11, K.MONO, "Regular", UI_MUTED, name="section", x=100, y=21),
              _ui(address, 9.5, K.MONO, "Regular", UI_MUTED, name="address", x=w - 310, y=22),
              F("Refresh", _ui("Refresh", 10.5, K.SANS, "Medium", UI_TEXT, name="r", x=12, y=6),
@@ -304,11 +304,11 @@ def _screen_workspaces():
         _workspace_header(980),
         F("Sidebar", x=0, y=56, w=300, h=564, fill=UI_PANEL, stroke=UI_BORDER),
         _ui("WORKSPACES · BEFREE", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=16, y=72),
-        _ws_row(96, "mindmap", "/root/code/mindmap", 2, "MAP", selected=True),
+        _ws_row(96, "afterburn", "/root/code/mindmap", 2, "MAP", selected=True),
         _ws_row(162, "eisledger", "/root/code/eisledger", 1, "INIT"),
         _ws_row(228, "nuts-cash", "/root/code/nuts-cash", 0, "MAP"),
         _ui("SELECTED WORKSPACE", 9, K.MONO, "Medium", UI_MUTED, name="eyebrow", ls=3, x=328, y=84),
-        _ui("mindmap", 26, K.SANS, "Medium", UI_TEXT, name="title", x=328, y=102),
+        _ui("afterburn", 26, K.SANS, "Medium", UI_TEXT, name="title", x=328, y=102),
         _ui("/root/code/mindmap  ·  main  ·  2 agents working", 11, K.MONO, "Regular", UI_MUTED,
             name="meta", x=328, y=140),
         _ui("The map is attached to the workspace, not to a link. Open it, or ask the agents "
@@ -330,7 +330,7 @@ def _screen_empty():
         _workspace_header(980),
         F("Sidebar", x=0, y=56, w=300, h=564, fill=UI_PANEL, stroke=UI_BORDER),
         _ui("WORKSPACES · BEFREE", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=16, y=72),
-        _ws_row(96, "mindmap", "/root/code/mindmap", 3, "MAP"),
+        _ws_row(96, "afterburn", "/root/code/mindmap", 3, "MAP"),
         _ws_row(162, "eisledger", "/root/code/eisledger", 1, "EMPTY", selected=True),
         _ws_row(228, "nuts-cash", "/root/code/nuts-cash", 2, "MAP"),
         _ui("NO MAP YET", 9, K.MONO, "Medium", UI_ACCENT, name="eyebrow", ls=4, x=328, y=84),
@@ -486,7 +486,7 @@ def _screen_page():
         _ui("NO SELECTION  ·  THE WHOLE PAGE  ·  3 COMMENTS", 8.5, K.MONO, "Medium", UI_MUTED,
             name="whole", ls=2, x=24, y=400),
         _draft(24, 416, "Whole page  ·  all 3 comments", 330),
-        _composer(24, 486, 932, "Mindmap · whole page · 3 comments",
+        _composer(24, 486, 932, "Afterburn · whole page · 3 comments",
                   "These designs are outdated — remove all outdated design.", 3, send=True),
         _ui("No selection = the page and every comment on it. Esc or empty canvas cancels.", 9,
             K.MONO, "Regular", UI_MUTED, name="note", x=24, y=582))
@@ -496,7 +496,7 @@ def _screen_page():
 def _screen_agents():
     f = F("Agents modal", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _map_header(980, ["Mindmap"], "Mindmap", live=3, sync="7"),
+        _map_header(980, ["Afterburn"], "Afterburn", live=3, sync="7"),
         _canvas_card(24, 84, 1, "Canvas and layers", "One node tree holds the design.", "Overview", "doc/node.rs:3", w=280, h=130),
         _canvas_card(336, 84, 2, "Components", "A subtree with identity.", "Components", "components.rs:1", w=280, h=130),
         F("Agents modal",
@@ -535,7 +535,7 @@ def _screen_agents():
 def _screen_new_page():
     f = F("New page dialog", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _map_header(980, ["Mindmap"], "Mindmap", live=3, sync="7"),
+        _map_header(980, ["Afterburn"], "Afterburn", live=3, sync="7"),
         _canvas_card(24, 84, 1, "Canvas and layers", "One node tree holds the design.", "Overview", "doc/node.rs:3", w=280, h=130),
         _canvas_card(336, 84, 2, "Components", "A subtree with identity.", "Components", "components.rs:1", w=280, h=130),
         F("New page dialog",
@@ -575,7 +575,7 @@ def _screen_branches():
         _ui("WORKSPACES · BEFREE", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=16, y=72),
         _ws_row(96, "alzette", "/root/code/alzette", 1, "INIT"),
         _ws_row(162, "eisledger", "/root/code/eisledger", 1, "EMPTY", selected=True),
-        _ws_row(228, "mindmap", "/root/code/mindmap", 3, "MAP"),
+        _ws_row(228, "afterburn", "/root/code/mindmap", 3, "MAP"),
         _ws_row(294, "nutscash", "/root/code/nuts-cash", 2, "INIT"),
         _ws_row(360, "symphony", "/root/code/symphony", 0, "INIT"),
         _ui("SELECTED WORKSPACE", 9, K.MONO, "Medium", UI_MUTED, name="sel", ls=3, x=328, y=84),
@@ -605,14 +605,14 @@ def _screen_branches():
 def _screen_pane():
     f = F("Workspace pane", w=980, h=620, fill=UI_BG, stroke=UI_BORDER, radius=12, clip=True)
     f.add(
-        _map_header(980, ["Mindmap"], "Mindmap", live=3, sync="7"),
+        _map_header(980, ["Afterburn"], "Afterburn", live=3, sync="7"),
         F("Pane", x=0, y=44, w=300, h=576, fill=UI_PANEL),
         F("Pane edge", x=300, y=44, w=1, h=576, fill=UI_BORDER),
         _ui("WORKSPACES 6", 9, K.MONO, "Medium", UI_MUTED, name="label", ls=3, x=14, y=58),
         _ui("Refresh", 10, K.SANS, "Regular", UI_MUTED, name="refresh", x=238, y=58),
         _ws_row(76, "alzette", "/root/code/alzette", 1, "INIT"),
         _ws_row(140, "eisledger", "/root/code/eisledger", 1, "EMPTY"),
-        _ws_row(204, "mindmap", "/root/code/mindmap", 3, "MAP", selected=True),
+        _ws_row(204, "afterburn", "/root/code/mindmap", 3, "MAP", selected=True),
         _ws_row(268, "nutscash", "/root/code/nuts-cash", 2, "INIT"),
         _ws_row(332, "symphony", "/root/code/symphony", 0, "INIT"),
         _ws_row(460, "~", "/root", 2, "INIT"),
@@ -831,7 +831,7 @@ def _topbar(w, active="Overview", crumb="FigCraft  /  Components"):
         x += 18
     return F(
         "Top bar",
-        _ui("Mindmap", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=19),
+        _ui("Afterburn", 15, K.SANS, "Medium", UI_TEXT, name="wordmark", x=24, y=19),
         _ui(crumb, 11, K.MONO, "Regular", UI_MUTED, name="crumb", x=112, y=22),
         *tab_nodes,
         *avatars,

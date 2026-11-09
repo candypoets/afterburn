@@ -1,4 +1,4 @@
-//! Native window tabs (design: `Native window tabs` on the Mindmap page): several projects (a
+//! Native window tabs (design: `Native window tabs` on the Afterburn page): several projects (a
 //! workspace or a worktree, each a node map) open at once, each in a window of its own with its
 //! own sidebar, page tabs, canvas and Sync. macOS groups the windows as native window tabs (the
 //! desktop app's `mac_tabs`); elsewhere they are separate windows.
@@ -75,11 +75,11 @@ impl Project {
     }
 }
 
-/// The window's title (`mindmap — main`) and its tab's (`mindmap · main`); a project without a
+/// The window's title (`afterburn — main`) and its tab's (`afterburn · main`); a project without a
 /// branch is titled with its name alone.
 pub fn titles(name: &str, branch: &str) -> (String, String) {
     let (name, branch) = (name.trim(), branch.trim());
-    let name = if name.is_empty() { "Mindmap" } else { name };
+    let name = if name.is_empty() { "Afterburn" } else { name };
     if branch.is_empty() { (name.to_string(), name.to_string()) } else { (format!("{name} — {branch}"), format!("{name} · {branch}")) }
 }
 
@@ -168,7 +168,7 @@ pub fn native_titles(app: &FigApp) -> Vec<(String, String)> {
 pub fn set_tab_bars(app: &mut FigApp, ctx: &Context, tabbed: &[String]) {
     let shown = crate::windows::shown_maps(app);
     for (id, uid) in shown {
-        let title = window_title(app, uid).unwrap_or_else(|| "Mindmap".to_string());
+        let title = window_title(app, uid).unwrap_or_else(|| "Afterburn".to_string());
         let on = tabbed.contains(&title);
         if crate::windows::set_native_tab_bar(app, id, on) {
             ctx.request_repaint_of(crate::windows::viewport(id));
@@ -442,10 +442,10 @@ mod tests {
 
     #[test]
     fn titles_follow_the_design() {
-        assert_eq!(titles("mindmap", "main"), ("mindmap — main".to_string(), "mindmap · main".to_string()));
+        assert_eq!(titles("afterburn", "main"), ("afterburn — main".to_string(), "afterburn · main".to_string()));
         assert_eq!(titles("code", "feature/sync-pane").1, "code · feature/sync-pane");
         assert_eq!(titles(" accounting ", ""), ("accounting".to_string(), "accounting".to_string()));
-        assert_eq!(titles("", "").0, "Mindmap");
+        assert_eq!(titles("", "").0, "Afterburn");
     }
 
     #[test]

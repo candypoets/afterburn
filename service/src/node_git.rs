@@ -22,8 +22,8 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 
-pub const DESIGN_PATH: &str = ".mindmap/map.figcraft";
-const TRAILER: &str = "Mindmap-Sync";
+pub const DESIGN_PATH: &str = ".afterburn/map.figcraft";
+const TRAILER: &str = "Afterburn-Sync";
 /// What a record says about the map it commits. `sync`: the code now implements it. `explain`:
 /// it describes the code as it already is. `fix`: a bug fix, committed with its code.
 pub const KINDS: [&str; 3] = ["sync", "explain", "fix"];
@@ -220,7 +220,7 @@ fn commit_markers(path: &Path, commit: &str) -> Result<(String, Vec<String>)> {
         &[
             "show",
             "-s",
-            "--format=%cI%n%(trailers:only,key=Mindmap-Sync,valueonly,unfold=true,separator=%x1f)",
+            "--format=%cI%n%(trailers:only,key=Afterburn-Sync,valueonly,unfold=true,separator=%x1f)",
             commit,
         ],
     )?;
@@ -260,7 +260,7 @@ pub fn load_design(path: &Path, revision: &str) -> Result<Document> {
 pub fn load_design_bytes(path: &Path, revision: &str) -> Result<Vec<u8>> {
     let commit = resolve_commit(path, revision)?;
     let blob = design_blob(path, &commit)?
-        .ok_or_else(|| Error::new("commit has no .mindmap/map.figcraft"))?;
+        .ok_or_else(|| Error::new("commit has no .afterburn/map.figcraft"))?;
     git(path, &["cat-file", "blob", &blob])
 }
 
@@ -301,7 +301,7 @@ fn find_baseline(path: &Path, page: Option<u64>, sync_only: bool) -> Result<Opti
             "--topo-order",
             "--format=%H",
             "--regexp-ignore-case",
-            "--grep=^Mindmap-Sync:",
+            "--grep=^Afterburn-Sync:",
             &tip,
         ],
     )?;
@@ -353,7 +353,7 @@ fn scope_nodes(doc: &Document, page: Option<u64>) -> BTreeSet<NodeId> {
         for id in &doc.pages {
             let parent = doc
                 .node(*id)
-                .and_then(|n| n.plugin_data.get("mindmap.parent_page"))
+                .and_then(|n| n.plugin_data.get("afterburn.parent_page"))
                 .and_then(|s| s.parse::<u64>().ok());
             if parent.is_some_and(|p| pages.contains(&NodeId(p))) {
                 pages.insert(*id);
@@ -515,10 +515,10 @@ pub fn design_drift(path: &Path, live: &Document, page: Option<u64>) -> Result<D
     })
 }
 
-/// A page's mode (`mindmap.page_mode`: state of the art or exploration) says whether its design
+/// A page's mode (`afterburn.page_mode`: state of the art or exploration) says whether its design
 /// has been built, not what it designs: marking a page, or a build marking it built, never waits
 /// for a Sync.
-pub const PAGE_MODE_KEY: &str = "mindmap.page_mode";
+pub const PAGE_MODE_KEY: &str = "afterburn.page_mode";
 
 /// A change to a page's plugin data that only marks its mode.
 fn page_mode_only(change: &Change, old: &Document, live: &Document) -> bool {
@@ -538,7 +538,9 @@ fn page_mode_only(change: &Change, old: &Document, live: &Document) -> bool {
     }
     let others = |data| -> Vec<(&String, &String)> {
         let data: &BTreeMap<String, String> = data;
-        data.iter().filter(|(key, _)| key.as_str() != PAGE_MODE_KEY).collect()
+        data.iter()
+            .filter(|(key, _)| key.as_str() != PAGE_MODE_KEY)
+            .collect()
     };
     others(&was.plugin_data) == others(&now.plugin_data)
 }
@@ -820,7 +822,7 @@ fn code_diff(path: &Path, from: Option<&str>) -> Result<Value> {
             base,
             "--",
             ".",
-            ":(exclude,literal).mindmap/map.figcraft",
+            ":(exclude,literal).afterburn/map.figcraft",
         ],
     )?;
     let mut files = Vec::new();
@@ -904,8 +906,8 @@ pub fn freeze_as(
         std::process::id(),
         NEXT_FREEZE.fetch_add(1, Ordering::Relaxed)
     );
-    let cache =
-        PathBuf::from(git_text(&root, &["rev-parse", "--absolute-git-dir"])?).join("mindmap-sync");
+    let cache = PathBuf::from(git_text(&root, &["rev-parse", "--absolute-git-dir"])?)
+        .join("afterburn-sync");
     fs::create_dir_all(&cache)?;
     let snapshot = cache.join(format!("{id}.figcraft"));
     let bytes = figcraft_format::save_bytes(live, None)
@@ -1018,7 +1020,7 @@ pub fn verify_completed(path: &Path, frozen: &FrozenSync, revision: &str) -> Res
     let (at, markers) = commit_markers(&root, &commit)?;
     let expected = frozen
         .trailer
-        .strip_prefix("Mindmap-Sync: ")
+        .strip_prefix("Afterburn-Sync: ")
         .ok_or_else(|| Error::new("invalid frozen trailer"))?;
     if markers.len() != 1
         || markers.first().map(String::as_str) != Some(expected)
@@ -1081,7 +1083,7 @@ pub fn find_completed(path: &Path, frozen: &FrozenSync) -> Result<Option<Baselin
 fn requests_dir(root: &Path) -> Result<PathBuf> {
     Ok(
         PathBuf::from(git_text(root, &["rev-parse", "--absolute-git-dir"])?)
-            .join("mindmap-sync")
+            .join("afterburn-sync")
             .join("requests"),
     )
 }
@@ -1448,10 +1450,10 @@ pub fn commit_merge(path: &Path, message: &str) -> Result<String> {
     // A merge isn't a synchronization acknowledgment, even if its two parents had sync markers.
     if message
         .lines()
-        .any(|line| line.to_ascii_lowercase().starts_with("mindmap-sync:"))
+        .any(|line| line.to_ascii_lowercase().starts_with("afterburn-sync:"))
     {
         return Err(Error::new(
-            "merge commits must not claim a new Mindmap-Sync baseline",
+            "merge commits must not claim a new Afterburn-Sync baseline",
         ));
     }
     let before = head(&root)?.ok_or_else(|| Error::new("merge HEAD disappeared"))?;

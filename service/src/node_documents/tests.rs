@@ -7,7 +7,7 @@ impl Repo {
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "mindmap-documents-{}-{}",
+            "afterburn-documents-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -35,11 +35,11 @@ impl Repo {
         decode(&std::fs::read(self.0.join(DESIGN_PATH)).unwrap()).unwrap()
     }
     fn write(&self, doc: &Document) {
-        std::fs::create_dir_all(self.0.join(".mindmap")).unwrap();
+        std::fs::create_dir_all(self.0.join(".afterburn")).unwrap();
         atomic_write(&self.0.join(DESIGN_PATH), &encode(doc).unwrap()).unwrap();
     }
     fn commit(&self) {
-        self.git(&["add", ".mindmap/map.figcraft"]);
+        self.git(&["add", ".afterburn/map.figcraft"]);
         self.git(&["commit", "-qm", "design"]);
     }
 }
@@ -56,7 +56,7 @@ fn hello(name: &str) -> Hello {
         token: String::new(),
         name: name.into(),
         color: "#123456".into(),
-        client_version: "mindmap-node/1".into(),
+        client_version: "afterburn-node/1".into(),
         resume: None,
     }
 }
@@ -106,7 +106,9 @@ fn save_and_restart_preserve_unsaved_authority_and_peer_id_space() {
     manager.save(&meta.id).unwrap();
     assert_eq!(repo.disk().node(node).unwrap().name, "cached after save");
     assert_eq!(
-        std::fs::read_dir(repo.0.join(".mindmap")).unwrap().count(),
+        std::fs::read_dir(repo.0.join(".afterburn"))
+            .unwrap()
+            .count(),
         1
     );
 }
@@ -512,7 +514,7 @@ fn frozen_sync_gate_survives_restart_and_later_edits_remain_drift() {
     let committed = Command::new("git")
         .arg("-C")
         .arg(&repo.0)
-        .args(["show", "HEAD:.mindmap/map.figcraft"])
+        .args(["show", "HEAD:.afterburn/map.figcraft"])
         .output()
         .unwrap();
     assert_eq!(
@@ -549,7 +551,7 @@ fn canonical_paths_reuse_authority_and_missing_disk_is_not_silently_recreated() 
     let mut manager = NodeDocuments::new();
     let session = manager.open(&repo.0).unwrap().id;
     manager.save(&session).unwrap();
-    assert_eq!(manager.open(repo.0.join(".mindmap")).unwrap().id, session);
+    assert_eq!(manager.open(repo.0.join(".afterburn")).unwrap().id, session);
     std::fs::remove_file(repo.0.join(DESIGN_PATH)).unwrap();
     assert!(manager.save(&session).is_err());
     assert!(!repo.0.join(DESIGN_PATH).exists());

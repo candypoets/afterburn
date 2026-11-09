@@ -1,4 +1,4 @@
-//! Mindmap's palette, driven through egui headless: ⌘P goes to a page by name or path, `>` turns
+//! Afterburn's palette, driven through egui headless: ⌘P goes to a page by name or path, `>` turns
 //! it into the actions and ⌫ back, ⌃⌘O lists the workspaces (a workspace with several worktrees
 //! asks which one first), ⌘, flips settings, and the status bar's agent count lists the agents.
 use crate::layers_drag_tests::Ui;
@@ -194,7 +194,7 @@ fn ws(id: &str, label: &str, repo: &str, branch: &str, map: &str, worktree: bool
 
 fn with_workspaces(u: &mut Ui) {
     u.app.ws.rows = vec![
-        ws("w1", "mindmap", "/root/code/mindmap", "main", "map", false),
+        ws("w1", "afterburn", "/root/code/mindmap", "main", "map", false),
         ws("w2", "checkout", "/root/code/mindmap", "feature/checkout", "map", true),
         ws("w3", "accounting", "/root/code/accounting", "main", "map", false),
         ws("w4", "code", "/root/code/code", "main", "map", false),
@@ -223,7 +223,7 @@ fn ctrl_cmd_o_lists_workspaces_and_one_with_worktrees_asks_which() {
         let tag = |text: &str, check: bool, more: bool| Right::Tag { text: text.into(), ink: crate::map_palette::Ink::Teal, check, more };
         assert_eq!(rows[0], ("accounting", tag("MAP", false, false)));
         assert_eq!(rows[1], ("code", tag("3 WORKTREES", false, true)));
-        assert_eq!(rows[2], ("mindmap", tag("OPEN", true, false)));
+        assert_eq!(rows[2], ("afterburn", tag("OPEN", true, false)));
         assert_eq!(rows[3], ("nuts-ios", tag("INIT", false, false)));
         assert_eq!(rows[4].0, "New workspace…");
         assert_eq!(rows[5].0, "Add machine…");
@@ -266,7 +266,7 @@ fn switch_worktree_lists_the_open_workspaces_worktrees() {
         u.app.active_workspace = Some("w1".into());
         crate::map_actions::run(&mut u.app, &u.ctx.clone(), "map.switchWorktree");
         let view = crate::map_palette::view(&u.app, "");
-        assert_eq!(view.chip.as_deref(), Some("mindmap › Worktree"));
+        assert_eq!(view.chip.as_deref(), Some("afterburn › Worktree"));
         let first = view.items().next().unwrap();
         assert_eq!(first.label, "main");
         assert_eq!(first.right, Right::Tag { text: "CURRENT".into(), ink: crate::map_palette::Ink::Teal, check: true, more: false });

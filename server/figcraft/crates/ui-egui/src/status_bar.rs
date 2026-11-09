@@ -3,7 +3,7 @@
 //!
 //! Like an editor's status bar it is chrome, not canvas: it costs no header space. The worktree
 //! names the open design (`repo / branch`); a click opens the palette on the workspaces. After
-//! it, the workspace's agent count (`mindmap / main  ·  3 agents`, design: `Sync pane redesign`;
+//! it, the workspace's agent count (`afterburn / main  ·  3 agents`, design: `Sync pane redesign`;
 //! it lived in the sidebar's workspace switcher); a click lists the agents.
 //! After it comes the open page's path (`Overview › Canvas and layers › Paint › Fills`): every
 //! crumb before the last opens its page. At the right, the agent summary opens the palette on the
@@ -381,8 +381,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_bar_names_the_repository_and_branch() {
-        let rows = vec![ws("w1", "mindmap", "mindmap", "/root/code/mindmap", Some("main"), "map")];
-        assert_eq!(label(Some(&target("w1", "/root/code/mindmap", "main")), &rows), "mindmap / main");
+        let rows = vec![ws("w1", "afterburn", "afterburn", "/root/code/mindmap", Some("main"), "map")];
+        assert_eq!(label(Some(&target("w1", "/root/code/mindmap", "main")), &rows), "afterburn / main");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -395,8 +395,8 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_selected_workspace_names_the_bar_before_any_map_is_open() {
-        let rows = vec![ws("w2", "branchy", "mindmap", "/wt/branchy", Some("feature/x"), "empty")];
-        assert_eq!(selected_chip(&rows, Some("w2")).as_deref(), Some("mindmap / feature/x"));
+        let rows = vec![ws("w2", "branchy", "afterburn", "/wt/branchy", Some("feature/x"), "empty")];
+        assert_eq!(selected_chip(&rows, Some("w2")).as_deref(), Some("afterburn / feature/x"));
         assert_eq!(selected_chip(&rows, None), None);
         assert_eq!(selected_chip(&rows, Some("missing")), None);
     }

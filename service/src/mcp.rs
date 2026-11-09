@@ -146,7 +146,7 @@ impl FigcraftSession {
                 "protocolVersion": "2025-03-26",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "mindmap-service",
+                    "name": "afterburn-service",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
             }),

@@ -1,6 +1,6 @@
 //! The Add machine modal: a 460 × 340 card that walks one SSH host through setup.
 //!
-//! Design: `Widget Add machine` on the Mindmap page (states Pick a host, Review, Setting up,
+//! Design: `Widget Add machine` on the Afterburn page (states Pick a host, Review, Setting up,
 //! Needs attention, Connected). The hosts come from `~/.ssh/config`; a `user@host` can be typed.
 //!
 //! The setup itself is the host strip's: [`crate::node_hosts::begin`] runs the same
@@ -661,7 +661,7 @@ fn footer(ui: &mut Ui, s: &shell::Skin, card: Rect, y: f32, left: Option<(&str, 
 fn pick_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, card: Rect) -> Option<Action> {
     shell::eyebrow(ui, card, 22.0, "CONNECT A MACHINE", s.accent);
     shell::title(ui, s, card, 40.0, "Add an SSH host", 22.0);
-    shell::body(ui, s, card, 74.0, WIDTH - 48.0, "A host from ~/.ssh/config, reached without a prompt. Mindmap never sees your password.");
+    shell::body(ui, s, card, 74.0, WIDTH - 48.0, "A host from ~/.ssh/config, reached without a prompt. Afterburn never sees your password.");
     shell::label(ui, s, card, 116.0, "HOSTS");
 
     // The hosts, three rows tall; more scroll.
@@ -710,10 +710,10 @@ fn pick_step(state: &mut State, ui: &mut Ui, s: &shell::Skin, card: Rect) -> Opt
 fn review_step(state: &State, ui: &mut Ui, s: &shell::Skin, card: Rect, extra: &Context) -> Option<Action> {
     let name = state.machine_name();
     shell::eyebrow(ui, card, 22.0, "REVIEW", s.accent);
-    shell::title(ui, s, card, 40.0, &format!("Mindmap will do this on {name}"), 20.0);
+    shell::title(ui, s, card, 40.0, &format!("Afterburn will do this on {name}"), 20.0);
     let copy = match extra.node.as_deref().map(short_version) {
-        Some(version) => format!("Copy mindmap-node {version} to ~/.local/bin"),
-        None => "Copy mindmap-node to ~/.local/bin".to_string(),
+        Some(version) => format!("Copy afterburn-node {version} to ~/.local/bin"),
+        None => "Copy afterburn-node to ~/.local/bin".to_string(),
     };
     let rows =
         [copy, "Start it on 127.0.0.1:47822".to_string(), format!("Add {name} as a machine in Herdr"), "Install Herdr if it is missing".to_string()];
@@ -784,7 +784,7 @@ fn attention_step(state: &State, ui: &mut Ui, s: &shell::Skin, card: Rect) -> Op
         ),
         Some(Attention::Update(reason)) => (
             format!("Update {name} first"),
-            "The machine runs another Mindmap node build. Select it in the sidebar and approve Update node, then try again.".to_string(),
+            "The machine runs another Afterburn node build. Select it in the sidebar and approve Update node, then try again.".to_string(),
             reason.clone(),
             (("Cancel", 80.0), ("Back", 100.0), Action::Back),
         ),
@@ -1329,7 +1329,7 @@ pub(crate) mod shell {
     }
 
     /// The family name the serif title face is registered under.
-    const SERIF: &str = "mindmap-serif";
+    const SERIF: &str = "afterburn-serif";
 
     /// The titles' serif (Charter, as designed, or the nearest serif the system has). Until the
     /// face is registered, and where none exists, the title falls back to Inter.

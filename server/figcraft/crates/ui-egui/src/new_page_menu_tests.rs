@@ -1,7 +1,7 @@
 //! The map's right-click menu: "New subpage" opens the New page dialog for the selected card.
 //!
 //! Driven through the same frame order the app uses (`new_page::show` before the menu), on a raw
-//! egui context, so it needs no `MINDMAP_CLIENT` and runs in the normal test suite.
+//! egui context, so it needs no `AFTERBURN_CLIENT` and runs in the normal test suite.
 
 use egui::{Modifiers, PointerButton, Pos2, RawInput, Rect, vec2};
 use figcraft_engine::Session;

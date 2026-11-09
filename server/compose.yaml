@@ -1,8 +1,8 @@
-name: mindmap-server
+name: afterburn-server
 services:
   server:
     # Retained only to export pre-node documents or perform an explicit rollback.
-    # The normal backend is mindmap-node on each machine, installed on the host.
+    # The normal backend is afterburn-node on each machine, installed on the host.
     profiles: [legacy]
     image: debian:bookworm-slim
     restart: unless-stopped

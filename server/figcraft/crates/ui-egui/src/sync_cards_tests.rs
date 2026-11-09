@@ -12,7 +12,7 @@ fn card(id: u64, name: &str, state: &str, kind: &str, page: u64) -> WaitingCard 
     WaitingCard {
         id,
         name: name.into(),
-        page: "Mindmap".into(),
+        page: "Afterburn".into(),
         page_id: Some(page),
         state: state.into(),
         kind: kind.into(),
@@ -30,7 +30,7 @@ fn waiting() -> Vec<WaitingCard> {
     let mut tabs = card(3, "Widget Page tabs states", "changed", "frame", 1);
     tabs.changes = vec![
         layer(30, "tabs", "changed", 3, &["corners", "fills"]),
-        layer(31, "tab Mindmap", "changed", 30, &["height", "layout", "childLayout"]),
+        layer(31, "tab Afterburn", "changed", 30, &["height", "layout", "childLayout"]),
         layer(32, "separator", "added", 30, &[]),
         layer(33, "separator", "added", 30, &[]),
         layer(34, "l", "added", 32, &[]),
@@ -60,12 +60,12 @@ fn layers_become_cards_and_loose_captions_fold_into_one_row() {
     assert_eq!(marks, ["+", "+", "~", "−", "~"]);
     // The edited card lists its layers as a person reads them: fields in words, new layers counted.
     let details: Vec<(&str, &str)> = rows[2].details.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-    assert_eq!(details, [("tabs", "corners · fills"), ("tab Mindmap", "height · layout"), ("+ 2 separators", "new"), ("− old pill", "removed")]);
+    assert_eq!(details, [("tabs", "corners · fills"), ("tab Afterburn", "height · layout"), ("+ 2 separators", "new"), ("− old pill", "removed")]);
     // A deleted card has nowhere to go; the folded row stands for both captions.
     assert!(!rows[3].navigable() && rows[3].page.is_none());
     assert!(rows[2].navigable());
     assert_eq!(rows[4].cards, [5, 6]);
-    assert_eq!(chip_text(&rows[2], 2, 5), "~ 3 / 5 · tabs · tab Mindmap · 2 separators");
+    assert_eq!(chip_text(&rows[2], 2, 5), "~ 3 / 5 · tabs · tab Afterburn · 2 separators");
     assert_eq!(chip_text(&rows[0], 0, 5), "+ 1 / 5 · new · 75 layers");
 }
 

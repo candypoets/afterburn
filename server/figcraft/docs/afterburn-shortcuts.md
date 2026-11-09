@@ -1,6 +1,6 @@
-# Mindmap keyboard shortcuts
+# Afterburn keyboard shortcuts
 
-Mindmap's map-mode actions are defined in
+Afterburn's map-mode actions are defined in
 `crates/ui-egui/src/map_action_catalog.rs`: 39 bound actions, three palette-only actions and four
 pointer gestures. `map_actions.rs`, `menus.rs` and `shortcuts_panel.rs` use that catalog for input,
 menus, the Actions palette and platform-specific Help. The full FigCraft editor keeps its own

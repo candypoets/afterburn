@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FRAME: u64 = 16 * 1024 * 1024;
-const DESIGN: &str = ".mindmap/map.figcraft";
+const DESIGN: &str = ".afterburn/map.figcraft";
 
 #[path = "support/pane_rpc.rs"]
 mod pane_rpc;
@@ -41,7 +41,7 @@ impl Fixture {
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "mindmap-node-tcp-{}-{}-{}",
+            "afterburn-node-tcp-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -150,24 +150,24 @@ impl Node {
     fn start(fixture: &Fixture) -> Self {
         let stdout = fixture.root.join("node.stdout");
         let stderr = fixture.root.join("node.stderr");
-        let mut command = fixture.command(env!("CARGO_BIN_EXE_mindmap-node"));
+        let mut command = fixture.command(env!("CARGO_BIN_EXE_afterburn-node"));
         command
             .args(["serve", "--bind", "127.0.0.1:0"])
             .current_dir(&fixture.worktree)
-            .env("MINDMAP_ROOT", &fixture.root)
-            .env("MINDMAP_DATA", fixture.root.join("records"))
-            .env("MINDMAP_LEGACY_DATA", fixture.root.join("legacy"))
-            .env("MINDMAP_HERDR", fixture.root.join("no-herdr"))
+            .env("AFTERBURN_ROOT", &fixture.root)
+            .env("AFTERBURN_DATA", fixture.root.join("records"))
+            .env("AFTERBURN_LEGACY_DATA", fixture.root.join("legacy"))
+            .env("AFTERBURN_HERDR", fixture.root.join("no-herdr"))
             .env("HERDR_SOCKET_PATH", fixture.root.join("no-herdr.sock"))
             .env("XDG_CONFIG_HOME", fixture.root.join("config"))
             .stdout(fs::File::create(&stdout).unwrap())
             .stderr(fs::File::create(&stderr).unwrap());
-        let mut process = Process(command.spawn().expect("spawn isolated mindmap-node"));
+        let mut process = Process(command.spawn().expect("spawn isolated afterburn-node"));
         let deadline = Instant::now() + TIMEOUT;
         loop {
             let output = fs::read_to_string(&stdout).unwrap();
             if let Some(address) = output.lines().find_map(|line| {
-                line.strip_prefix("mindmap-node protocol 1 on ")
+                line.strip_prefix("afterburn-node protocol 1 on ")
                     .and_then(|address| address.parse::<SocketAddr>().ok())
             }) {
                 assert!(address.ip().is_loopback());
@@ -371,10 +371,10 @@ fn source_identity_and_upgrade_lease_protect_prepared_designs() {
     let node = Node::start(&fixture);
     let mut wire = node.connect();
     let identity = wire.ok(json!({"method":"hello"}));
-    assert_eq!(identity["build_id"], mindmap_build::BUILD_ID);
+    assert_eq!(identity["build_id"], afterburn_build::BUILD_ID);
     assert!(identity["pid"].as_u64().unwrap() > 0);
     let output = fixture
-        .command(env!("CARGO_BIN_EXE_mindmap-node"))
+        .command(env!("CARGO_BIN_EXE_afterburn-node"))
         .arg("build-info")
         .output()
         .unwrap();
@@ -457,7 +457,7 @@ fn protocol_mismatch_rejects_before_open_and_connection_remains_usable() {
     );
     assert_eq!(
         wire.ok(json!({"method":"hello"}))["service"],
-        "mindmap-node"
+        "afterburn-node"
     );
     let session = wire.open(&fixture);
     let mut incompatible = hello(&session, "old client");
@@ -645,7 +645,13 @@ fn diff_reports_geometry_values_and_complete_paginated_changes_from_git_baseline
     let id = wire.create(&session, "geometry");
     wire.ok(json!({"method":"session.save","session":session}));
     fixture.git(&["add", DESIGN]);
-    fixture.git(&["commit", "-qm", "Synced fixture", "-m", "Mindmap-Sync: all"]);
+    fixture.git(&[
+        "commit",
+        "-qm",
+        "Synced fixture",
+        "-m",
+        "Afterburn-Sync: all",
+    ]);
     let baseline = fixture.git(&["rev-parse", "HEAD"]);
     let clean = wire.ok(json!({"method":"diff","session":session}));
     assert_eq!(clean["last"]["commit"], baseline);
@@ -751,7 +757,7 @@ fn captured_sync_survives_restart_commits_exact_frozen_design_and_keeps_later_ed
     let trailer = captured["trailer"].as_str().unwrap().to_owned();
     assert_eq!(captured["job"]["state"], "in_flight");
     assert_eq!(captured["job"]["agent"]["prompted"], false);
-    assert!(trailer.starts_with("Mindmap-Sync: all "), "{captured}");
+    assert!(trailer.starts_with("Afterburn-Sync: all "), "{captured}");
     let duplicate = wire.request_version(
         json!({"method":"sync.capture","session":session}),
         Some(json!(1)),
@@ -901,7 +907,7 @@ fn a_recorded_explanation_commits_only_its_own_edits_and_sync_then_sees_only_the
     wire.create(&session, "recorded card");
     wire.ok(json!({"method":"session.save","session":session}));
     fixture.git(&["add", DESIGN]);
-    fixture.git(&["commit", "-qm", "Sync\n\nMindmap-Sync: all job=seed"]);
+    fixture.git(&["commit", "-qm", "Sync\n\nAfterburn-Sync: all job=seed"]);
 
     // A design edit waits; then a request adds an explanation note.
     let retry = wire.create(&session, "retry button");
@@ -921,7 +927,7 @@ fn a_recorded_explanation_commits_only_its_own_edits_and_sync_then_sees_only_the
     let job = recorded["job"].as_str().unwrap().to_owned();
     let trailer = recorded["trailer"].as_str().unwrap().to_owned();
     assert!(
-        trailer.starts_with("Mindmap-Sync: all job=") && trailer.ends_with(" explain"),
+        trailer.starts_with("Afterburn-Sync: all job=") && trailer.ends_with(" explain"),
         "{recorded}"
     );
     assert_eq!(recorded["kept_waiting"], json!([]));

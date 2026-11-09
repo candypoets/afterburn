@@ -76,7 +76,7 @@ pub(crate) enum Outcome {
 pub(crate) enum Phase {
     /// Reaching the node: the SSH tunnel and the protocol handshake.
     Ssh,
-    /// Copying mindmap-node to the host and running its installer.
+    /// Copying afterburn-node to the host and running its installer.
     Copy,
     /// The node is installed and starts on 127.0.0.1:47822.
     Start,
@@ -240,7 +240,7 @@ pub fn status(ui: &mut egui::Ui, state: &mut State) {
     if let Some((host, reason)) = state.update.clone() {
         ui.label(reason);
         ui.label(
-            "Updating restarts the Mindmap node. Prepared Sync jobs and pending merges must be resolved first. Herdr and its agents keep running.",
+            "Updating restarts the Afterburn node. Prepared Sync jobs and pending merges must be resolved first. Herdr and its agents keep running.",
         );
         ui.horizontal(|ui| {
             if ui.add_enabled(state.pending.is_none(), egui::Button::new("Update node")).clicked() {
@@ -329,7 +329,7 @@ fn prepare_with(host: &Host, install: bool, update: bool, progress: &mut dyn FnM
         Ok(value) => value,
         Err(error) if !update => {
             // Only explicit host selection starts setup. Ordinary RPC reconnects never install.
-            if error.contains("Incompatible Mindmap node protocol") || (host.ssh.is_none() && host.address != LOCAL) {
+            if error.contains("Incompatible Afterburn node protocol") || (host.ssh.is_none() && host.address != LOCAL) {
                 return Err(error);
             }
             stop_if_cancelled(cancelled)?;
@@ -401,7 +401,7 @@ fn save_machine(target: &str, label: &str, session: &str) -> Result<(), String> 
 }
 
 fn hosts_path() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/mindmap/hosts.json"))
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/afterburn/hosts.json"))
 }
 
 fn save_hosts(hosts: &[Host]) -> Result<(), String> {
@@ -518,16 +518,16 @@ fn resources() -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    Err("Install a complete Mindmap app bundle containing its node and portable installer.".into())
+    Err("Install a complete Afterburn app bundle containing its node and portable installer.".into())
 }
 
 fn validate_asset_info(info: &serde_json::Value, platform: &str) -> Result<(), String> {
-    if info.get("build_id").and_then(|v| v.as_str()) != Some(mindmap_build::BUILD_ID)
+    if info.get("build_id").and_then(|v| v.as_str()) != Some(afterburn_build::BUILD_ID)
         || info.get("protocol").and_then(|v| v.as_u64()) != Some(crate::node::PROTOCOL)
-        || info.get("version").and_then(|v| v.as_str()) != Some(mindmap_build::VERSION)
+        || info.get("version").and_then(|v| v.as_str()) != Some(afterburn_build::VERSION)
         || info.get("platform").and_then(|v| v.as_str()) != Some(platform)
     {
-        return Err("The bundled node does not match this app build. Install a complete matching Mindmap app bundle.".into());
+        return Err("The bundled node does not match this app build. Install a complete matching Afterburn app bundle.".into());
     }
     Ok(())
 }
@@ -537,7 +537,7 @@ fn bundled_node(resources: &std::path::Path, platform: &str) -> Result<PathBuf, 
     let info = std::fs::read(directory.join("build-info.json")).map_err(|_| "The bundled node is missing its build identity")?;
     let info: serde_json::Value = serde_json::from_slice(&info).map_err(|_| "Invalid bundled node build identity")?;
     validate_asset_info(&info, platform)?;
-    let binary = directory.join("mindmap-node");
+    let binary = directory.join("afterburn-node");
     if !binary.is_file() || !resources.join("install-node.py").is_file() {
         return Err(format!("The app does not include a complete node installer for {platform}."));
     }
@@ -558,7 +558,7 @@ fn validate_asset_hash(binary: &std::path::Path, info: &serde_json::Value) -> Re
         hash.update(&bytes[..count]);
     }
     if info.get("sha256").and_then(|v| v.as_str()) != Some(format!("{:x}", hash.finalize()).as_str()) {
-        return Err("The bundled node checksum is missing or incorrect. Reinstall the complete Mindmap app bundle.".into());
+        return Err("The bundled node checksum is missing or incorrect. Reinstall the complete Afterburn app bundle.".into());
     }
     Ok(())
 }
@@ -569,8 +569,8 @@ fn shell_quote(value: &str) -> String {
 
 fn remote_install_command(stage: &str, update: bool) -> String {
     format!(
-        "scope=user; if [ \"$(uname -s)\" = Linux ] && [ \"$(id -u)\" = 0 ]; then scope=system; fi; sh {stage}/install-node.sh --binary {stage}/mindmap-node --build-id {} --scope \"$scope\"{}",
-        shell_quote(mindmap_build::BUILD_ID),
+        "scope=user; if [ \"$(uname -s)\" = Linux ] && [ \"$(id -u)\" = 0 ]; then scope=system; fi; sh {stage}/install-node.sh --binary {stage}/afterburn-node --build-id {} --scope \"$scope\"{}",
+        shell_quote(afterburn_build::BUILD_ID),
         if update { " --upgrade" } else { "" }
     )
 }
@@ -584,7 +584,7 @@ fn validate_stage(stage: &str) -> Result<(), String> {
         .is_some_and(|suffix| suffix.len() >= 8 && suffix.bytes().all(|b| b.is_ascii_alphanumeric()));
     if !path.is_absolute()
         || !valid_name
-        || !path.parent().is_some_and(|p| p.ends_with(".cache/mindmap"))
+        || !path.parent().is_some_and(|p| p.ends_with(".cache/afterburn"))
         || stage.contains(['\n', '\r'])
         || path.components().any(|part| part == std::path::Component::ParentDir)
     {
@@ -603,7 +603,7 @@ fn install_helper(host: &Host, update: bool) -> Result<(), String> {
         let binary = bundled_node(&resources, &platform)?;
         // mktemp owns a unique private staging directory; no shell interpolation of SSH output.
         let stage = run(
-            ssh(target).arg("umask 077; mkdir -p \"$HOME/.cache/mindmap\" && mktemp -d \"$HOME/.cache/mindmap/install.XXXXXXXX\""),
+            ssh(target).arg("umask 077; mkdir -p \"$HOME/.cache/afterburn\" && mktemp -d \"$HOME/.cache/afterburn/install.XXXXXXXX\""),
             TIMEOUT,
             true,
         )?;
@@ -631,7 +631,7 @@ fn install_helper(host: &Host, update: bool) -> Result<(), String> {
         let platform = platform(std::env::consts::OS, std::env::consts::ARCH)?;
         let binary = bundled_node(&resources, &platform)?;
         let mut command = Command::new("sh");
-        command.arg(resources.join("install-node.sh")).arg("--binary").arg(binary).args(["--build-id", mindmap_build::BUILD_ID]);
+        command.arg(resources.join("install-node.sh")).arg("--binary").arg(binary).args(["--build-id", afterburn_build::BUILD_ID]);
         if std::env::consts::OS == "linux" && run(Command::new("id").arg("-u"), TIMEOUT, true)?.trim() == "0" {
             command.args(["--scope", "system"]);
         }
@@ -716,7 +716,7 @@ mod tests {
     fn temporary_directory() -> PathBuf {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "mindmap helper's test-{}-{}",
+            "afterburn helper's test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
@@ -729,23 +729,23 @@ mod tests {
         for invalid in [
             "/",
             "/tmp/install.12345678",
-            "/home/me/.cache/mindmap/..",
-            "/home/me/.cache/mindmap/install.x",
-            "/home/me/.cache/mindmap/install.12345678\n",
-            "/home/../.cache/mindmap/install.12345678",
+            "/home/me/.cache/afterburn/..",
+            "/home/me/.cache/afterburn/install.x",
+            "/home/me/.cache/afterburn/install.12345678\n",
+            "/home/../.cache/afterburn/install.12345678",
         ] {
             assert!(validate_stage(invalid).is_err(), "{invalid}");
         }
-        validate_stage("/Users/Alice O'Brien/.cache/mindmap/install.12ABcd34").unwrap();
+        validate_stage("/Users/Alice O'Brien/.cache/afterburn/install.12ABcd34").unwrap();
     }
 
     #[test]
     fn asset_validation_rejects_other_builds_platforms_and_corrupted_bytes() {
         use sha2::{Digest, Sha256};
         let directory = temporary_directory();
-        let binary = directory.join("mindmap-node");
+        let binary = directory.join("afterburn-node");
         std::fs::write(&binary, b"synthetic binary").unwrap();
-        let info = json!({"build_id":mindmap_build::BUILD_ID,"protocol":crate::node::PROTOCOL,"version":mindmap_build::VERSION,"platform":"darwin-arm64","sha256":format!("{:x}",Sha256::digest(b"synthetic binary"))});
+        let info = json!({"build_id":afterburn_build::BUILD_ID,"protocol":crate::node::PROTOCOL,"version":afterburn_build::VERSION,"platform":"darwin-arm64","sha256":format!("{:x}",Sha256::digest(b"synthetic binary"))});
         validate_asset_info(&info, "darwin-arm64").unwrap();
         validate_asset_hash(&binary, &info).unwrap();
         assert!(validate_asset_info(&info, "linux-x64").is_err());
@@ -769,9 +769,9 @@ mod tests {
             let output = run(Command::new("sh").args(["-c", &script]), TIMEOUT, true).unwrap();
             let args: Vec<_> = output.lines().collect();
             assert_eq!(args[0], "--binary");
-            assert_eq!(args[1], directory.join("mindmap-node").to_str().unwrap());
+            assert_eq!(args[1], directory.join("afterburn-node").to_str().unwrap());
             assert_eq!(args[2], "--build-id");
-            assert_eq!(args[3], mindmap_build::BUILD_ID);
+            assert_eq!(args[3], afterburn_build::BUILD_ID);
             assert_eq!(args[4], "--scope");
             assert!(matches!(args[5], "system" | "user"));
             assert_eq!(args.contains(&"--upgrade"), upgrade);

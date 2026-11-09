@@ -1,17 +1,17 @@
-# Mindmap node
+# Afterburn node
 
-`mindmap-node` is the backend on each machine. It hosts live worktree designs and drives that
+`afterburn-node` is the backend on each machine. It hosts live worktree designs and drives that
 machine's shared Herdr server. The app uses one persistent connection per node, through loopback
 or an SSH tunnel. The Docker document server is the only legacy migration source; the old
-`mindmap-service` binary has been removed (it is in Git history before the node cleanup).
+`afterburn-service` binary has been removed (it is in Git history before the node cleanup).
 
 ```sh
-cargo build -p mindmap-node --release --locked
-./target/release/mindmap-node serve --bind 127.0.0.1:47822
+cargo build -p afterburn-node --release --locked
+./target/release/afterburn-node serve --bind 127.0.0.1:47822
 ```
 
 Run these commands at the repository root. `rust-toolchain.toml` pins Rust 1.97.1.
-Selecting `mindmap-node` builds only the backend and its engine dependencies, without the
+Selecting `afterburn-node` builds only the backend and its engine dependencies, without the
 desktop GUI or a display server. The root workspace also contains the app (`figcraft`); both
 share `server/figcraft/`, `Cargo.lock`, and `target/`.
 
@@ -28,7 +28,7 @@ collaboration dispatch so edits continue while a job is starting.
 a canonical worktree and Git branch. On checkout, the app automatically opens the new branch's
 session on the same selected node after pending workspace activity finishes. CLI callers use
 `open` again; the MCP adapter resolves its worktree on every call. Linked worktrees remain
-independent. Files load from `.mindmap/map.figcraft` or start with a blank page.
+independent. Files load from `.afterburn/map.figcraft` or start with a blank page.
 
 FigCraft's collaboration authority orders and validates property edits. `session.join` accepts
 a FigCraft `Hello` and returns `{peer,messages}` with its welcome. `session.send {message}` carries
@@ -43,7 +43,7 @@ through the live session. Conflicts remain explicit until `session.resolve {pick
 each key. The node never silently overwrites a changed file. `session.import {source}` is an
 explicit migration/import operation; it applies the imported document through the authority.
 
-Agents use `mindmap-node mcp --path WORKTREE`, or `mindmap-node request '<JSON>'`. The MCP adapter
+Agents use `afterburn-node mcp --path WORKTREE`, or `afterburn-node request '<JSON>'`. The MCP adapter
 answers in the same shape as FigCraft's own MCP: `inspect_document` and `get_node` return the node
 itself, `create_node` (`node.create`), `set_properties` (`node.set`) and `run_command` return the
 command result, `list_commands` discovers commands, and `node_request` reaches any node method.
@@ -77,14 +77,14 @@ The app does not spawn a competing helper during ordinary reconnect. A build mis
 an explicit approved update, and a missing companion platform must be built natively or installed
 separately. Herdr installation approval is shown only when needed.
 
-`mindmap-node build-info` prints `{build_id,version,protocol}`. The source SHA256 is calculated by
-the shared `mindmap-build` crate, consistently across native platforms. `hello` reports the same
+`afterburn-node build-info` prints `{build_id,version,protocol}`. The source SHA256 is calculated by
+the shared `afterburn-build` crate, consistently across native platforms. `hello` reports the same
 identity and the running PID. Binary sidecars also record platform and executable SHA256, so
 packaging can validate a foreign companion without executing it.
 
 ## Git-backed Sync
 
-`diff {session,page?,offset?,limit?}` loads the last reachable matching `Mindmap-Sync:` trailer
+`diff {session,page?,offset?,limit?}` loads the last reachable matching `Afterburn-Sync:` trailer
 commit and compares its native design with the authoritative live document using FigCraft's
 property diff. It includes the existing UI's added/changed/removed summaries, full property
 changes, and code drift. Pagination reports complete totals and next offsets. A page-specific
@@ -99,7 +99,7 @@ At completion, `sync.prepare {job}` gates autosave, writes the exact frozen desi
 blob. The agent stages its code and commits both with the returned exact trailer:
 
 ```text
-Mindmap-Sync: page=219043332230 job=JOB_ID
+Afterburn-Sync: page=219043332230 job=JOB_ID
 ```
 
 `sync.finish {job,commit}` verifies branch, ancestry, exact design blob and trailer before
@@ -124,7 +124,7 @@ point, `service/install-node.sh`, with `install-node.py` beside it. Neither need
 ```sh
 # Linux: build the native headless package, without building the app.
 ./service/build-node.sh
-NODE="$PWD/target/release/mindmap-node"
+NODE="$PWD/target/release/afterburn-node"
 BUILD_ID="$("$NODE" build-info | python3 -c 'import json,sys; print(json.load(sys.stdin)["build_id"])')"
 
 # Normal Linux user: requires a running systemd user manager.
@@ -133,28 +133,28 @@ BUILD_ID="$("$NODE" build-info | python3 -c 'import json,sys; print(json.load(sy
 ./service/install-node.sh --binary "$NODE" --build-id "$BUILD_ID" --scope system
 ```
 
-Choose **one** scope per machine. User scope installs under `~/.local/lib/mindmap/node/<build-id>`
+Choose **one** scope per machine. User scope installs under `~/.local/lib/afterburn/node/<build-id>`
 and `~/.local/bin`, with a unit in `~/.config/systemd/user`. It starts on user-manager startup;
 persistence after logout/before login requires administrator-configured lingering. System scope
-requires root, uses `/usr/local/lib/mindmap/node/<build-id>` and `/usr/local/bin`, and installs
-`/etc/systemd/system/mindmap-node.service`. That service runs as the invoking root operator.
+requires root, uses `/usr/local/lib/afterburn/node/<build-id>` and `/usr/local/bin`, and installs
+`/etc/systemd/system/afterburn-node.service`. That service runs as the invoking root operator.
 For a non-root service account use its user manager. No privilege escalation or lingering changes
-are performed automatically. The supplied `systemd/mindmap-node.service` is a separate example
+are performed automatically. The supplied `systemd/afterburn-node.service` is a separate example
 for an existing `/root/code/mindmap` checkout, with root `target/release` paths.
-An older `~/.local/bin/mindmap-node` can shadow a system-scope `/usr/local/bin/mindmap-node`.
-Check `command -v mindmap-node` after migration; the installer does not overwrite a different
+An older `~/.local/bin/afterburn-node` can shadow a system-scope `/usr/local/bin/afterburn-node`.
+Check `command -v afterburn-node` after migration; the installer does not overwrite a different
 scope's CLI choice.
 
-On macOS the same `--scope user` command registers `dev.mindmap.node` in the logged-in user's
+On macOS the same `--scope user` command registers `dev.afterburn.node` in the logged-in user's
 launchd GUI domain. Its plist lives in `~/Library/LaunchAgents`; logs are in
-`~/Library/Logs/Mindmap`. The binary lives under `~/.local/lib/mindmap/node/<build-id>`, outside
+`~/Library/Logs/Afterburn`. The binary lives under `~/.local/lib/afterburn/node/<build-id>`, outside
 any `.app`. This survives app quit and app replacement, and starts at login. A headless SSH-only
 Mac without a logged-in GUI domain cannot use this LaunchAgent automatically.
 
 ```sh
 # Explicit fallback on a host without a usable supervisor:
 ./service/install-node.sh --binary "$NODE" --build-id "$BUILD_ID" --scope manual
-"$HOME/.local/bin/mindmap-node" serve --bind 127.0.0.1:47822
+"$HOME/.local/bin/afterburn-node" serve --bind 127.0.0.1:47822
 ```
 
 Manual mode installs only the versioned binary and CLI symlink. It does not start a background
@@ -191,13 +191,13 @@ overrides. The default remains the user's existing shared Herdr session.
 
 The Mac app's **Check for Updates…** (`app.checkForUpdates`, also checked at launch and daily)
 installs prebuilt releases this way, never from source. It reads a JSON release feed from
-`MINDMAP_UPDATE_FEED` (no built-in feed exists yet, so the check ends "Up to date" with a note):
+`AFTERBURN_UPDATE_FEED` (no built-in feed exists yet, so the check ends "Up to date" with a note):
 
 ```json
 {"version":"0.8.0","notes":["…"],
  "platforms":{"darwin-arm64":{
-   "app":{"url":"https://…/Mindmap.zip","sha256":"<hex>"},
-   "node":{"url":"https://…/mindmap-node","sha256":"<hex>","build_id":"<BUILD_ID>"}}}}
+   "app":{"url":"https://…/Afterburn.zip","sha256":"<hex>"},
+   "node":{"url":"https://…/afterburn-node","sha256":"<hex>","build_id":"<BUILD_ID>"}}}}
 ```
 
 It downloads both with `curl`, checks the SHA-256s and `codesign --verify --deep --strict`, refuses
@@ -207,18 +207,18 @@ and relaunches. See `server/figcraft/crates/ui-egui/src/update.rs`.
 
 ### Legacy document migration
 
-`mindmap-node migrate --records service/data/projects.json` exports and verifies legacy documents
+`afterburn-node migrate --records service/data/projects.json` exports and verifies legacy documents
 through the running server and node, preserving existing repository designs and never logging
 owner links. Keep the existing document server online while exporting its live designs,
 then import each into its repository through the node and verify pages and IDs. Preserve server
-data for rollback. Only after verification stop the mindmap Docker container. `server/compose.yaml` retains it behind the explicit `legacy` profile; the separate
+data for rollback. Only after verification stop the afterburn Docker container. `server/compose.yaml` retains it behind the explicit `legacy` profile; the separate
 older FigCraft installation is unaffected.
 
 ## Verification
 
 ```sh
-cargo test -p mindmap-node
-cargo clippy -p mindmap-node --all-targets -- -D warnings
+cargo test -p afterburn-node
+cargo clippy -p afterburn-node --all-targets -- -D warnings
 python3 -m unittest discover -s service -p 'test_install_node.py' -v
 ```
 
@@ -231,7 +231,7 @@ the shared server without prompting agents. Client checks are documented in
 
 The earlier backend cutover was verified with native Linux and macOS nodes, the rebuilt Mac app
 opening this repository through one SSH tunnel, both machines' existing shared Herdr
-sessions, and the agent MCP reading the backend page. The Mindmap document container is
+sessions, and the agent MCP reading the backend page. The Afterburn document container is
 stopped; its migration data is retained for rollback.
 
 Packaging lifecycle tests mock all supervisors and node requests. Those tests do not establish

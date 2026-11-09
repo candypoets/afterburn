@@ -592,7 +592,7 @@ fn workspace_view(
     let branch = path.as_deref().and_then(git_branch);
     let map = if path
         .as_ref()
-        .is_some_and(|p| Path::new(p).join(".mindmap/map.figcraft").is_file())
+        .is_some_and(|p| Path::new(p).join(".afterburn/map.figcraft").is_file())
     {
         "map"
     } else {
@@ -661,7 +661,7 @@ fn pane_path(panes: &[Pane]) -> Option<String> {
         .cloned()
 }
 
-/// The newest commit on HEAD carrying a `Mindmap-Sync:` trailer.
+/// The newest commit on HEAD carrying a `Afterburn-Sync:` trailer.
 fn last_sync(path: &str) -> Option<LastSync> {
     let output = Command::new("git")
         .args([
@@ -670,7 +670,7 @@ fn last_sync(path: &str) -> Option<LastSync> {
             "log",
             "-1",
             "--regexp-ignore-case",
-            "--grep=^Mindmap-Sync:",
+            "--grep=^Afterburn-Sync:",
             "--format=%h%x1f%s%x1f%cI",
         ])
         .stdin(Stdio::null())

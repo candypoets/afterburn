@@ -1,5 +1,5 @@
-//! Mindmap's palette: one box for pages, actions, workspaces, worktrees, settings and agents
-//! (design: the `Palette …` frames on the Mindmap page).
+//! Afterburn's palette: one box for pages, actions, workspaces, worktrees, settings and agents
+//! (design: the `Palette …` frames on the Afterburn page).
 //!
 //! ⌘P opens it on the pages: recently opened first, then every page, each with its parent path
 //! under it; typing ranks pages by name and path and offers to search the map. Typing `>` (or

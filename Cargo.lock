@@ -122,6 +122,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "afterburn-build"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
+name = "afterburn-node"
+version = "0.1.0"
+dependencies = [
+ "afterburn-build",
+ "figcraft-collab",
+ "figcraft-doc",
+ "figcraft-engine",
+ "figcraft-format",
+ "figcraft-text",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1714,6 +1735,7 @@ dependencies = [
 name = "figcraft-ui-egui"
 version = "0.7.0"
 dependencies = [
+ "afterburn-build",
  "base64 0.22.1",
  "egui",
  "egui_extras",
@@ -1729,7 +1751,6 @@ dependencies = [
  "figcraft-text",
  "image",
  "log",
- "mindmap-build",
  "serde",
  "serde_json",
  "sha2",
@@ -2744,27 +2765,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "mindmap-build"
-version = "0.1.0"
-dependencies = [
- "sha2",
-]
-
-[[package]]
-name = "mindmap-node"
-version = "0.1.0"
-dependencies = [
- "figcraft-collab",
- "figcraft-doc",
- "figcraft-engine",
- "figcraft-format",
- "figcraft-text",
- "mindmap-build",
- "serde",
- "serde_json",
 ]
 
 [[package]]

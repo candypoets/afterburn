@@ -1,7 +1,7 @@
 # server — our FigCraft server fork
 
 The deployed backend now embeds this fork's document, engine and collaboration crates in the
-per-machine [`mindmap-node`](../service/NODE.md). The Docker server is retained behind the
+per-machine [`afterburn-node`](../service/NODE.md). The Docker server is retained behind the
 `legacy` Compose profile only for migration or rollback. Its data stays intact.
 
 The document plane, forked from FigCraft **0.7.0** (upstream `storytold/figcraft`, commit
@@ -60,7 +60,7 @@ server; Herdr is an implementation detail of the agent host, not a second thing 
 `private-herdr.sh` is the working recipe (proven 2026-10-19 against Herdr 0.9.0 on this host):
 
 - **`herdr server`** — the headless mode, made for supervised/service-style setups.
-- **a named session** (`HERDR_SESSION=mindmap`) — its own socket and workspace list.
+- **a named session** (`HERDR_SESSION=afterburn`) — its own socket and workspace list.
 - **private `XDG_CONFIG_HOME`/`XDG_STATE_HOME`** — sockets, sessions and state live under
   `data/agents/`, never in `~/.config/herdr`.
 - **every inherited `HERDR_*` variable unset** — this is the one that bit us: `HERDR_SOCKET_PATH`
@@ -95,12 +95,12 @@ front of it.
 
 **Host service (the target): one binary, one service.** The document plane and the agent host
 are the same process: it serves files, runs the private Herdr child, and spawns agents in the
-repos on that machine. The unit is `systemd/mindmap-server.service`; install it once:
+repos on that machine. The unit is `systemd/afterburn-server.service`; install it once:
 
 ```sh
-cp systemd/mindmap-server.service /etc/systemd/system/
+cp systemd/afterburn-server.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now mindmap-server
+systemctl enable --now afterburn-server
 ```
 
 The running sandbox here cannot reach systemd (`Failed to connect to bus`), so this step is

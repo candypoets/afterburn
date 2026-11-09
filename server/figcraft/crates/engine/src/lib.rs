@@ -680,7 +680,7 @@ pub struct Prefs {
     /// `widget:<plugin>`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recent_actions: Vec<String>,
-    /// When Mindmap last looked for a new release (Unix seconds); it looks again a day later.
+    /// When Afterburn last looked for a new release (Unix seconds); it looks again a day later.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub update_checked: Option<u64>,
     /// The map client's left sidebar width, dragged at its inner edge (`None`: the default; the

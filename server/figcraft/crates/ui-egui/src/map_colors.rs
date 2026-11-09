@@ -4,7 +4,7 @@
 //! `Prefs::theme` ("light", "dark", or "system": Afterburn by day, Afterburn Night by night). It
 //! fills one set of tokens: the map, Sync and the workspace screens read [`get`]; the design
 //! editor (the IDE) keeps its layout and look and takes the theme's accents through
-//! [`Theme::tokens`] (design: `Mindmap page · Afterburn`, `Colour map` and `Palette Colour
+//! [`Theme::tokens`] (design: `Afterburn page · Afterburn`, `Colour map` and `Palette Colour
 //! theme`).
 //!
 //! The current palette is set once a frame, before anything draws ([`set`]); it lives with the
@@ -53,7 +53,7 @@ impl Theme {
         match self {
             Theme::Afterburn => "Light · the default",
             Theme::AfterburnNight | Theme::ClassicDark => "Dark",
-            Theme::Classic => "Light · Mindmap until now",
+            Theme::Classic => "Light · Afterburn until now",
         }
     }
 
@@ -153,7 +153,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// Classic: Mindmap's palette until now (compose.rs, sync.rs, agents.rs, map_tabs.rs).
+/// Classic: Afterburn's palette until now (compose.rs, sync.rs, agents.rs, map_tabs.rs).
 pub const CLASSIC: MapColors = MapColors {
     canvas: rgb(0xF4, 0xF4, 0xF2),
     panel: Color32::WHITE,

@@ -32,9 +32,9 @@ pub struct Request<'a> {
 /// Render the packet. The page falls back to the page of the first commented card.
 pub fn render(doc: &Document, request: &Request<'_>) -> String {
     let mut out = format!(
-        "MINDMAP CONTEXT\nWorktree: {} · Branch: {} · Node: {} · Session: {}\n\
-         Use the mindmap skill (~/.claude/skills/mindmap/SKILL.md, or ~/.agents/skills/mindmap/SKILL.md): it lists the tools and how each kind of work finishes. \
-         Only the node writes .mindmap/map.figcraft. Keep names stable and source claims.\n",
+        "AFTERBURN CONTEXT\nWorktree: {} · Branch: {} · Node: {} · Session: {}\n\
+         Use the afterburn skill (~/.claude/skills/afterburn/SKILL.md, or ~/.agents/skills/afterburn/SKILL.md): it lists the tools and how each kind of work finishes. \
+         Only the node writes .afterburn/map.figcraft. Keep names stable and source claims.\n",
         one_line(request.worktree),
         one_line(request.branch),
         one_line(request.node),
@@ -64,7 +64,7 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
             out.push_str("This page was just created for the prompt below.\n");
             out.push_str(&format!(
                 "Mark its mode before designing: an exploration (a new idea the code does not have) is \
-                 session.command node.set {{\"ids\":[{}],\"pluginData\":{{\"mindmap.page_mode\":\"exploration\"}}}}; \
+                 session.command node.set {{\"ids\":[{}],\"pluginData\":{{\"afterburn.page_mode\":\"exploration\"}}}}; \
                  a page that describes the code as it is stays unmarked (state of the art).\n",
                 page.0
             ));
@@ -239,7 +239,7 @@ mod tests {
         figcraft_engine::params::id_of(&value["id"]).unwrap()
     }
 
-    /// Page "Mindmap" first, then "backend code" with a card and a subpage "Remote setup".
+    /// Page "Afterburn" first, then "backend code" with a card and a subpage "Remote setup".
     fn doc() -> (Document, NodeId, NodeId, NodeId) {
         let mut session = Session::new();
         let first = session.page().unwrap();
@@ -267,7 +267,7 @@ mod tests {
         session
             .execute(
                 "node.set",
-                &json!({"id": remote.0, "pluginData": {"mindmap.parent_page": backend.0.to_string()}}),
+                &json!({"id": remote.0, "pluginData": {"afterburn.parent_page": backend.0.to_string()}}),
             )
             .unwrap();
         let _ = first;
@@ -424,7 +424,10 @@ mod tests {
         );
         assert!(text.contains("Mark its mode before designing"), "{text}");
         assert!(
-            text.contains(&format!("{{\"ids\":[{}],\"pluginData\":{{\"mindmap.page_mode\":\"exploration\"}}}}", backend.0)),
+            text.contains(&format!(
+                "{{\"ids\":[{}],\"pluginData\":{{\"afterburn.page_mode\":\"exploration\"}}}}",
+                backend.0
+            )),
             "{text}"
         );
         assert!(!render(&doc, &request(Some(backend), &[])).contains("Mark its mode"));

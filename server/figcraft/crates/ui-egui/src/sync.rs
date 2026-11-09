@@ -1,6 +1,6 @@
 //! Sync: the map's drift from the last sync, the code drift since it, and one action.
 //!
-//! The UI calls a Sync a Burn (design: `Mindmap page · Afterburn`): the button, the sidebar and
+//! The UI calls a Sync a Burn (design: `Afterburn page · Afterburn`): the button, the sidebar and
 //! its action say Burn and show the burning disc ([`crate::burn_disc`]); the code, the command
 //! ids and the node protocol keep the name Sync.
 //!
@@ -60,7 +60,7 @@ fn c() -> MapColors {
     crate::map_colors::get()
 }
 
-/// `classic` on the Classic theme (Mindmap's look until now), `themed` on the others.
+/// `classic` on the Classic theme (Afterburn's look until now), `themed` on the others.
 fn classic_or(classic: Color32, themed: Color32) -> Color32 {
     if crate::map_colors::theme() == crate::map_colors::Theme::Classic { classic } else { themed }
 }
@@ -97,7 +97,7 @@ const POLL_MISSES: u8 = 3;
 pub struct SnapPage {
     pub id: u64,
     pub name: String,
-    /// The parent page of a subpage (`mindmap.parent_page`), so the service knows the tree.
+    /// The parent page of a subpage (`afterburn.parent_page`), so the service knows the tree.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<u64>,
 }
@@ -2069,7 +2069,7 @@ fn fly_to(app: &mut FigApp, row: &Row) {
 
 /// The canvas hook while the pane is open: each waiting card on the open page wears its `+` / `~`
 /// badge at its top-right corner, and the current card an amber outline with a dark chip under it
-/// (`~ 3 / 14 · tabs · tab Mindmap · 6 separators`). Drawn by `canvas::show` on the canvas painter.
+/// (`~ 3 / 14 · tabs · tab Afterburn · 6 separators`). Drawn by `canvas::show` on the canvas painter.
 pub(crate) fn canvas_marks(app: &FigApp, painter: &egui::Painter) {
     if !app.sync.open {
         return;
@@ -2113,7 +2113,7 @@ pub(crate) fn canvas_marks(app: &FigApp, painter: &egui::Painter) {
     }
 }
 
-/// The current card's chip: `~ 3 / 14 · tabs · tab Mindmap · 6 separators`, or the row's sub line
+/// The current card's chip: `~ 3 / 14 · tabs · tab Afterburn · 6 separators`, or the row's sub line
 /// when it lists no layers.
 pub fn chip_text(row: &Row, index: usize, total: usize) -> String {
     let mut parts = vec![format!("{} {} / {total}", row.mark.glyph(), index + 1)];

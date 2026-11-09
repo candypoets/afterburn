@@ -14,8 +14,8 @@ import sys
 import tempfile
 import time
 
-LABEL = "dev.mindmap.node"
-UNIT = "mindmap-node.service"
+LABEL = "dev.afterburn.node"
+UNIT = "afterburn-node.service"
 
 
 class InstallError(Exception):
@@ -88,7 +88,7 @@ def sha256(path):
 
 def atomic_write(path, data, mode=0o644):
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".mindmap-", dir=path.parent)
+    fd, temporary = tempfile.mkstemp(prefix=".afterburn-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
@@ -101,7 +101,7 @@ def atomic_write(path, data, mode=0o644):
 
 def link_cli(path, binary):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".mindmap-node-{os.getpid()}")
+    temporary = path.with_name(f".afterburn-node-{os.getpid()}")
     try:
         temporary.symlink_to(binary)
         os.replace(temporary, path)
@@ -170,7 +170,7 @@ class Supervisor:
                     if match and match[1] not in os.environ:
                         environment[match[1]] = match[2].replace("%%", "%").replace("$$", "$").replace('\\"', '"').replace("\\\\", "\\")
         if self.mac:
-            logs = home / "Library/Logs/Mindmap"
+            logs = home / "Library/Logs/Afterburn"
             logs.mkdir(parents=True, exist_ok=True)
             return plistlib.dumps({
                 "Label": LABEL, "ProgramArguments": [str(binary), "serve", "--bind", "127.0.0.1:47822"],
@@ -179,7 +179,7 @@ class Supervisor:
                 "StandardOutPath": str(logs / "node.log"), "StandardErrorPath": str(logs / "node.error.log"),
                 "AbandonProcessGroup": True,
             })
-        lines = ["[Unit]", "Description=Mindmap node (worktree designs and shared Herdr)", "After=network.target", "", "[Service]", "Type=simple",
+        lines = ["[Unit]", "Description=Afterburn node (worktree designs and shared Herdr)", "After=network.target", "", "[Service]", "Type=simple",
                  # WorkingDirectory is a single path, not a shell-style word list.
                  f"WorkingDirectory={str(home).replace('%', '%%')}", f"ExecStart={unit_quote(binary, command=True)} serve --bind 127.0.0.1:47822",
                  "Restart=on-failure", "RestartSec=2", "KillMode=process"]
@@ -221,8 +221,8 @@ def install(args):
     if sys.platform not in ("darwin", "linux"):
         raise InstallError("Supported supervisors are macOS launchd and Linux systemd.")
     home = Path.home()
-    base = Path("/usr/local/lib/mindmap/node") if args.scope == "system" else home / ".local/lib/mindmap/node"
-    cli = Path("/usr/local/bin/mindmap-node") if args.scope == "system" else home / ".local/bin/mindmap-node"
+    base = Path("/usr/local/lib/afterburn/node") if args.scope == "system" else home / ".local/lib/afterburn/node"
+    cli = Path("/usr/local/bin/afterburn-node") if args.scope == "system" else home / ".local/bin/afterburn-node"
     base.mkdir(parents=True, exist_ok=True)
     lock = base / ".install-lock"
     lease = None
@@ -241,7 +241,7 @@ def install(args):
             if not current.get("pid") or current["pid"] != supervisor.pid():
                 raise InstallError("Listener is not owned by the selected supervisor (or is a legacy node). Migrate it explicitly; no process was stopped.", 22)
             if current.get("build_id") == args.build_id:
-                installed = base / args.build_id / "mindmap-node"
+                installed = base / args.build_id / "afterburn-node"
                 if not installed.is_file():
                     raise InstallError("Same-build node uses an older install layout; migrate it explicitly.", 22)
                 link_cli(cli, installed)
@@ -249,7 +249,7 @@ def install(args):
             ensure_idle()
         elif supervisor and supervisor.pid():
             raise InstallError("Managed node is running but not answering; refusing to replace it.", 21)
-        destination = base / args.build_id / "mindmap-node"
+        destination = base / args.build_id / "afterburn-node"
         if destination.exists():
             if sha256(destination) != sha256(binary):
                 raise InstallError("This build ID already has a different binary; immutable installs are never overwritten.")
@@ -325,7 +325,7 @@ def main():
     try:
         print(json.dumps(install(args)))
     except (InstallError, OSError, ValueError, subprocess.SubprocessError) as error:
-        print(f"mindmap-node install: {error}", file=sys.stderr)
+        print(f"afterburn-node install: {error}", file=sys.stderr)
         return getattr(error, "code", 1)
     return 0
 

@@ -1,4 +1,4 @@
-//! Check for Updates: the Update sheet (`Update` on the Mindmap page, screen 06) and the checks
+//! Check for Updates: the Update sheet (`Update` on the Afterburn page, screen 06) and the checks
 //! behind it.
 //!
 //! Updates come from prebuilt releases, never from source. A release feed is one JSON document
@@ -11,17 +11,17 @@
 //!   "notes": ["Faster map open and sync checks", "Update from the app, no terminal"],
 //!   "platforms": {
 //!     "darwin-arm64": {
-//!       "app":  { "url": "https://…/Mindmap-0.8.0-darwin-arm64.zip", "sha256": "<64 hex>" },
-//!       "node": { "url": "https://…/mindmap-node-0.8.0-darwin-arm64", "sha256": "<64 hex>",
-//!                 "build_id": "<the node's mindmap_build::BUILD_ID>" }
+//!       "app":  { "url": "https://…/Afterburn-0.8.0-darwin-arm64.zip", "sha256": "<64 hex>" },
+//!       "node": { "url": "https://…/afterburn-node-0.8.0-darwin-arm64", "sha256": "<64 hex>",
+//!                 "build_id": "<the node's afterburn_build::BUILD_ID>" }
 //!     }
 //!   }
 //! }
 //! ```
 //!
-//! `version` is the app's Cargo version (`mindmap_build::VERSION`); a release is offered when it
+//! `version` is the app's Cargo version (`afterburn_build::VERSION`); a release is offered when it
 //! is newer than the running app's. Platforms use the node bundle's names (`darwin-arm64`,
-//! `darwin-x64`). The app archive is a `ditto -c -k --keepParent` zip of a signed `Mindmap.app`;
+//! `darwin-x64`). The app archive is a `ditto -c -k --keepParent` zip of a signed `Afterburn.app`;
 //! the node is the bare signed binary. Both are checked against their SHA-256 before anything is
 //! installed, and the app with `codesign --verify --deep --strict`.
 //!
@@ -30,7 +30,7 @@
 //! `install-node.sh --upgrade` (its exit 21 means the same wait), swap the `.app`, relaunch.
 //! Herdr and the agents keep running throughout.
 //!
-//! Mindmap checks at launch and daily ([`due`], the last check kept in the preferences). The
+//! Afterburn checks at launch and daily ([`due`], the last check kept in the preferences). The
 //! states, what each shows ([`view`]) and the feed handling are pure and unit-tested.
 
 use std::cmp::Ordering;
@@ -44,10 +44,10 @@ use crate::machine_modal::shell;
 use crate::theme::{Tokens, regular, semibold};
 
 /// The environment variable naming the release feed's URL.
-pub const FEED_ENV: &str = "MINDMAP_UPDATE_FEED";
+pub const FEED_ENV: &str = "AFTERBURN_UPDATE_FEED";
 /// The release feed built into the app. `None` until releases are published.
 pub const DEFAULT_FEED: Option<&str> = None;
-/// How often Mindmap looks for a release by itself.
+/// How often Afterburn looks for a release by itself.
 pub const CHECK_EVERY_SECS: u64 = 24 * 60 * 60;
 /// What the sheet says when no feed is configured.
 pub const NO_FEED: &str = "No release feed is set up yet.";
@@ -193,7 +193,7 @@ pub fn decide(feed: &Feed, platform: Option<&str>, app_version: &str) -> Checked
         Some(build) => {
             Checked::Available(Release { version: feed.version.clone(), notes: feed.notes.clone(), app: build.app.clone(), node: build.node.clone() })
         }
-        None => Checked::UpToDate(Some(format!("Mindmap {} has no build for this machine yet.", feed.version))),
+        None => Checked::UpToDate(Some(format!("Afterburn {} has no build for this machine yet.", feed.version))),
     }
 }
 
@@ -206,7 +206,7 @@ pub fn due(last: Option<u64>, now: u64) -> bool {
 /// How an install ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Installed {
-    /// The node is updated and the app replaced; Mindmap quits and reopens.
+    /// The node is updated and the app replaced; Afterburn quits and reopens.
     Restarting,
     /// A prepared Sync or a pending merge holds the update; nothing changed.
     Waits(String),
@@ -370,7 +370,7 @@ pub struct View {
     pub state: &'static str,
     pub title: String,
     pub body: String,
-    /// Label and value: Mindmap, Node, Agents.
+    /// Label and value: Afterburn, Node, Agents.
     pub rows: Vec<(&'static str, String)>,
     /// What's new.
     pub notes: Vec<String>,
@@ -401,14 +401,14 @@ pub fn view(state: &State, app_version: &str, can_install: bool) -> View {
             Some(r) => (format!("{app_version}  →  {}", r.version), format!("{node_now}  →  {}", short_build(&r.node.build_id))),
             None => (app_version.to_string(), node_now.clone()),
         };
-        vec![("Mindmap", app), ("Node", node), ("Agents", "Herdr keeps running".to_string())]
+        vec![("Afterburn", app), ("Node", node), ("Agents", "Herdr keeps running".to_string())]
     };
     let notes = |release: &Release| release.notes.clone();
     match &state.phase {
         Phase::Idle | Phase::Checking => View {
             state: "Checking",
             title: "Checking for updates…".into(),
-            body: "Looking for a newer Mindmap app and node. Agents keep running.".into(),
+            body: "Looking for a newer Afterburn app and node. Agents keep running.".into(),
             rows: rows(None),
             notes: Vec::new(),
             note: None,
@@ -417,8 +417,8 @@ pub fn view(state: &State, app_version: &str, can_install: bool) -> View {
         },
         Phase::UpToDate(note) => View {
             state: "Up to date",
-            title: format!("Mindmap {app_version} is up to date"),
-            body: "The app and its node are on the latest release. Mindmap checks again at launch and daily.".into(),
+            title: format!("Afterburn {app_version} is up to date"),
+            body: "The app and its node are on the latest release. Afterburn checks again at launch and daily.".into(),
             rows: rows(None),
             notes: Vec::new(),
             note: note.clone().map(|note| (note, false)),
@@ -427,17 +427,17 @@ pub fn view(state: &State, app_version: &str, can_install: bool) -> View {
         },
         Phase::Available(release) => View {
             state: "Available",
-            title: format!("Mindmap {} is ready", release.version),
+            title: format!("Afterburn {} is ready", release.version),
             body: AVAILABLE_BODY.into(),
             rows: rows(Some(release)),
             notes: notes(release),
-            note: (!can_install).then(|| ("Updates install from the Mindmap app on a Mac.".to_string(), false)),
+            note: (!can_install).then(|| ("Updates install from the Afterburn app on a Mac.".to_string(), false)),
             primary: Some(Button { enabled: can_install, ..Button::new("Install and restart", Act::Install) }),
             secondary: Some(Button::new("Later", Act::Later)),
         },
         Phase::Downloading(release) => View {
             state: "Downloading",
-            title: format!("Downloading Mindmap {}", release.version),
+            title: format!("Downloading Afterburn {}", release.version),
             body: "Downloading and verifying the app and its node, then installing the node. Agents keep running.".into(),
             rows: rows(Some(release)),
             notes: notes(release),
@@ -447,7 +447,7 @@ pub fn view(state: &State, app_version: &str, can_install: bool) -> View {
         },
         Phase::Waiting { release, reason } => View {
             state: "Available",
-            title: format!("Mindmap {} is waiting", release.version),
+            title: format!("Afterburn {} is waiting", release.version),
             body: "A prepared Sync or a pending merge holds the update; nothing was changed. Finish or cancel it, then install.".into(),
             rows: rows(Some(release)),
             notes: notes(release),
@@ -457,8 +457,8 @@ pub fn view(state: &State, app_version: &str, can_install: bool) -> View {
         },
         Phase::Restarting(release) => View {
             state: "Restarting",
-            title: format!("Restarting into Mindmap {}", release.version),
-            body: "The node is updated. Mindmap quits and opens again in a moment; agents keep running.".into(),
+            title: format!("Restarting into Afterburn {}", release.version),
+            body: "The node is updated. Afterburn quits and opens again in a moment; agents keep running.".into(),
             rows: rows(Some(release)),
             notes: notes(release),
             note: None,
@@ -523,7 +523,7 @@ fn start_check(app: &mut FigApp, automatic: bool) {
             let checked = match feed {
                 None => Checked::UpToDate(Some(NO_FEED.into())),
                 Some(url) => match crate::update_install::fetch_text(&url).and_then(|text| parse_feed(&text)) {
-                    Ok(feed) => decide(&feed, platform_name(std::env::consts::OS, std::env::consts::ARCH).as_deref(), mindmap_build::VERSION),
+                    Ok(feed) => decide(&feed, platform_name(std::env::consts::OS, std::env::consts::ARCH).as_deref(), afterburn_build::VERSION),
                     Err(error) => Checked::Failed(error),
                 },
             };
@@ -533,7 +533,7 @@ fn start_check(app: &mut FigApp, automatic: bool) {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = feed;
-        app.update.checked(Checked::UpToDate(Some("Updates install from the Mindmap app.".into())), None, automatic);
+        app.update.checked(Checked::UpToDate(Some("Updates install from the Afterburn app.".into())), None, automatic);
     }
 }
 
@@ -654,7 +654,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let tokens = Tokens::get(ctx);
     let skin = shell::Skin::of(&tokens);
     let ink = Ink::of(&tokens);
-    let view = view(&app.update, mindmap_build::VERSION, can_install());
+    let view = view(&app.update, afterburn_build::VERSION, can_install());
     let response = egui::Modal::new(Id::new("update_sheet"))
         .backdrop_color(shell::scrim(&tokens))
         .frame(shell::surface(&skin))

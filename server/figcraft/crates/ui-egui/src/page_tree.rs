@@ -1,7 +1,7 @@
 //! Page/subpage hierarchy stored as document metadata.
 //!
-//! A page with `mindmap.parent_page` is a subpage. A subpage created from a card also stores
-//! `mindmap.source_node`; if that card disappears, the subpage and its descendants are removed.
+//! A page with `afterburn.parent_page` is a subpage. A subpage created from a card also stores
+//! `afterburn.source_node`; if that card disappears, the subpage and its descendants are removed.
 //! The tree is docked in the map's sidebar under the workspace switcher (design: `Sidebar pages ·
 //! window`): every page, indented by level, the open one marked; a click opens a page. ⌘P (the
 //! `map.pageTree` action) reveals the sidebar. Pages are renamed here: a double-click on a row (or
@@ -17,13 +17,13 @@ use crate::FigApp;
 use crate::theme::{Tokens, regular};
 use crate::workspaces::Skin;
 
-pub const PARENT_KEY: &str = "mindmap.parent_page";
+pub const PARENT_KEY: &str = "afterburn.parent_page";
 /// Pages nest at most this deep (the root counts as the first level).
 pub const MAX_LEVELS: usize = 5;
-pub const SOURCE_KEY: &str = "mindmap.source_node";
+pub const SOURCE_KEY: &str = "afterburn.source_node";
 /// A page's mode: `exploration` for a new idea not built yet; absent (or anything else) for a page
 /// that describes the code as it is, the state of the art.
-pub const MODE_KEY: &str = "mindmap.page_mode";
+pub const MODE_KEY: &str = "afterburn.page_mode";
 /// The [`MODE_KEY`] value of an exploration page.
 pub const EXPLORATION: &str = "exploration";
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Mindmap node (worktree designs and shared Herdr)
+Description=Afterburn node (worktree designs and shared Herdr)
 After=network-online.target
 Wants=network-online.target
 
@@ -10,7 +10,7 @@ Environment=HOME=/root
 Environment=HERDR_ENV=1
 Environment=HERDR_SOCKET_PATH=/root/.config/herdr/herdr.sock
 Environment=PATH=/root/.local/bin:/root/.volta/bin:/root/.kimi-code/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/root/code/mindmap/target/release/mindmap-node serve --bind 127.0.0.1:47822
+ExecStart=/root/code/mindmap/target/release/afterburn-node serve --bind 127.0.0.1:47822
 Restart=on-failure
 RestartSec=2
 # Herdr is a shared daemon. Stopping this node must never terminate its agents.

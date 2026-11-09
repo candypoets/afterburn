@@ -19,7 +19,7 @@ const HOW_TO_SHOW: &str = "HOW TO SHOW IT\n\
      words only label and source (file:line).\n\
      Designing: the design is the picture. Don't add a diagram about it.\n";
 
-/// `HOW TO SHOW IT` and `HOW TO FINISH`: the kinds of work and their rules live in the mindmap
+/// `HOW TO SHOW IT` and `HOW TO FINISH`: the kinds of work and their rules live in the afterburn
 /// skill; the prompt keeps the reply's first line and the exact record command. Init is one big
 /// explanation.
 pub fn comment_brief(request: &str, page: Option<u64>, init: bool) -> String {
@@ -31,7 +31,7 @@ pub fn comment_brief(request: &str, page: Option<u64>, init: bool) -> String {
         "commit what it stages with the returned trailer as the last line, then node_request \
          {\"method\":\"sync.finish\",\"job\":\"<job>\",\"commit\":\"<sha>\"} with the job its reply names. \
          If you cannot commit: {\"method\":\"sync.cancel\",\"job\":\"<job>\"}.\n\
-         The user started this from Mindmap: that is their go-ahead for this one commit. Commit what record \
+         The user started this from Afterburn: that is their go-ahead for this one commit. Commit what record \
          stages, plus a fix's own code; no git add -A or commit -a: leave every other change in the worktree as it is.";
     if init {
         return format!(
@@ -127,7 +127,7 @@ pub fn sync_prompt(sync: &SyncPrompt<'_>) -> String {
     out.push_str(&format!(
         "\nFINISH\n\
          1. node_request {{\"method\":\"sync.prepare\",\"job\":\"{job}\"}}\n\
-         2. Commit code and .mindmap/map.figcraft together, with this exact trailer as the last line of the message:\n\
+         2. Commit code and .afterburn/map.figcraft together, with this exact trailer as the last line of the message:\n\
          {trailer}\n\
          3. node_request {{\"method\":\"sync.finish\",\"job\":\"{job}\",\"commit\":\"<sha>\"}}\n\
          Agent idle alone cannot finish this sync: only the verified commit does. Design edits made after it started wait for the next one. Do not commit node cache or private links.\n",
@@ -260,7 +260,7 @@ mod tests {
             commit: "0123456789abcdef".into(),
             at: "2026-10-26T10:00:00+01:00".into(),
             page: Some(7),
-            trailer: "Mindmap-Sync: page=7 job=x".into(),
+            trailer: "Afterburn-Sync: page=7 job=x".into(),
             kind: kind.into(),
         }
     }
@@ -324,20 +324,20 @@ mod tests {
         let code = json!({"files": [{"path": "a.rs"}], "commits": [{"hash": "abc1234", "subject": "Fix status"}]});
         let sync = last("sync");
         let text = sync_prompt(&SyncPrompt {
-            workspace: "mindmap",
+            workspace: "afterburn",
             job: "j1",
             page: Some(7),
             page_name: Some("Overview"),
-            context: "MINDMAP CONTEXT",
+            context: "AFTERBURN CONTEXT",
             drift: &d,
             left_out: &["IDE panes (id 40)".to_owned()],
             last_sync: Some(&sync),
             code: &code,
-            trailer: "Mindmap-Sync: page=7 job=j1",
+            trailer: "Afterburn-Sync: page=7 job=j1",
             note: "ship it",
         });
         assert!(
-            text.starts_with("SYNC · mindmap · page Overview (id 7) · job j1"),
+            text.starts_with("SYNC · afterburn · page Overview (id 7) · job j1"),
             "{text}"
         );
         assert!(
@@ -354,7 +354,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("  abc1234 Fix status"), "{text}");
-        assert!(text.contains("\nMindmap-Sync: page=7 job=j1\n"), "{text}");
+        assert!(text.contains("\nAfterburn-Sync: page=7 job=j1\n"), "{text}");
         assert!(
             text.trim_end().ends_with("NOTE FROM THE USER\nship it"),
             "{text}"

@@ -192,7 +192,7 @@ impl Herdr {
     pub fn create_tab(&self, workspace_id: &str, cwd: &str) -> Result<CreatedTab> {
         let value = self.call(
             "tab.create",
-            json!({"workspace_id": workspace_id, "cwd": cwd, "label": "mindmap", "focus": false}),
+            json!({"workspace_id": workspace_id, "cwd": cwd, "label": "afterburn", "focus": false}),
             QUICK,
         )?;
 
@@ -312,7 +312,7 @@ fn excerpt(text: &str, limit: usize) -> String {
 mod live_tests {
     use super::*;
 
-    /// Run inside a Herdr pane with `cargo test -p mindmap-node herdr::live -- --ignored`.
+    /// Run inside a Herdr pane with `cargo test -p afterburn-node herdr::live -- --ignored`.
     #[test]
     #[ignore = "needs a running Herdr server"]
     fn lists_agents_and_panes_and_reads_a_screen_over_the_socket() {

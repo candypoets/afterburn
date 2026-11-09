@@ -62,7 +62,7 @@ def call(msg_id, name, arguments=None, timeout=60):
 
 send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
       "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                 "clientInfo": {"name": "mindmap-agent", "version": "0"}}})
+                 "clientInfo": {"name": "afterburn-agent", "version": "0"}}})
 init = call(1, None)
 send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
 

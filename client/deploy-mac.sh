@@ -20,7 +20,7 @@ for raw in paths:
         continue
     relative = pathlib.Path(raw.decode())
     name = relative.as_posix()
-    if not (name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain') or name.startswith(('.cargo/', 'server/figcraft/', 'service/', 'client/', 'skills/mindmap/'))):
+    if not (name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'rust-toolchain') or name.startswith(('.cargo/', 'server/figcraft/', 'service/', 'client/', 'skills/afterburn/'))):
         continue
     if any(part in ('target', '.git', '__pycache__', 'node_modules', 'data') for part in relative.parts):
         continue
@@ -31,8 +31,8 @@ for raw in paths:
         shutil.copy2(source, target)
 PY
 # Random remote staging avoids deleting/overlaying another checkout, including untracked files.
-REMOTE="$(ssh "$MAC" 'mkdir -p "$HOME/.cache/mindmap/builds" && mktemp -d "$HOME/.cache/mindmap/builds/full.XXXXXXXX"')"
-[[ "$REMOTE" == /*/.cache/mindmap/builds/full.* && "$REMOTE" != *$'\n'* ]] || { echo 'Unexpected remote staging directory.' >&2; exit 1; }
+REMOTE="$(ssh "$MAC" 'mkdir -p "$HOME/.cache/afterburn/builds" && mktemp -d "$HOME/.cache/afterburn/builds/full.XXXXXXXX"')"
+[[ "$REMOTE" == /*/.cache/afterburn/builds/full.* && "$REMOTE" != *$'\n'* ]] || { echo 'Unexpected remote staging directory.' >&2; exit 1; }
 printf -v REMOTE_QUOTED '%q' "$REMOTE"
 rsync -a -- "$STAGING/source/" "$MAC:$REMOTE_QUOTED/source/"
 ASSETS=0
@@ -41,7 +41,7 @@ if [[ -n "${NODE_ASSETS:-}" ]]; then
   rsync -a -- "$NODE_ASSETS/" "$MAC:$REMOTE_QUOTED/assets/"
   ASSETS=1
 fi
-printf -v REMOTE_ARGS '%q ' "$REMOTE" "${APP:-Applications/Mindmap.app}" "${PROFILE:-release}" "${CARGO_TOOLCHAIN:-1.97.1}" "${INSTALL_NODE:-1}" "${UPGRADE_NODE:-0}" "$ASSETS"
+printf -v REMOTE_ARGS '%q ' "$REMOTE" "${APP:-Applications/Afterburn.app}" "${PROFILE:-release}" "${CARGO_TOOLCHAIN:-1.97.1}" "${INSTALL_NODE:-1}" "${UPGRADE_NODE:-0}" "$ASSETS"
 ssh "$MAC" "bash -s -- $REMOTE_ARGS" <<'REMOTE_SCRIPT'
 set -euo pipefail
 STAGING="$1"
@@ -53,7 +53,7 @@ case "$APP" in
 esac
 export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 # Preserve the root build cache across snapshots, without mixing sources.
-export CARGO_TARGET_DIR="$HOME/.cache/mindmap/target"
+export CARGO_TARGET_DIR="$HOME/.cache/afterburn/target"
 if [[ "$7" == 1 ]]; then export NODE_ASSETS="$STAGING/assets"; fi
 bash "$STAGING/source/client/build-mac.sh"
 printf 'Canonical source snapshot retained at %s/source\n' "$STAGING"

@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 
-pub const DESIGN_PATH: &str = ".mindmap/map.figcraft";
+pub const DESIGN_PATH: &str = ".afterburn/map.figcraft";
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const CACHE_VERSION: u32 = 1;
 
@@ -160,7 +160,7 @@ impl NodeDocuments {
                 let disk = read_optional(&worktree.join(DESIGN_PATH))?;
                 let doc = match &disk {
                     Some(bytes) => decode(bytes)?,
-                    None => Document::new("Mindmap"),
+                    None => Document::new("Afterburn"),
                 };
                 LiveSession {
                     id: id.clone(),
@@ -699,9 +699,9 @@ impl LiveSession {
                 protocol: figcraft_collab::message::PROTOCOL,
                 file: self.id.clone(),
                 token: String::new(),
-                name: "Mindmap node".into(),
+                name: "Afterburn node".into(),
                 color: "#6677cc".into(),
-                client_version: "mindmap-node/1".into(),
+                client_version: "afterburn-node/1".into(),
                 resume: None,
             })
             .map(|(id, _)| id)
@@ -893,7 +893,7 @@ fn identity(path: &Path) -> Result<(PathBuf, String, PathBuf)> {
     let worktree = PathBuf::from(git(dir, &["rev-parse", "--show-toplevel"])?).canonicalize()?;
     let branch = current_branch(&worktree)?;
     let git_dir = PathBuf::from(git(&worktree, &["rev-parse", "--absolute-git-dir"])?);
-    Ok((worktree, branch, git_dir.join("mindmap-node")))
+    Ok((worktree, branch, git_dir.join("afterburn-node")))
 }
 
 /// Keep command execution in-memory, including nested batches. File/network/plugin commands

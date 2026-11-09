@@ -15,8 +15,8 @@ fn handshake(reader: &mut BufReader<TcpStream>, stream: &mut TcpStream) {
     let request = read(reader);
     assert_eq!(request["version"], 1);
     assert_eq!(request["method"], "hello");
-    assert_eq!(request["build_id"], mindmap_build::BUILD_ID);
-    write(stream, json!({"id":request["id"],"version":1,"ok":true,"protocol":1,"build_id":mindmap_build::BUILD_ID}));
+    assert_eq!(request["build_id"], afterburn_build::BUILD_ID);
+    write(stream, json!({"id":request["id"],"version":1,"ok":true,"protocol":1,"build_id":afterburn_build::BUILD_ID}));
 }
 fn listener() -> (TcpListener, String) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -191,10 +191,10 @@ fn engine_gets_real_welcome_presence_and_ordered_send_on_same_connection() {
 
 /// Opt-in smoke test against a running node; joins and reads, never edits the design.
 #[test]
-#[ignore = "requires MINDMAP_TEST_SESSION and a running loopback node"]
+#[ignore = "requires AFTERBURN_TEST_SESSION and a running loopback node"]
 fn live_node_opens_its_existing_document_through_the_engine() {
-    let session = std::env::var("MINDMAP_TEST_SESSION").unwrap();
-    let address = std::env::var("MINDMAP_TEST_NODE").unwrap_or_else(|_| "127.0.0.1:47822".into());
+    let session = std::env::var("AFTERBURN_TEST_SESSION").unwrap();
+    let address = std::env::var("AFTERBURN_TEST_NODE").unwrap_or_else(|_| "127.0.0.1:47822".into());
     let mut engine = figcraft_engine::Session::empty();
     engine.live.install(Box::new(NodeLiveLink::new(Arc::new(|| {}))));
     let target =
@@ -241,7 +241,7 @@ fn legacy_and_different_builds_block_workspace_rpc_but_reuse_socket_for_update_p
         });
         let reason = update_required(&address).unwrap().unwrap();
         assert!(reason.contains("Update node"));
-        assert!(reason.contains(mindmap_build::BUILD_ID));
+        assert!(reason.contains(afterburn_build::BUILD_ID));
         assert_eq!(rpc(&address, json!({"method":"session.command"}), RPC_TIMEOUT).unwrap_err(), reason);
         assert_eq!(rpc(&address, json!({"method":"host.ensure"}), RPC_TIMEOUT).unwrap_err(), reason);
         let sessions = rpc(&address, json!({"method":"session.list"}), RPC_TIMEOUT).unwrap();

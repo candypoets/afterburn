@@ -163,7 +163,7 @@ pub fn validate_prompt(prompt: &str) -> Result<()> {
 /// With comments the shape is:
 ///
 /// ```text
-/// Mindmap comments for <label> (<path>):
+/// Afterburn comments for <label> (<path>):
 ///
 /// 1. [<page>] <node>: <text>
 /// 2. ...
@@ -213,7 +213,7 @@ pub fn format_prompt(
             let _ = writeln!(out, "{}. {}", index + 1, entry_on(comment));
         }
     } else {
-        out.push_str("Mindmap comments for ");
+        out.push_str("Afterburn comments for ");
         out.push_str(&inline(label));
         if let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) {
             out.push_str(" (");
@@ -337,7 +337,7 @@ mod tests {
             {
                 "text": " This should say where overrides reset. ",
                 "node": "Components",
-                "page": "Mindmap"
+                "page": "Afterburn"
             },
             {"text": "Second", "node": null, "page": ""},
         ]);
@@ -348,7 +348,7 @@ mod tests {
                 comment(
                     "This should say where overrides reset.",
                     Some("Components"),
-                    Some("Mindmap")
+                    Some("Afterburn")
                 ),
                 comment("Second", None, None),
             ]
@@ -418,14 +418,14 @@ mod tests {
             comment(
                 "This should say where overrides reset.",
                 Some("Components"),
-                Some("Mindmap"),
+                Some("Afterburn"),
             ),
-            comment("This has no node.", None, Some("Mindmap")),
+            comment("This has no node.", None, Some("Afterburn")),
             comment("This has no page.", Some("Components"), None),
             comment("Bare comment.", None, None),
         ];
         let formatted = format_prompt(
-            "Mindmap",
+            "Afterburn",
             Some("/root/code/mindmap"),
             &comments,
             "Why does this rebuild?",
@@ -434,10 +434,10 @@ mod tests {
         .unwrap_or_default();
         assert_eq!(
             formatted,
-            "Mindmap comments for Mindmap (/root/code/mindmap):\n\
+            "Afterburn comments for Afterburn (/root/code/mindmap):\n\
              \n\
-             1. [Mindmap] Components: This should say where overrides reset.\n\
-             2. [Mindmap] This has no node.\n\
+             1. [Afterburn] Components: This should say where overrides reset.\n\
+             2. [Afterburn] This has no node.\n\
              3. Components: This has no page.\n\
              4. Bare comment.\n\
              \n\
@@ -450,10 +450,10 @@ mod tests {
         let comments = vec![comment(
             "This should say where overrides reset.",
             Some("Components"),
-            Some("Mindmap"),
+            Some("Afterburn"),
         )];
         let formatted = format_prompt(
-            "Mindmap",
+            "Afterburn",
             Some("/root/code/mindmap"),
             &comments,
             "   ",
@@ -462,9 +462,9 @@ mod tests {
         .unwrap_or_default();
         assert_eq!(
             formatted,
-            "Mindmap comments for Mindmap (/root/code/mindmap):\n\
+            "Afterburn comments for Afterburn (/root/code/mindmap):\n\
              \n\
-             1. [Mindmap] Components: This should say where overrides reset.\n\
+             1. [Afterburn] Components: This should say where overrides reset.\n\
              \n\
              Address these comments in the project document."
         );
@@ -474,14 +474,14 @@ mod tests {
     fn omits_a_missing_path_and_works_without_comments() {
         let comments = vec![comment("Bare comment.", None, None)];
         assert_eq!(
-            format_prompt("Mindmap", None, &comments, "", None).unwrap_or_default(),
-            "Mindmap comments for Mindmap:\n\n1. Bare comment.\n\nAddress these comments in the project document."
+            format_prompt("Afterburn", None, &comments, "", None).unwrap_or_default(),
+            "Afterburn comments for Afterburn:\n\n1. Bare comment.\n\nAddress these comments in the project document."
         );
         assert_eq!(
-            format_prompt("Mindmap", None, &[], " Just answer this. ", None).unwrap_or_default(),
+            format_prompt("Afterburn", None, &[], " Just answer this. ", None).unwrap_or_default(),
             "Just answer this."
         );
-        assert!(format_prompt("Mindmap", None, &[], "  ", None).is_err());
+        assert!(format_prompt("Afterburn", None, &[], "  ", None).is_err());
     }
 
     #[test]
@@ -492,8 +492,8 @@ mod tests {
             Some("page\tone"),
         )];
         assert_eq!(
-            format_prompt("Mindmap", None, &comments, "", None).unwrap_or_default(),
-            "Mindmap comments for Mindmap:\n\
+            format_prompt("Afterburn", None, &comments, "", None).unwrap_or_default(),
+            "Afterburn comments for Afterburn:\n\
              \n\
              1. [page\\tone] node\\nname: line one\\nline two\\twith\\\\slash\n\
              \n\
@@ -506,29 +506,29 @@ mod tests {
         let comments = vec![comment(
             "Make this clearer.",
             Some("Components"),
-            Some("Mindmap"),
+            Some("Afterburn"),
         )];
         let formatted = format_prompt(
-            "Mindmap",
+            "Afterburn",
             Some("/root/code/mindmap"),
             &comments,
             "Keep the tree.",
-            Some("MINDMAP CONTEXT\nPage: Mindmap"),
+            Some("AFTERBURN CONTEXT\nPage: Afterburn"),
         )
         .unwrap_or_default();
-        assert!(formatted.starts_with("MINDMAP CONTEXT\nPage: Mindmap\n\nCOMMENTS\n1. On Components: Make this clearer.\n"), "{formatted}");
+        assert!(formatted.starts_with("AFTERBURN CONTEXT\nPage: Afterburn\n\nCOMMENTS\n1. On Components: Make this clearer.\n"), "{formatted}");
         assert!(formatted.ends_with("Keep the tree."));
         let page_prompt = format_prompt(
-            "Mindmap",
+            "Afterburn",
             None,
             &[],
             "Design the page.",
-            Some("MINDMAP CONTEXT\nPage: backend code"),
+            Some("AFTERBURN CONTEXT\nPage: backend code"),
         )
         .unwrap_or_default();
         assert_eq!(
             page_prompt,
-            "MINDMAP CONTEXT\nPage: backend code\n\nTASK\nDesign the page."
+            "AFTERBURN CONTEXT\nPage: backend code\n\nTASK\nDesign the page."
         );
     }
 
@@ -546,11 +546,11 @@ mod tests {
             comment("Show how prompts are built.", None, Some("Design to code")),
             on_card,
         ];
-        let formatted = format_prompt("Mindmap", None, &comments, "", Some("MINDMAP CONTEXT"))
+        let formatted = format_prompt("Afterburn", None, &comments, "", Some("AFTERBURN CONTEXT"))
             .unwrap_or_default();
         assert_eq!(
             formatted,
-            "MINDMAP CONTEXT\n\nCOMMENTS\n\
+            "AFTERBURN CONTEXT\n\nCOMMENTS\n\
              1. On the page: Show how prompts are built.\n\
              2. On Proposed Show (id 7) · Anatomy › Proposed Show\n   Explain the merge.\n\
              \n\

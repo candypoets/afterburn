@@ -1,6 +1,6 @@
 //! The workspace switcher's data: every workspace the app knows, grouped by machine, and the
 //! worktrees of each. The palette shows it ([`crate::map_palette`], design: `Palette Switch
-//! workspace`, `Palette Pick worktree`, `Palette Switch worktree` on the Mindmap page): ⌃⌘O, a
+//! workspace`, `Palette Pick worktree`, `Palette Switch worktree` on the Afterburn page): ⌃⌘O, a
 //! click on the sidebar's head or on the status bar's worktree open its Workspace scope; Switch
 //! worktree opens the open workspace's worktrees. The Workspace menu lists the same rows
 //! ([`menu_rows`], [`worktree_rows`]).
@@ -462,7 +462,7 @@ mod tests {
                 ssh: false,
                 in_use: true,
                 rows: vec![
-                    ws("w1", "mindmap", "/root/code/mindmap", "main", "map", false),
+                    ws("w1", "afterburn", "/root/code/mindmap", "main", "map", false),
                     ws("w2", "checkout", "/root/code/mindmap", "feature/checkout", "map", true),
                     ws("w3", "accounting", "/root/code/accounting", "main", "map", false),
                     ws("w4", "code", "/root/code/code", "main", "none", false),
@@ -492,7 +492,7 @@ mod tests {
             [
                 ("accounting".to_string(), Badge::Map),
                 ("code".to_string(), Badge::Init),
-                ("mindmap".to_string(), Badge::Open),
+                ("afterburn".to_string(), Badge::Open),
                 ("main".to_string(), Badge::Here),
                 ("feature/checkout".to_string(), Badge::Map),
                 ("alzette".to_string(), Badge::Map),
@@ -508,7 +508,7 @@ mod tests {
         let groups = build(&machines(), Some("w3"), "");
         assert!(flat(&groups).iter().all(|row| row.name != "feature/checkout"));
         let found = build(&machines(), Some("w3"), "CHECKOUT");
-        assert_eq!(names(&found), [("mindmap".to_string(), Badge::Map), ("feature/checkout".to_string(), Badge::Map)]);
+        assert_eq!(names(&found), [("afterburn".to_string(), Badge::Map), ("feature/checkout".to_string(), Badge::Map)]);
         assert!(build(&machines(), None, "billing").is_empty());
     }
 
@@ -517,14 +517,14 @@ mod tests {
         let groups = build(&machines(), Some("w2"), "");
         let rows = flat(&groups);
         let open: Vec<(&str, bool)> = rows.iter().filter(|row| row.open).map(|row| (row.name.as_str(), row.nested)).collect();
-        assert_eq!(open, [("mindmap", false), ("feature/checkout", true)]);
+        assert_eq!(open, [("afterburn", false), ("feature/checkout", true)]);
     }
 
     #[test]
     fn remote_rows_name_their_machine_in_the_menu() {
         let groups = build(&machines(), None, "");
         let labels: Vec<String> = flat(&groups).iter().filter(|row| !row.nested).map(|row| row.menu_label()).collect();
-        assert_eq!(labels, ["accounting", "code", "mindmap", "alzette · befree", "symphony · befree"]);
+        assert_eq!(labels, ["accounting", "code", "afterburn", "alzette · befree", "symphony · befree"]);
     }
 
     #[test]
@@ -594,7 +594,7 @@ mod tests {
         crate::with_map_mode(|| {
             let mut u = map_ui();
             let order: Vec<String> = menu_rows(&u.app).into_iter().map(|row| row.name).collect();
-            assert_eq!(order, ["accounting", "code", "mindmap"]);
+            assert_eq!(order, ["accounting", "code", "afterburn"]);
             assert!(crate::map_action_catalog::enabled(&u.app, crate::map_action_catalog::find("map.workspace3").unwrap()));
             assert!(!crate::map_action_catalog::enabled(&u.app, crate::map_action_catalog::find("map.workspace4").unwrap()));
             // ⌃⌘2 is `code`, without a map: the browser opens on it for Init.
@@ -609,7 +609,7 @@ mod tests {
         let u = map_ui();
         let items = crate::native_menu::workspace_items(&u.app);
         let shown: Vec<(&str, bool, Option<&str>)> = items.iter().map(|i| (i.label.as_str(), i.checked, i.keys)).collect();
-        assert_eq!(shown, [("accounting", false, Some("Ctrl+Cmd+1")), ("code", false, Some("Ctrl+Cmd+2")), ("mindmap", true, Some("Ctrl+Cmd+3"))]);
+        assert_eq!(shown, [("accounting", false, Some("Ctrl+Cmd+1")), ("code", false, Some("Ctrl+Cmd+2")), ("afterburn", true, Some("Ctrl+Cmd+3"))]);
         assert_eq!(items[0].id, "map.workspace1");
         let worktrees = crate::native_menu::worktree_items(&u.app);
         let shown: Vec<(&str, bool)> = worktrees.iter().map(|i| (i.label.as_str(), i.checked)).collect();

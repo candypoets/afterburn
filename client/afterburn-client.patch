@@ -16,7 +16,7 @@ index 1bba81e..cf71568 100644
      if args.iter().any(|a| a == "--version" || a == "-V") {
          println!(
 -            "FigCraft {}{}",
-+            "Mindmap {}{}",
++            "Afterburn {}{}",
              env!("CARGO_PKG_VERSION"),
              option_env!("FIGCRAFT_BUILD_SHA").filter(|s| !s.is_empty()).map(|s| format!(" ({s})")).unwrap_or_default()
          );
@@ -25,7 +25,7 @@ index 1bba81e..cf71568 100644
          (false, Ok(r)) => Some(Arc::new(r)),
          (false, Err(e)) => {
 -            eprintln!("FigCraft: {e}");
-+            eprintln!("Mindmap: {e}");
++            eprintln!("Afterburn: {e}");
              std::process::exit(2);
          }
      };
@@ -35,8 +35,8 @@ index 1bba81e..cf71568 100644
      let mut viewport = egui::ViewportBuilder::default()
 -        .with_title("FigCraft")
 -        .with_app_id("ai.storyteller.figcraft")
-+        .with_title("Mindmap")
-+        .with_app_id("dev.mindmap.client")
++        .with_title("Afterburn")
++        .with_app_id("dev.afterburn.client")
          .with_inner_size([1440.0, 900.0])
          .with_min_inner_size([800.0, 500.0])
          .with_drag_and_drop(true);
@@ -60,7 +60,7 @@ index 1bba81e..cf71568 100644
      let apple_events = &apple_events;
      let result = eframe::run_native(
 -        "FigCraft",
-+        "Mindmap",
++        "Afterburn",
          options,
          Box::new(move |_cc| {
              #[cfg(target_os = "linux")]
@@ -86,7 +86,7 @@ index 236e278..e1580c6 100644
      let mut y = left.min.y + 20.0;
      icons::paint(ui.painter(), Rect::from_min_size(pos2(left.min.x + 16.0, y), vec2(20.0, 20.0)), Icon::Logo, ACCENT);
 -    ui.painter().text(pos2(left.min.x + 44.0, y + 10.0), Align2::LEFT_CENTER, "FigCraft", semibold(14.0), t.text);
-+    ui.painter().text(pos2(left.min.x + 44.0, y + 10.0), Align2::LEFT_CENTER, "Mindmap", semibold(14.0), t.text);
++    ui.painter().text(pos2(left.min.x + 44.0, y + 10.0), Align2::LEFT_CENTER, "Afterburn", semibold(14.0), t.text);
      y += 48.0;
      let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, widgets::FIELD_H));
      ui.scope_builder(egui::UiBuilder::new().max_rect(search), |ui| {
@@ -107,7 +107,7 @@ index 450317b..8fdd08a 100644
 +
 +pub fn map_mode() -> bool {
 +    MAP_MODE.load(std::sync::atomic::Ordering::Relaxed)
-+        || std::env::var_os("MINDMAP_CLIENT").is_some()
++        || std::env::var_os("AFTERBURN_CLIENT").is_some()
 +}
 +
 +/// What the human may do in map mode: look, navigate, ask and comment. Every

@@ -30,7 +30,7 @@ use objc2_app_kit::{
 use objc2_foundation::NSString;
 
 /// The tab group every project window joins.
-const TABBING_ID: &str = "dev.mindmap.client.project";
+const TABBING_ID: &str = "dev.afterburn.client.project";
 
 /// Full screen: the band at the top of the screen (points) that brings the hidden tab bar back.
 const EDGE: f64 = 4.0;
@@ -197,7 +197,7 @@ impl MacTabs {
             self.band_hidden = !reveal;
             self.faded = Some(Instant::now());
         }
-        if std::env::var_os("MINDMAP_DEBUG_TABS").is_some() {
+        if std::env::var_os("AFTERBURN_DEBUG_TABS").is_some() {
             let names: Vec<String> = bands.iter().map(|b| b.class().name().to_string_lossy().into_owned()).collect();
             eprintln!("mac_tabs: y={y} top={top} reveal={reveal} bands={names:?}");
         }

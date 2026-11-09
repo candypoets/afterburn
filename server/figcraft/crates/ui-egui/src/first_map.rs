@@ -4,7 +4,7 @@
 //! way: one banner says which agent is drawing and counts the cards drawn so far (nothing knows
 //! the total), and the Sync button explains itself once in a tooltip. The composer's hint line
 //! already teaches the keys. The banner leaves when the agent stops working; the tooltip is shown
-//! once ever and remembered in the Mindmap config folder.
+//! once ever and remembered in the Afterburn config folder.
 
 use std::time::Duration;
 
@@ -231,7 +231,7 @@ fn remember_tip(state: &mut State) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn tip_path() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config").join("mindmap").join(TIP_FILE))
+    std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config").join("afterburn").join(TIP_FILE))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

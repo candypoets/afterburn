@@ -1,4 +1,4 @@
-//! ⌘⌫ on the map (design: `Delete with Cmd+Backspace` on the Mindmap page): the human deletes
+//! ⌘⌫ on the map (design: `Delete with Cmd+Backspace` on the Afterburn page): the human deletes
 //! what is selected, at once, with no dialog and no agent. A card's detail page (and its subpages)
 //! goes with it, in the same undo step, so ⌘Z brings both back. The deletion is a design edit like
 //! any other: it waits for Sync.

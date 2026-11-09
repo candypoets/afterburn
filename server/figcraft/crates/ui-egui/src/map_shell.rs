@@ -256,7 +256,7 @@ fn save(app: &mut FigApp, ctx: &egui::Context) {
         let label = format!("{} ({})", if target.workspace.is_empty() { &target.session } else { &target.workspace }, target.address);
         let (tx, rx) = std::sync::mpsc::channel();
         let wake = ctx.clone();
-        let spawned = std::thread::Builder::new().name("mindmap-save".into()).spawn(move || {
+        let spawned = std::thread::Builder::new().name("afterburn-save".into()).spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 crate::node::rpc(&target.address, request, std::time::Duration::from_secs(30)).and_then(saved_reply)
             }))

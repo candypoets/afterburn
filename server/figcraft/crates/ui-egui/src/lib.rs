@@ -78,7 +78,7 @@ pub fn map_mode() -> bool {
     if TEST_MAP_MODE.with(|v| v.get()) {
         return true;
     }
-    MAP_MODE.load(std::sync::atomic::Ordering::Relaxed) || std::env::var_os("MINDMAP_CLIENT").is_some()
+    MAP_MODE.load(std::sync::atomic::Ordering::Relaxed) || std::env::var_os("AFTERBURN_CLIENT").is_some()
 }
 
 /// What the human may do in map mode: look, navigate, ask and comment. Every
@@ -633,7 +633,7 @@ pub struct UiState {
     pub palette_tab: menus::PaletteTab,
     /// The palette row Up and Down are on (Enter runs it).
     pub palette_hi: usize,
-    /// Mindmap's palette: what it lists, and the lists ⌫ goes back to.
+    /// Afterburn's palette: what it lists, and the lists ⌫ goes back to.
     pub palette_box: map_palette::State,
     /// The palette ignores one outside click after opening (the click that opened it).
     pub palette_armed: bool,

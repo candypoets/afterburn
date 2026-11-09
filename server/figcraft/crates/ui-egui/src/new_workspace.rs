@@ -1,6 +1,6 @@
 //! The New workspace sheet: pick a machine and a folder, then the workspace opens on Init.
 //!
-//! Design: `Widget New workspace` on the Mindmap page (states Local, Remote, Connect, Creating,
+//! Design: `Widget New workspace` on the Afterburn page (states Local, Remote, Connect, Creating,
 //! Init, Init busy, Init busy no info). One 520 × 390 card: the machine field opens into the
 //! machine list in place, and "Connect a machine…" grows an SSH target instead of sending the
 //! person elsewhere. Init is no form of its own: the workspace opens the Empty map page, with the
@@ -910,12 +910,12 @@ fn busy_card(app: &mut FigApp, ui: &mut Ui) {
         shell::title(ui, &s, card, 40.0, &format!("{kind} is busy"), 22.0);
         let (body, sub, note) = match &busy.task {
             Some(task) => (
-                format!("{kind} is working on {task}. Mindmap won't send it a second prompt."),
+                format!("{kind} is working on {task}. Afterburn won't send it a second prompt."),
                 format!("working · {task}"),
                 "Herdr reported this; nothing is queued until you choose.",
             ),
             None => (
-                format!("{kind} is working, but Herdr doesn't say on what. Mindmap doesn't guess."),
+                format!("{kind} is working, but Herdr doesn't say on what. Afterburn doesn't guess."),
                 "working · task unknown".to_string(),
                 "The step says only that it is busy; ask Herdr or pick another agent.",
             ),
@@ -1106,7 +1106,7 @@ mod tests {
         assert_eq!(state.machine.name, "befree");
         assert_eq!(state.name, "ledger");
         assert_eq!(folder_name("/Users/you/ledger/"), "ledger");
-        assert_eq!(folder_name("~/code/mindmap"), "mindmap");
+        assert_eq!(folder_name("~/code/afterburn"), "afterburn");
         assert_eq!(folder_name("/"), "workspace");
     }
 
@@ -1281,7 +1281,7 @@ mod tests {
     #[test]
     fn init_to_a_working_agent_opens_the_busy_card_with_its_task() {
         let target = Target::Existing { pane: "w1:p2".into(), kind: "codex".into(), status: "idle".into() };
-        let rows = with_agent("working", Some("mindmap | Working | Sync backend code | main"));
+        let rows = with_agent("working", Some("afterburn | Working | Sync backend code | main"));
         let busy = busy_for(&rows, "w1", Some(&target)).expect("busy");
         assert_eq!(busy.kind, "codex");
         assert_eq!(busy.task.as_deref(), Some("sync backend code"));
@@ -1297,7 +1297,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn folder_suggestions_list_matching_directories_only() {
-        let root = std::env::temp_dir().join(format!("mindmap-suggest-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("afterburn-suggest-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("alpha")).expect("dir");
         std::fs::create_dir_all(root.join("alps")).expect("dir");

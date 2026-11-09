@@ -13,7 +13,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/figcraft"
 
 [workspace.dependencies]
-mindmap-build = { path = "server/figcraft/crates/mindmap-build" }
+afterburn-build = { path = "server/figcraft/crates/afterburn-build" }
 # internal
 figcraft-geom = { path = "server/figcraft/crates/geom" }
 figcraft-color = { path = "server/figcraft/crates/color" }

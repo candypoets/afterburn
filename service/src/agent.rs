@@ -7,7 +7,7 @@
 //! Policy, ported from the reference and the project README:
 //! * agents already in the workspace are prompted, not duplicated;
 //! * with no agent, the first installed CLI in a fixed order is started in a new background tab;
-//! * a prompt asks the agent to read the mindmap skill and map the workspace checkout.
+//! * a prompt asks the agent to read the afterburn skill and map the workspace checkout.
 
 use std::collections::BTreeSet;
 use std::env;
@@ -377,7 +377,7 @@ fn ensure_inner(
                 )));
             }
             let created = herdr.create_tab(&workspace.id, path)?;
-            let name = unique_agent_name(&all_agents, "mindmap")?;
+            let name = unique_agent_name(&all_agents, "afterburn")?;
             if let Err(error) = herdr.start_agent(&name, &kind, &created.pane_id) {
                 // A first run in a folder asks the agent to trust it; the agent is alive but
                 // blocked, so `agent start` reports it as not ready. Accept the default and
@@ -607,7 +607,7 @@ mod tests {
         let agents = vec![Agent {
             workspace_id: "wP".into(),
             agent: Some("codex".into()),
-            name: Some("mindmap".into()),
+            name: Some("afterburn".into()),
             pane_id: Some("wP:p1".into()),
             tab_id: Some("wP:t1".into()),
             agent_status: Some("idle".into()),
@@ -616,12 +616,12 @@ mod tests {
             tab_label: None,
         }];
         assert_eq!(
-            unique_agent_name(&agents, "mindmap").unwrap_or_default(),
-            "mindmap-2"
+            unique_agent_name(&agents, "afterburn").unwrap_or_default(),
+            "afterburn-2"
         );
         assert_eq!(
-            unique_agent_name(&[], "mindmap").unwrap_or_default(),
-            "mindmap"
+            unique_agent_name(&[], "afterburn").unwrap_or_default(),
+            "afterburn"
         );
     }
 

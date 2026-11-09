@@ -40,7 +40,7 @@ def copy_assets(assets, expected, destination, native):
         if not directory.is_dir() or directory.name not in PLATFORMS:
             raise ValueError(f"Unexpected node asset: {directory}")
         info = json.loads((directory / "build-info.json").read_text())
-        binary = directory / "mindmap-node"
+        binary = directory / "afterburn-node"
         if any(info.get(key) != expected[key] for key in ("build_id", "version", "protocol")):
             raise ValueError(f"Companion node was built from different canonical source: {directory.name}")
         if info.get("platform") != directory.name or info.get("sha256") != digest(binary):
@@ -51,8 +51,8 @@ def copy_assets(assets, expected, destination, native):
     for directory, binary in pending:
         target = destination / directory.name
         target.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(binary, target / "mindmap-node")
-        (target / "mindmap-node").chmod(0o755)
+        shutil.copy2(binary, target / "afterburn-node")
+        (target / "afterburn-node").chmod(0o755)
         shutil.copy2(directory / "build-info.json", target / "build-info.json")
 
 

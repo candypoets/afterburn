@@ -1,8 +1,8 @@
-# mindmap
+# Afterburn
 
-The current backend is a **Mindmap node on each machine**: live worktree sessions, shared Herdr
-agents, and a committed `.mindmap/map.figcraft` design. See [node operation and protocol](service/NODE.md)
-and the [agent workflow](skills/mindmap/SKILL.md). The original generator and hosted-server notes
+The current backend is an **Afterburn node on each machine**: live worktree sessions, shared Herdr
+agents, and a committed `.afterburn/map.figcraft` design. See [node operation and protocol](service/NODE.md)
+and the [agent workflow](skills/afterburn/SKILL.md). The original generator and hosted-server notes
 below describe the migration source.
 
 ## Map sidebars
@@ -15,18 +15,18 @@ bottom while the card list scrolls. The composer remains usable with Sync open.
 
 ## One build, full or headless installation
 
-The root Cargo workspace has two default packages: `figcraft` (desktop app) and `mindmap-node`
+The root Cargo workspace has two default packages: `figcraft` (desktop app) and `afterburn-node`
 (`service/`). Both use the canonical tracked tree in `server/figcraft/`, one root `Cargo.lock`,
 and root `target/`. The ignored `client-src/` checkout is historical, not a build input. Rust
 1.97.1 is selected by `rust-toolchain.toml`.
 
 ```sh
 cargo build                          # app and node, same dependency graph
-cargo build -p mindmap-node           # headless node only, no desktop/display required
-./target/debug/mindmap-node serve --bind 127.0.0.1:47822
+cargo build -p afterburn-node           # headless node only, no desktop/display required
+./target/debug/afterburn-node serve --bind 127.0.0.1:47822
 ```
 
-On macOS, `./client/build-mac.sh` builds both native binaries together, packages Mindmap.app and
+On macOS, `./client/build-mac.sh` builds both native binaries together, packages Afterburn.app and
 installs its node as a versioned launchd helper outside the bundle. The node keeps running when
 the app quits. `./service/build-node.sh` packages a native headless node; its portable installer
 supports Linux systemd system/user services, macOS launchd, and an explicit manual mode.
@@ -84,7 +84,7 @@ and every page follows.
 
 ## The system design
 
-A second, single-page design on the same 0.7.0 server: **"Mindmap · system"**. It draws the shape we
+A second, single-page design on the same 0.7.0 server: **"Afterburn · system"**. It draws the shape we
 are building — the Mac client over Tailscale, one host service, the document plane and the
 execution plane (the private Herdr) in the same process, and what a user installs versus what they
 never see. `design/build_system.py` builds and publishes it; it can be opened on the Mac through
@@ -92,9 +92,9 @@ the app's control channel and `ui.render`.
 
 ## The client
 
-**Mindmap.app** is the Mac client: FigCraft's engine and canvas with the editor taken off the
+**Afterburn.app** is the Mac client: FigCraft's engine and canvas with the editor taken off the
 human's screen. `--map-mode` hides the layers and design panels, the toolbar, the tab bar and the
-frame labels, and adds a top bar with one tab per page and the live count. The app is renamed and
+frame labels, and adds a top bar with one tab per page and the live count. The bundle
 carries its own icon; eframe's runtime Dock-icon override is skipped in map mode so the bundle's
 icon is the one shown. Every command that edits the document is refused in map mode — select,
 navigate and comment only. The canonical app source lives in `server/figcraft/apps/figcraft` and its UI crate; the icon and
@@ -102,7 +102,7 @@ navigate and comment only. The canonical app source lives in `server/figcraft/ap
 shortcuts and the writable document remain, and page navigation is done by the control channel
 until the map has in-canvas links.
 
-The installed FigCraft.app (0.5.1) stays untouched; Mindmap is a separate 0.7.0 bundle talking to
+The installed FigCraft.app (0.5.1) stays untouched; Afterburn is a separate 0.7.0 bundle talking to
 our 0.7.0 server.
 
 ## Click, then ask

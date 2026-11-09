@@ -1,4 +1,4 @@
-//! Mindmap's keyboard dispatch. The catalog is shared with menus, palette and Help;
+//! Afterburn's keyboard dispatch. The catalog is shared with menus, palette and Help;
 //! the inherited drawing-editor keymap is never a fallback in map mode.
 
 use egui::{Context, Event, Key, Modifiers};

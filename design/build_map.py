@@ -204,7 +204,7 @@ def build_document(root, branches, anatomy, detail):
                f"~{round(lines / 1000)}k Rust lines",
            ]),
            gap=20, w=K.ROOT_W, name="Root column"),
-        *columns, gap=56, name="Mindmap")
+        *columns, gap=56, name="Afterburn")
     map_block = Vt(content, footer, gap=48, pad=[0, 0, 96, 0], name="Map block")
     doc.place(map_page, map_block, 64, 400)
 

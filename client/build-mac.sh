@@ -15,7 +15,7 @@ esac
 for command in cargo python3 sips iconutil codesign; do
   command -v "$command" >/dev/null || { echo "Missing required command: $command" >&2; exit 1; }
 done
-APP="${APP:-$HOME/Applications/Mindmap.app}"
+APP="${APP:-$HOME/Applications/Afterburn.app}"
 [[ "$APP" == *.app ]] || { echo 'APP must name a .app bundle.' >&2; exit 1; }
 mkdir -p "$(dirname "$APP")"
 APP="$(cd "$(dirname "$APP")" && pwd)/$(basename "$APP")"
@@ -25,8 +25,8 @@ if [[ -e "$APP" ]]; then
 import pathlib, plistlib, sys
 app = pathlib.Path(sys.argv[1])
 with (app / 'Contents/Info.plist').open('rb') as stream:
-    if plistlib.load(stream).get('CFBundleIdentifier') != 'dev.mindmap.client':
-        sys.exit('Refusing to replace a bundle that is not Mindmap.')
+    if plistlib.load(stream).get('CFBundleIdentifier') != 'dev.afterburn.client':
+        sys.exit('Refusing to replace a bundle that is not Afterburn.')
 PY
 fi
 PROFILE="${PROFILE:-release}"
@@ -37,9 +37,9 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 # Do not split this invocation: app and native node must share one resolved dependency graph.
 # The build id hashes the sources in a build script; snapshots keep their mtimes and the target
 # dir is shared, so cargo can skip that script and reuse a stale id. Always recompute it.
-cargo "+${CARGO_TOOLCHAIN:-1.97.1}" clean --target-dir "$TARGET_DIR" -p mindmap-build --profile "$CARGO_PROFILE"
-cargo "+${CARGO_TOOLCHAIN:-1.97.1}" build --locked --target-dir "$TARGET_DIR" -p figcraft -p mindmap-node --profile "$CARGO_PROFILE"
-STAGING="$(mktemp -d "$(dirname "$APP")/.mindmap-build.XXXXXX")"
+cargo "+${CARGO_TOOLCHAIN:-1.97.1}" clean --target-dir "$TARGET_DIR" -p afterburn-build --profile "$CARGO_PROFILE"
+cargo "+${CARGO_TOOLCHAIN:-1.97.1}" build --locked --target-dir "$TARGET_DIR" -p figcraft -p afterburn-node --profile "$CARGO_PROFILE"
+STAGING="$(mktemp -d "$(dirname "$APP")/.afterburn-build.XXXXXX")"
 cleanup() {
   if [[ -d "$STAGING/previous.app" && ! -e "$APP" ]]; then
     mv "$STAGING/previous.app" "$APP" || { echo "Previous app retained at $STAGING/previous.app" >&2; return; }
@@ -47,13 +47,13 @@ cleanup() {
   rm -rf -- "$STAGING"
 }
 trap cleanup EXIT
-BUNDLE="$STAGING/Mindmap.app"
+BUNDLE="$STAGING/Afterburn.app"
 RESOURCES="$BUNDLE/Contents/Resources"
 mkdir -p "$BUNDLE/Contents/MacOS" "$RESOURCES/node/$PLATFORM" "$STAGING/AppIcon.iconset"
-cp "$TARGET_DIR/$PROFILE/figcraft" "$BUNDLE/Contents/MacOS/Mindmap"
-cp "$TARGET_DIR/$PROFILE/mindmap-node" "$RESOURCES/node/$PLATFORM/mindmap-node"
+cp "$TARGET_DIR/$PROFILE/figcraft" "$BUNDLE/Contents/MacOS/Afterburn"
+cp "$TARGET_DIR/$PROFILE/afterburn-node" "$RESOURCES/node/$PLATFORM/afterburn-node"
 cp "$ROOT/service/install-node.sh" "$ROOT/service/install-node.py" "$RESOURCES/"
-python3 "$ROOT/service/node-assets.py" record --binary "$RESOURCES/node/$PLATFORM/mindmap-node" --platform "$PLATFORM" --output "$RESOURCES/node/$PLATFORM/build-info.json"
+python3 "$ROOT/service/node-assets.py" record --binary "$RESOURCES/node/$PLATFORM/afterburn-node" --platform "$PLATFORM" --output "$RESOURCES/node/$PLATFORM/build-info.json"
 if [[ -n "${NODE_ASSETS:-}" ]]; then
   python3 "$ROOT/service/node-assets.py" copy --assets "$NODE_ASSETS" --build-info "$RESOURCES/node/$PLATFORM/build-info.json" --destination "$RESOURCES/node" --native-platform "$PLATFORM"
 fi
@@ -66,8 +66,8 @@ python3 - "$BUNDLE" <<'PY'
 import pathlib, plistlib, sys
 bundle = pathlib.Path(sys.argv[1])
 plist = {
-    'CFBundleName': 'Mindmap', 'CFBundleDisplayName': 'Mindmap',
-    'CFBundleExecutable': 'Mindmap', 'CFBundleIdentifier': 'dev.mindmap.client',
+    'CFBundleName': 'Afterburn', 'CFBundleDisplayName': 'Afterburn',
+    'CFBundleExecutable': 'Afterburn', 'CFBundleIdentifier': 'dev.afterburn.client',
     'CFBundleIconFile': 'AppIcon', 'CFBundlePackageType': 'APPL',
     'CFBundleShortVersionString': '0.1.0', 'CFBundleVersion': '1',
     'LSMinimumSystemVersion': '12.0', 'NSHighResolutionCapable': True,
@@ -77,7 +77,7 @@ with (bundle / 'Contents/Info.plist').open('wb') as stream:
     plistlib.dump(plist, stream)
 PY
 # Sign nested native executables before the containing bundle. Foreign ELF assets are data.
-for binary in "$RESOURCES"/node/darwin-*/mindmap-node; do
+for binary in "$RESOURCES"/node/darwin-*/afterburn-node; do
   [[ -f "$binary" ]] || continue
   codesign --force --sign - "$binary"
 done
@@ -86,7 +86,7 @@ python3 - "$RESOURCES/node" <<'PY'
 import hashlib, json, pathlib, sys
 for path in pathlib.Path(sys.argv[1]).glob('darwin-*/build-info.json'):
     info = json.loads(path.read_text())
-    info['sha256'] = hashlib.sha256((path.parent / 'mindmap-node').read_bytes()).hexdigest()
+    info['sha256'] = hashlib.sha256((path.parent / 'afterburn-node').read_bytes()).hexdigest()
     path.write_text(json.dumps(info, indent=2) + '\n')
 PY
 codesign --force --sign - "$BUNDLE"

@@ -169,18 +169,18 @@ impl figcraft_engine::live::LiveLink for Projects {
     }
 }
 
-/// Three projects open as node maps in the main window, `mindmap` shown.
+/// Three projects open as node maps in the main window, `afterburn` shown.
 fn projects(ctx: &egui::Context) -> FigApp {
     let mut s = Session::empty();
     s.live.install(Box::new(Projects));
-    for n in ["mindmap", "accounting", "code"] {
+    for n in ["afterburn", "accounting", "code"] {
         s.execute("file.new", &json!({"name": n})).unwrap();
         s.execute("collab.host", &json!({})).unwrap();
     }
     ctx.set_embed_viewports(false);
     let mut app = FigApp::new(s, Box::new(NoServices));
     app.ui.home = false;
-    let first = app.session.docs.iter().position(|d| d.doc.name == "mindmap").unwrap();
+    let first = app.session.docs.iter().position(|d| d.doc.name == "afterburn").unwrap();
     app.session.active = first;
     frame(ctx, &mut app);
     app
@@ -214,33 +214,33 @@ fn projects_are_titled_workspace_and_branch() {
 fn an_arrived_map_opens_in_a_new_window_and_the_main_window_keeps_its_own() {
     let ctx = egui::Context::default();
     let mut app = projects(&ctx);
-    let (mindmap, accounting) = (uid(&app, "mindmap"), uid(&app, "accounting"));
+    let (afterburn, accounting) = (uid(&app, "afterburn"), uid(&app, "accounting"));
     // The join made `accounting` active in the main window, as a node welcome does.
     app.session.active = app.session.docs.iter().position(|d| d.uid == accounting).unwrap();
-    app.window_tabs.pending.push(pending("accounting", crate::window_tabs::Into::NewWindow, Some(mindmap)));
+    app.window_tabs.pending.push(pending("accounting", crate::window_tabs::Into::NewWindow, Some(afterburn)));
     // In map mode, where a new window starts on the workspace browser.
     crate::with_map_mode(|| crate::window_tabs::poll(&mut app, &ctx));
     assert!(app.window_tabs.pending.is_empty(), "it landed");
     let w = app.windows.of(accounting);
     assert_ne!(w, 0, "accounting has a window of its own");
     assert!(crate::windows::shown_maps(&app).contains(&(w, Some(accounting))), "showing its map, not the browser");
-    assert_eq!(app.session.ds().unwrap().uid, mindmap, "the main window still shows mindmap");
+    assert_eq!(app.session.ds().unwrap().uid, afterburn, "the main window still shows afterburn");
     frame(&ctx, &mut app);
     let titles = crate::window_tabs::native_titles(&app);
     assert_eq!(
         titles,
-        vec![("mindmap — main".to_string(), "mindmap · main".to_string()), ("accounting — main".to_string(), "accounting · main".to_string())]
+        vec![("afterburn — main".to_string(), "afterburn · main".to_string()), ("accounting — main".to_string(), "accounting · main".to_string())]
     );
-    assert_eq!(crate::with_map_mode(|| app.title()), "mindmap — main", "the window is titled by its project");
+    assert_eq!(crate::with_map_mode(|| app.title()), "afterburn — main", "the window is titled by its project");
 
     // Opening it again brings its window forward; it is never joined twice.
     app.windows.focused = 0;
     assert_eq!(crate::window_tabs::open_workspace(&mut app, &ctx, NODE, "accounting"), crate::window_tabs::Plan::Focus(w));
     assert_eq!(app.windows.focused, w);
     assert!(app.ws.busy.is_none(), "no Open was asked of the node");
-    assert_eq!(crate::window_tabs::open_workspace(&mut app, &ctx, NODE, "mindmap"), crate::window_tabs::Plan::Focus(0));
+    assert_eq!(crate::window_tabs::open_workspace(&mut app, &ctx, NODE, "afterburn"), crate::window_tabs::Plan::Focus(0));
 
-    // `code`, open but hidden behind mindmap in the main window, moves to a window of its own.
+    // `code`, open but hidden behind afterburn in the main window, moves to a window of its own.
     let code = uid(&app, "code");
     assert_eq!(crate::window_tabs::open_workspace(&mut app, &ctx, NODE, "code"), crate::window_tabs::Plan::Move(code));
     assert_ne!(app.windows.of(code), 0);
@@ -252,19 +252,19 @@ fn an_arrived_map_opens_in_a_new_window_and_the_main_window_keeps_its_own() {
 fn a_switch_made_in_another_window_lands_there() {
     let ctx = egui::Context::default();
     let mut app = projects(&ctx);
-    let (mindmap, code) = (uid(&app, "mindmap"), uid(&app, "code"));
+    let (afterburn, code) = (uid(&app, "afterburn"), uid(&app, "code"));
     let index = app.session.docs.iter().position(|d| d.doc.name == "accounting").unwrap();
     let w = crate::windows::open(&mut app, &ctx, Some(index), None, None).unwrap();
     frame(&ctx, &mut app);
     // Window w switched to `code`; its map arrived in the main window's frame.
     app.session.active = app.session.docs.iter().position(|d| d.uid == code).unwrap();
-    let mut p = pending("code", crate::window_tabs::Into::Window(w), Some(mindmap));
+    let mut p = pending("code", crate::window_tabs::Into::Window(w), Some(afterburn));
     p.origin = w;
     app.window_tabs.pending.push(p);
     crate::window_tabs::poll(&mut app, &ctx);
     assert_eq!(app.windows.of(code), w);
     assert!(crate::windows::shown_maps(&app).contains(&(w, Some(code))));
-    assert_eq!(app.session.ds().unwrap().uid, mindmap);
+    assert_eq!(app.session.ds().unwrap().uid, afterburn);
 }
 
 #[test]
@@ -294,7 +294,7 @@ fn switching_to_a_project_another_window_shows_brings_that_window_forward() {
     let x = crate::windows::open(&mut app, &ctx, Some(i), None, None).unwrap();
     frame(&ctx, &mut app);
     app.windows.focused = w;
-    let mut p = pending("code", crate::window_tabs::Into::Window(w), Some(uid(&app, "mindmap")));
+    let mut p = pending("code", crate::window_tabs::Into::Window(w), Some(uid(&app, "afterburn")));
     p.origin = w;
     app.window_tabs.pending.push(p);
     crate::window_tabs::poll(&mut app, &ctx);
