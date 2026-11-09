@@ -1919,14 +1919,15 @@ impl FigApp {
                     let tabs_left = if sidebar_w > 0.0 {
                         rect.left()
                     } else {
-                        let toggle_left = rect.left() + if inset { MAC_BUTTONS_W - 10.0 } else { 8.0 };
+                        // A clear gap after the traffic lights, not tucked against them.
+                        let toggle_left = rect.left() + if inset { MAC_BUTTONS_W } else { 8.0 };
                         let toggle = egui::Rect::from_x_y_ranges(toggle_left..=toggle_left + 28.0, rect.y_range());
                         let mut cell = ui.new_child(centred(toggle, egui::Layout::left_to_right(egui::Align::Center)));
                         if sidebar_toggle(&mut cell, false).clicked() {
                             self.ws.pane_open = true;
                             self.ws.refresh(&ctx);
                         }
-                        toggle.right() + if inset { 0.0 } else { 4.0 }
+                        toggle.right() + 4.0
                     };
                     let tabs_right = if sync_w > 0.0 {
                         rect.right()

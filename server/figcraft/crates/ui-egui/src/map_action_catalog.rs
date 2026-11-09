@@ -36,7 +36,7 @@ pub const ACTIONS: &[Action] = &[
         "Workspaces + app",
         "Shift+Cmd+N",
         "Ctrl+Shift+N",
-        "Workspace: open workspace creation; the new workspace opens in a new window tab, never in place."
+        "Workspace: open an existing workspace, or create one, in a new window tab, never in place."
     ),
     action!("map.save", "Save map", "Workspaces + app", "Cmd+S", "Ctrl+S", "Map: ask the node to persist; show saving, saved or error."),
     action!(

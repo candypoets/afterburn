@@ -182,7 +182,16 @@ fn handle_connection(stream: TcpStream, id: u64, node: &Arc<Node>) -> Result<()>
         // the same connection can continue carrying live edits while an agent starts.
         let slow = matches!(
             request["method"].as_str(),
-            Some("init" | "send" | "sync" | "host.ensure" | "workspaces" | "worktree.create")
+            Some(
+                "init"
+                    | "send"
+                    | "sync"
+                    | "host.ensure"
+                    | "workspaces"
+                    | "worktree.create"
+                    | "pane.rename"
+                    | "pane.close"
+            )
         );
         if slow {
             let shared = node.clone();
@@ -536,6 +545,8 @@ impl Node {
                 req["label"].as_str(),
             )?})),
             "workspace.focus" => self.herdr.focus_workspace(required(req, "workspace")?),
+            "pane.rename" => self.herdr.rename_pane(req),
+            "pane.close" => self.herdr.close_pane(req),
             "worktree.create" => self
                 .herdr
                 .create_worktree(&serde_json::from_value(req.clone())?),

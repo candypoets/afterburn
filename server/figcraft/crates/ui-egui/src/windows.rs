@@ -146,9 +146,16 @@ impl FigApp {
         title_of(shown)
     }
 
-    /// Files in this window with unsaved changes (a branch tab's edits live on in its file).
+    /// Files in this window with unsaved changes (a branch tab's edits live on in its file; a
+    /// workspace map's on its node, which saves it).
     fn unsaved(&self) -> Vec<String> {
-        self.session.docs.iter().filter(|d| self.shows(d.uid) && d.is_dirty() && d.branch_of.is_none()).map(|d| d.doc.name.clone()).collect()
+        let on_node = |uid: u64| crate::map_mode() && self.session.live_doc(uid);
+        self.session
+            .docs
+            .iter()
+            .filter(|d| self.shows(d.uid) && d.is_dirty() && d.branch_of.is_none() && !on_node(d.uid))
+            .map(|d| d.doc.name.clone())
+            .collect()
     }
 }
 

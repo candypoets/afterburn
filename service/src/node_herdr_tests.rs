@@ -102,6 +102,7 @@ fn absent_binary_requires_approval_without_creating_any_files() {
 fn pane(cwd: Option<&str>, focused: bool) -> Pane {
     Pane {
         pane_id: "w1:p1".into(),
+        label: None,
         tab_id: None,
         cwd: cwd.map(str::to_owned),
         foreground_cwd: Some("/wrong-foreground".into()),
@@ -289,6 +290,266 @@ fn read_request(stream: &mut UnixStream) -> Value {
 
 fn write_json(stream: &mut UnixStream, value: Value) {
     writeln!(stream, "{value}").unwrap();
+}
+
+// Only disposable sockets are used for pane mutations. Keep the listener alive after the
+// scripted replies so refusal tests can also prove that no mutation was attempted.
+fn pane_server(
+    node: &NodeHerdr,
+    exchanges: Vec<(&'static str, Value, Value)>,
+) -> thread::JoinHandle<UnixListener> {
+    let listener = UnixListener::bind(&node.socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    thread::spawn(move || {
+        for (method, params, mut reply) in exchanges {
+            let mut stream = accept(&listener);
+            let request = read_request(&mut stream);
+            assert_eq!(request["method"], method);
+            assert_eq!(request["params"], params);
+            reply["id"] = request["id"].clone();
+            write_json(&mut stream, reply);
+        }
+        listener
+    })
+}
+
+fn no_more_requests(server: thread::JoinHandle<UnixListener>) {
+    let listener = server.join().unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+fn pane_info() -> Value {
+    json!({"result":{"type":"pane_info","pane":{"pane_id":"w1:p1","workspace_id":"w1"}}})
+}
+
+#[test]
+fn pane_rename_routes_exact_id_and_supports_setting_and_clearing_labels() {
+    for label in [Some(json!("Backend agent")), Some(Value::Null), None] {
+        let fixture = Fixture::new();
+        let node = fixture.node();
+        let expected = label.clone().unwrap_or(Value::Null);
+        let result = json!({"type":"pane_info","pane":{"pane_id":"w1:p1","label":expected}});
+        let server = pane_server(
+            &node,
+            vec![
+                ("pane.get", json!({"pane_id":"w1:p1"}), pane_info()),
+                (
+                    "pane.rename",
+                    json!({"pane_id":"w1:p1","label":expected}),
+                    json!({"result":result}),
+                ),
+            ],
+        );
+        let mut request = json!({"workspace":"w1","pane":"w1:p1"});
+        if let Some(label) = label {
+            request["label"] = label;
+        }
+        assert_eq!(node.rename_pane(&request).unwrap(), result);
+        no_more_requests(server);
+    }
+}
+
+#[test]
+fn pane_close_routes_only_the_verified_id_after_confirmation() {
+    let fixture = Fixture::new();
+    let node = fixture.node();
+    let result = json!({"type":"ok"});
+    let server = pane_server(
+        &node,
+        vec![
+            ("pane.get", json!({"pane_id":"w1:p1"}), pane_info()),
+            (
+                "pane.close",
+                json!({"pane_id":"w1:p1"}),
+                json!({"result":result}),
+            ),
+        ],
+    );
+    assert_eq!(
+        node.close_pane(&json!({"workspace":"w1","pane":"w1:p1","confirm":true}))
+            .unwrap(),
+        result
+    );
+    no_more_requests(server);
+}
+
+#[test]
+fn pane_mutations_validate_context_label_and_confirmation_before_contacting_herdr() {
+    let fixture = Fixture::new();
+    let node = fixture.node();
+    let server = pane_server(&node, vec![]);
+    for key in ["workspace", "pane"] {
+        for invalid in [
+            None,
+            Some(Value::Null),
+            Some(json!(4)),
+            Some(json!("")),
+            Some(json!(" ")),
+            Some(json!(" w1:p1")),
+        ] {
+            let mut request = json!({"workspace":"w1","pane":"w1:p1","confirm":true});
+            if let Some(invalid) = invalid {
+                request[key] = invalid;
+            } else {
+                request.as_object_mut().unwrap().remove(key);
+            }
+            for error in [
+                node.rename_pane(&request).unwrap_err(),
+                node.close_pane(&request).unwrap_err(),
+            ] {
+                assert!(error.to_string().contains(key), "{error}");
+            }
+        }
+    }
+    for label in [json!(false), json!(2), json!([]), json!({})] {
+        let error = node
+            .rename_pane(&json!({"workspace":"w1","pane":"w1:p1","label":label}))
+            .unwrap_err();
+        assert!(error.to_string().contains("label must be a string or null"));
+    }
+    for confirm in [
+        None,
+        Some(Value::Null),
+        Some(json!(false)),
+        Some(json!("true")),
+        Some(json!(1)),
+    ] {
+        let mut request = json!({"workspace":"w1","pane":"w1:p1"});
+        if let Some(confirm) = confirm {
+            request["confirm"] = confirm;
+        }
+        assert!(node
+            .close_pane(&request)
+            .unwrap_err()
+            .to_string()
+            .contains("confirm: true"));
+    }
+    no_more_requests(server);
+}
+
+#[test]
+fn pane_mutations_refuse_other_workspaces_aliases_and_incomplete_metadata() {
+    for close in [false, true] {
+        for (requested, returned, message) in [
+            (
+                "w1:p1",
+                json!({"pane_id":"w1:p1","workspace_id":"w2"}),
+                "does not belong",
+            ),
+            (
+                "w1:p1",
+                json!({"pane_id":"w2:p1","workspace_id":"w2"}),
+                "exact requested pane",
+            ),
+            (
+                "agent-name",
+                json!({"pane_id":"w1:p1","workspace_id":"w1"}),
+                "exact requested pane",
+            ),
+            ("w1:p1", json!({"pane_id":"w1:p1"}), "does not belong"),
+            ("w1:p1", Value::Null, "exact requested pane"),
+        ] {
+            let fixture = Fixture::new();
+            let node = fixture.node();
+            let server = pane_server(
+                &node,
+                vec![(
+                    "pane.get",
+                    json!({"pane_id":requested}),
+                    json!({"result":{"type":"pane_info","pane":returned}}),
+                )],
+            );
+            let request = json!({"workspace":"w1","pane":requested,"confirm":true});
+            let error = if close {
+                node.close_pane(&request)
+            } else {
+                node.rename_pane(&request)
+            }
+            .unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+            no_more_requests(server);
+        }
+    }
+}
+
+#[test]
+fn pane_mutations_propagate_lookup_and_mutation_errors() {
+    for method in ["pane.rename", "pane.close"] {
+        for fail_lookup in [false, true] {
+            let fixture = Fixture::new();
+            let node = fixture.node();
+            let upstream =
+                json!({"error":{"code":"pane_not_found","message":"upstream private details"}});
+            let mut exchanges = vec![(
+                "pane.get",
+                json!({"pane_id":"w1:p1"}),
+                if fail_lookup {
+                    upstream.clone()
+                } else {
+                    pane_info()
+                },
+            )];
+            if !fail_lookup {
+                let params = if method == "pane.rename" {
+                    json!({"pane_id":"w1:p1","label":null})
+                } else {
+                    json!({"pane_id":"w1:p1"})
+                };
+                exchanges.push((method, params, upstream));
+            }
+            let server = pane_server(&node, exchanges);
+            let request = json!({"workspace":"w1","pane":"w1:p1","confirm":true});
+            let error = if method == "pane.close" {
+                node.close_pane(&request)
+            } else {
+                node.rename_pane(&request)
+            }
+            .unwrap_err();
+            assert_eq!(error.to_string(), "Herdr request failed (pane_not_found)");
+            no_more_requests(server);
+        }
+    }
+}
+
+#[test]
+fn inventory_exposes_pane_labels_independently_of_agent_names_and_tabs() {
+    let fixture = Fixture::new();
+    let node = fixture.node();
+    let snapshot = json!({
+        "workspaces":[{"workspace_id":"w1","label":"Project"}],
+        "tabs":[{"tab_id":"w1:t1","label":"Backend","number":1}],
+        "panes":[
+            {"workspace_id":"w1","pane_id":"w1:p1","label":"Custom pane"},
+            {"workspace_id":"w1","pane_id":"w1:p2","label":null},
+            {"workspace_id":"w1","pane_id":"w1:p3"},
+            {"workspace_id":"w2","pane_id":"w2:p1","label":"Other workspace"}
+        ],
+        "agents":[
+            {"workspace_id":"w1","pane_id":"w1:p1","tab_id":"w1:t1","name":"agent-name","agent":"codex"},
+            {"workspace_id":"w1","pane_id":"w1:p2"},
+            {"workspace_id":"w1","pane_id":"w1:p3"}
+        ]
+    });
+    let server = pane_server(
+        &node,
+        vec![(
+            "session.snapshot",
+            json!({}),
+            json!({"result":{"type":"session_snapshot","snapshot":snapshot}}),
+        )],
+    );
+    let views = serde_json::to_value(node.workspaces().unwrap()).unwrap();
+    let details = &views[0]["agents_detail"];
+    assert_eq!(details[0]["pane_label"], "Custom pane");
+    assert_eq!(details[0]["name"], "agent-name");
+    assert_eq!(details[0]["tab"], "Backend");
+    assert_eq!(details[0]["kind"], "codex");
+    assert!(details[1].get("pane_label").is_none());
+    assert!(details[2].get("pane_label").is_none());
+    no_more_requests(server);
 }
 
 #[test]

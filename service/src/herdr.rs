@@ -76,7 +76,7 @@ pub struct Agent {
     /// The pane's terminal title without spinners or styling: what the agent is doing.
     #[serde(default)]
     pub terminal_title_stripped: Option<String>,
-    /// The hosting tab's name, when someone named it: the pane's name in Herdr. Filled from the
+    /// The hosting tab's name, when someone named it. Filled from the
     /// session snapshot's tabs, never from `agent.list`.
     #[serde(skip)]
     pub tab_label: Option<String>,
@@ -109,6 +109,9 @@ impl Tab {
 pub struct Pane {
     /// Stable pane id (`wX:p2`).
     pub pane_id: String,
+    /// Custom pane label, independent of the agent name and tab label.
+    #[serde(default)]
+    pub label: Option<String>,
     /// Tab hosting the pane.
     #[serde(default)]
     pub tab_id: Option<String>,

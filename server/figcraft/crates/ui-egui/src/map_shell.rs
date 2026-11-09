@@ -120,6 +120,17 @@ pub fn poll(app: &mut FigApp, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
+/// The creation form (the workspace list's "New workspace…"). Over a map the window keeps it and
+/// the new workspace opens in a new window tab; on the Workspaces screen it opens there. The
+/// Workspaces screen draws the form, and over a map the status bar does.
+pub fn new_workspace_form(app: &mut FigApp) {
+    let over_map = map_visible(app);
+    if !app.new_workspace.open {
+        crate::new_workspace::open(app);
+    }
+    app.new_workspace.new_window = over_map;
+}
+
 /// True means this module recognizes the id, even if the action is currently unavailable.
 /// The caller decides whether map-mode bindings are enabled; tests need no global map mode.
 pub fn run(app: &mut FigApp, ctx: &egui::Context, id: &str) -> bool {
@@ -140,15 +151,11 @@ pub fn run(app: &mut FigApp, ctx: &egui::Context, id: &str) -> bool {
     switch_composer(app, ctx);
     match id {
         "map.openWorkspace" | "map.close" => workspace_home(app),
-        // ⇧⌘N: the creation modal. Over a map the window keeps it, and the new workspace opens
-        // in a new window tab; on the Workspaces screen it opens there. The Workspaces screen
-        // draws the modal, and over a map the status bar does.
+        // ⇧⌘N: the workspaces on every machine, to open one in a new window tab; "New
+        // workspace…" at the list's end opens the creation form ([`new_workspace_form`]).
         "map.newWorkspace" => {
-            let over_map = map_visible(app);
-            if !app.new_workspace.open {
-                crate::new_workspace::open(app);
-            }
-            app.new_workspace.new_window = over_map;
+            reveal_chrome(app);
+            crate::window_tabs::request_new_tab(app);
         }
         "map.save" => save(app, ctx),
         "map.reconnect" => {
@@ -486,17 +493,21 @@ mod tests {
     }
 
     #[test]
-    fn creation_opens_the_existing_form_without_resetting_an_open_form() {
+    fn new_workspace_lists_the_workspaces_and_the_form_keeps_an_open_draft() {
         let mut app = app();
         let ctx = egui::Context::default();
         app.ui.home = false;
         app.compose.drafts.push(draft("retained"));
         assert!(run(&mut app, &ctx, "map.newWorkspace"));
         assert!(!app.ui.home, "over a map, the window keeps it");
+        assert!(crate::switcher::is_open(&app), "⇧⌘N lists the workspaces to open one");
+        assert!(app.ui.new_tab_armed, "the one chosen opens in a new window tab");
+        assert!(!app.new_workspace.open);
+        new_workspace_form(&mut app);
         assert!(app.new_workspace.open);
         assert!(app.new_workspace.new_window, "the workspace opens in a new window tab");
         app.new_workspace.folder = "/synthetic/folder".into();
-        assert!(run(&mut app, &ctx, "map.newWorkspace"));
+        new_workspace_form(&mut app);
         assert_eq!(app.new_workspace.folder, "/synthetic/folder");
         assert_eq!(app.compose.drafts, [draft("retained")]);
         assert!(!app.new_workspace.creating);

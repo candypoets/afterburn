@@ -8,6 +8,9 @@ use serde::Serialize;
 pub struct AgentDetail {
     /// Pane hosting the agent.
     pub pane: String,
+    /// Custom Herdr pane label, when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_label: Option<String>,
     /// Agent kind (`codex`, `claude`, …), when the payload names one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,

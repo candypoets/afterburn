@@ -26,3 +26,6 @@ service/data/
 
 # Unified Cargo workspace build output
 /target/
+
+# agent worktrees kept outside the repository index
+.claude/worktrees/

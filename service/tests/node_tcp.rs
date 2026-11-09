@@ -20,6 +20,9 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FRAME: u64 = 16 * 1024 * 1024;
 const DESIGN: &str = ".mindmap/map.figcraft";
 
+#[path = "support/pane_rpc.rs"]
+mod pane_rpc;
+
 struct Process(Child);
 
 impl Drop for Process {

@@ -1175,7 +1175,7 @@ pub(crate) fn choose(app: &mut FigApp, ctx: &egui::Context, pick: Pick, text: &s
         }
         Pick::NewWorkspace => {
             close(app);
-            crate::map_actions::run(app, ctx, "map.newWorkspace");
+            crate::map_shell::new_workspace_form(app);
         }
         Pick::AddMachine => {
             close(app);

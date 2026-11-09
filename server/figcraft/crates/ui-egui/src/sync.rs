@@ -954,8 +954,11 @@ pub fn header_button(app: &mut FigApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
     if !open {
         let chip = rect.shrink2(vec2(0.0, 1.0));
-        let fill = look.fill.unwrap_or(if response.hovered() || toggle.hovered() { colors.soft } else { colors.panel });
-        painter.rect_filled(chip, CornerRadius::same(5), fill);
+        // At rest the button sits on the header row itself; it fills on hover or with cards waiting.
+        let hovered = response.hovered() || toggle.hovered();
+        if let Some(fill) = look.fill.or(hovered.then_some(colors.soft)) {
+            painter.rect_filled(chip, CornerRadius::same(5), fill);
+        }
     }
     let disc_rect = Rect::from_center_size(pos2(rect.left() + lead + disc / 2.0, rect.center().y), vec2(disc, disc));
     let state = if burning { burn_disc::DiscState::Burning { t: ui.input(|input| input.time) } } else { burn_disc::DiscState::Blank };

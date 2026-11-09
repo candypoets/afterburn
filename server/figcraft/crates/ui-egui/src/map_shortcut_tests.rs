@@ -541,7 +541,7 @@ fn command_backspace_deletes_the_selection_and_command_z_brings_it_back() {
 }
 
 #[test]
-fn cmd_n_opens_new_page_and_shift_cmd_n_creates_a_workspace_without_leaving_the_map() {
+fn cmd_n_opens_new_page_and_shift_cmd_n_lists_workspaces_to_open_in_a_new_tab() {
     crate::with_map_mode(|| {
         let (mut u, _, _) = setup();
         press(&mut u, Key::N, cmd());
@@ -551,25 +551,31 @@ fn cmd_n_opens_new_page_and_shift_cmd_n_creates_a_workspace_without_leaving_the_
         u.frame(vec![]);
 
         press(&mut u, Key::N, cmd() | Modifiers::SHIFT);
-        assert!(u.app.new_workspace.open, "⇧⌘N opens workspace creation");
-        assert!(u.app.new_workspace.new_window, "the new workspace opens in a new window tab");
+        assert!(crate::switcher::is_open(&u.app), "⇧⌘N lists the existing workspaces");
+        assert!(u.app.ui.new_tab_armed, "the one chosen opens in a new window tab");
+        assert!(!u.app.new_workspace.open, "creating one is the list's last row");
         assert!(!u.app.ui.home, "this window keeps its map");
         assert!(!u.app.new_page.open);
-        // The modal draws over the map even with the sidebar hidden.
+
+        // The list's "New workspace…" opens the form over the map, for a new window tab.
+        crate::map_shell::new_workspace_form(&mut u.app);
+        crate::switcher::close(&mut u.app);
         u.app.ws.pane_open = false;
         u.frame(vec![]);
+        assert!(u.app.new_workspace.open);
+        assert!(u.app.new_workspace.new_window, "the new workspace opens in a new window tab");
         assert_eq!(u.ctx.memory(|m| m.top_modal_layer()).map(|layer| layer.id), Some(egui::Id::new("new_workspace_modal")), "the modal is drawn");
         assert!(!u.app.ui.home);
     });
 }
 
 #[test]
-fn shift_cmd_n_on_the_workspaces_screen_opens_there() {
+fn the_new_workspace_form_on_the_workspaces_screen_opens_there() {
     crate::with_map_mode(|| {
         let (mut u, _, _) = setup();
         u.app.ui.home = true;
         u.frame(vec![]);
-        press(&mut u, Key::N, cmd() | Modifiers::SHIFT);
+        crate::map_shell::new_workspace_form(&mut u.app);
         assert!(u.app.new_workspace.open);
         assert!(!u.app.new_workspace.new_window, "from the Workspaces screen the workspace opens in place");
     });

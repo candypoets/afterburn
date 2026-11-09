@@ -273,6 +273,67 @@ impl NodeHerdr {
         )
     }
 
+    /// Rename an exact pane in an explicit workspace. Omitted/null labels clear the label.
+    pub fn rename_pane(&self, request: &Value) -> Result<Value> {
+        let label = match request.get("label") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(label)) => Some(label.as_str()),
+            Some(_) => return Err(Error::new("label must be a string or null")),
+        };
+        let pane = self.checked_pane(request)?;
+        events::rpc(
+            &self.socket,
+            "pane.rename",
+            json!({"pane_id": pane, "label": label}),
+            Duration::from_secs(10),
+        )
+    }
+
+    /// Terminate an exact pane only after the caller explicitly confirms the close.
+    pub fn close_pane(&self, request: &Value) -> Result<Value> {
+        if request.get("confirm") != Some(&Value::Bool(true)) {
+            return Err(Error::new("pane.close requires confirm: true"));
+        }
+        let pane = self.checked_pane(request)?;
+        events::rpc(
+            &self.socket,
+            "pane.close",
+            json!({"pane_id": pane}),
+            Duration::from_secs(10),
+        )
+    }
+
+    fn checked_pane<'a>(&self, request: &'a Value) -> Result<&'a str> {
+        let explicit_id = |key: &str| {
+            request
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && *id == id.trim())
+                .ok_or_else(|| Error::new(format!("{key} needs an explicit nonempty id")))
+        };
+        let workspace = explicit_id("workspace")?;
+        let pane = explicit_id("pane")?;
+        let result = events::rpc(
+            &self.socket,
+            "pane.get",
+            json!({"pane_id": pane}),
+            Duration::from_secs(10),
+        )?;
+        // Never accept an alias, caller-context resolution, or a stale ID redirected by Herdr.
+        // Herdr does not reuse closed IDs and assigns a new ID when moving between workspaces.
+        if result["pane"]["pane_id"].as_str() != Some(pane) {
+            return Err(Error::new(
+                "Herdr pane.get did not return the exact requested pane id",
+            ));
+        }
+        if result["pane"]["workspace_id"].as_str() != Some(workspace) {
+            return Err(Error::new(
+                "pane does not belong to the requested workspace",
+            ));
+        }
+        Ok(pane)
+    }
+
     /// Herdr owns git/worktree creation and returns the created workspace/pane handles.
     pub fn create_worktree(&self, request: &CreateWorktree) -> Result<Value> {
         if [request.workspace_id.as_deref(), request.cwd.as_deref()]
@@ -502,7 +563,7 @@ fn install() -> Result<()> {
     }
 }
 
-/// Give each agent its tab's name: Herdr names tabs, not panes, so the tab label is the pane's.
+/// Preserve each agent's tab name independently of its custom pane label.
 fn name_tabs(agents: &mut [Agent], tabs: &[Tab]) {
     for agent in agents {
         agent.tab_label = agent
@@ -564,6 +625,10 @@ fn workspace_view(
             .filter_map(|a| {
                 Some(AgentDetail {
                     pane: a.pane_id.clone()?,
+                    pane_label: panes
+                        .iter()
+                        .find(|pane| Some(&pane.pane_id) == a.pane_id.as_ref())
+                        .and_then(|pane| pane.label.clone()),
                     kind: a.agent.clone(),
                     name: a.name.clone(),
                     tab: a.tab_label.clone(),

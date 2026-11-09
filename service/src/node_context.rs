@@ -40,22 +40,26 @@ pub fn render(doc: &Document, request: &Request<'_>) -> String {
         one_line(request.node),
         one_line(request.session),
     );
-    let page = request
-        .page
-        .filter(|page| doc.pages.contains(page))
-        .or_else(|| {
-            request
-                .selected
-                .iter()
-                .chain(request.commented)
-                .find_map(|id| page_of(doc, *id))
-        });
+    // Trust a page the client named: a page created for this prompt may be newer than the
+    // snapshot this packet renders from. Dropping it would widen a one-page task to the whole map.
+    let page = request.page.or_else(|| {
+        request
+            .selected
+            .iter()
+            .chain(request.commented)
+            .find_map(|id| page_of(doc, *id))
+    });
     if let Some(page) = page {
-        out.push_str(&format!(
-            "Scope: page {} (id {}) and its subpages only.\n",
-            name(doc, page),
-            page.0
-        ));
+        let known = doc.pages.contains(&page);
+        let named = if known {
+            format!("{} (id {})", name(doc, page), page.0)
+        } else {
+            page.0.to_string()
+        };
+        out.push_str(&format!("Scope: page {named} and its subpages only.\n"));
+        if !known {
+            out.push_str("This page is not in the session snapshot yet; read it again with get_node before editing.\n");
+        }
         if request.new_page {
             out.push_str("This page was just created for the prompt below.\n");
             out.push_str(&format!(
@@ -379,8 +383,19 @@ mod tests {
         let (doc, backend, _, _) = doc();
         assert!(render(&doc, &request(Some(backend), &[])).contains("Scope: page backend code"));
         assert!(render(&doc, &request(None, &[])).contains("Scope: the whole map"));
-        // An unknown page id falls back instead of naming a page that does not exist.
-        assert!(render(&doc, &request(Some(NodeId(999_999)), &[])).contains("Scope: the whole map"));
+    }
+
+    #[test]
+    fn a_page_created_with_the_prompt_keeps_its_scope_before_the_snapshot() {
+        let (doc, _, _, _) = doc();
+        // The client names the page it just created; the node's copy may not have it yet.
+        let text = render(&doc, &request(Some(NodeId(999_999)), &[]));
+        assert!(
+            text.contains("Scope: page 999999 and its subpages only."),
+            "{text}"
+        );
+        assert!(text.contains("not in the session snapshot yet"), "{text}");
+        assert!(!text.contains("the whole map"), "{text}");
     }
 
     #[test]

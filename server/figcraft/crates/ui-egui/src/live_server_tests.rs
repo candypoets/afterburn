@@ -205,3 +205,20 @@ fn a_view_link_shows_the_badge_and_only_the_moving_tools() {
     assert!(!has_text(&shapes, "View only"));
     assert!(h.app.session.execute("tool.set", &json!({"tool": "rectangle"})).is_ok());
 }
+
+#[test]
+fn a_workspace_maps_window_closes_without_asking_its_edits_are_on_the_node() {
+    let (mut h, _) = Harness::new();
+    joined(&mut h, Access::Edit);
+    // Only the joined map is open.
+    h.app.session.execute("file.close", &json!({"index": 0, "force": true})).unwrap();
+    h.app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+    assert!(h.app.session.ds().unwrap().is_dirty());
+    // A file of your own in a session still asks.
+    crate::windows::request_close(&mut h.app, &h.ctx);
+    assert!(h.app.ui.confirm_close);
+    h.app.ui.confirm_close = false;
+
+    crate::with_map_mode(|| crate::windows::request_close(&mut h.app, &h.ctx));
+    assert!(!h.app.ui.confirm_close, "nothing to lose: the node holds the map");
+}
