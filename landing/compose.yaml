@@ -1,0 +1,30 @@
+# afterburn.nuts.cash: the landing page in a container of its own, routed by the host's Traefik.
+#   docker compose -f landing/compose.yaml up -d --build
+name: afterburn-landing
+services:
+  landing:
+    build: .
+    image: afterburn-landing:latest
+    container_name: afterburn-landing
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt: [no-new-privileges:true]
+    volumes:
+      # The demo video (media/demo.mp4) and builds (download/…), published without a rebuild.
+      - ./files:/srv/files:ro
+    networks: [traefik-net]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: traefik-net
+      traefik.http.routers.afterburn-landing.entrypoints: web
+      traefik.http.routers.afterburn-landing.rule: Host(`afterburn.nuts.cash`)
+      traefik.http.routers.afterburn-landing.service: afterburn-landing
+      traefik.http.services.afterburn-landing.loadbalancer.server.port: "8080"
+
+networks:
+  traefik-net:
+    external: true
