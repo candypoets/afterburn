@@ -47,26 +47,74 @@ const CHIP_MAX_W: f32 = 280.0;
 const VISIBLE_DRAFTS: usize = 3;
 
 /// The warm map palette: a white paper bar like the map bar above it.
-const PANEL: Color32 = Color32::WHITE;
-const SOFT: Color32 = Color32::from_rgb(0xF8, 0xF6, 0xF3);
-const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
-const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
-const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
-const ACCENT_HOVER: Color32 = Color32::from_rgb(0xC2, 0x55, 0x3E);
-const MAP_INK: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
+#[allow(non_snake_case)]
+fn PANEL() -> Color32 {
+    crate::map_colors::get().panel
+}
+#[allow(non_snake_case)]
+fn SOFT() -> Color32 {
+    crate::map_colors::get().soft
+}
+#[allow(non_snake_case)]
+fn BORDER() -> Color32 {
+    crate::map_colors::get().border
+}
+#[allow(non_snake_case)]
+fn INK() -> Color32 {
+    crate::map_colors::get().ink
+}
+#[allow(non_snake_case)]
+fn MUTED() -> Color32 {
+    crate::map_colors::get().muted
+}
+#[allow(non_snake_case)]
+fn FAINT() -> Color32 {
+    crate::map_colors::get().faint
+}
+#[allow(non_snake_case)]
+fn ACCENT() -> Color32 {
+    crate::map_colors::get().accent
+}
+#[allow(non_snake_case)]
+fn ACCENT_HOVER() -> Color32 {
+    crate::map_colors::get().accent_hover
+}
+#[allow(non_snake_case)]
+fn MAP_INK() -> Color32 {
+    crate::map_colors::get().map_ink
+}
 /// The pale accent behind a comment saved on several cards, and the `N SELECTED` chip.
-const ACCENT_TINT: Color32 = Color32::from_rgb(0xFA, 0xE9, 0xE4);
-const ACCENT_TINT_HOVER: Color32 = Color32::from_rgb(0xF5, 0xDC, 0xD5);
-const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
+#[allow(non_snake_case)]
+fn ACCENT_TINT() -> Color32 {
+    crate::map_colors::get().accent_tint
+}
+#[allow(non_snake_case)]
+fn ACCENT_TINT_HOVER() -> Color32 {
+    crate::map_colors::get().accent_tint_hover
+}
+#[allow(non_snake_case)]
+fn DANGER() -> Color32 {
+    crate::map_colors::get().danger
+}
 /// The draft open in the field, and that field: a blue that leaves the warm accents alone.
-const EDIT: Color32 = Color32::from_rgb(0x2F, 0x6F, 0xDB);
-const EDIT_FILL: Color32 = Color32::from_rgb(0xEA, 0xF0, 0xFB);
+#[allow(non_snake_case)]
+fn EDIT() -> Color32 {
+    crate::map_colors::get().edit
+}
+#[allow(non_snake_case)]
+fn EDIT_FILL() -> Color32 {
+    crate::map_colors::get().edit_fill
+}
 /// A working agent's ink, and the help line's when nobody is chosen.
-const WORKING: Color32 = Color32::from_rgb(0xA8, 0x6B, 0x12);
+#[allow(non_snake_case)]
+fn WORKING() -> Color32 {
+    crate::map_colors::get().working_ink
+}
 /// Send while it can't send.
-const DISABLED_FILL: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
+#[allow(non_snake_case)]
+fn DISABLED_FILL() -> Color32 {
+    crate::map_colors::get().disabled_fill
+}
 
 /// The help line when no agent is idle, so the composer chose nobody.
 const NO_IDLE: &str = "No idle agent. Choose deliberately or start a new agent.";
@@ -517,7 +565,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         .anchor(Align2::LEFT_BOTTOM, vec2(pane, -crate::status_bar::HEIGHT))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            let dock = egui::Frame::NONE.fill(PANEL).inner_margin(Margin::symmetric(16, 12)).show(ui, |ui| {
+            let dock = egui::Frame::NONE.fill(PANEL()).inner_margin(Margin::symmetric(16, 12)).show(ui, |ui| {
                 if !enabled {
                     ui.disable();
                 }
@@ -530,7 +578,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
             });
             // The dock's only edge: one rule along its top.
             let top = dock.response.rect;
-            ui.painter().hline(top.x_range(), top.top(), Stroke::new(1.0, BORDER));
+            ui.painter().hline(top.x_range(), top.top(), Stroke::new(1.0, BORDER()));
         });
     crate::a11y::area(&mut app.ui.nav, crate::a11y::Region::Properties, composer.response.rect);
     if enabled && !has_selection && comments > 0 && page_comment_chip(ctx, composer.response.rect, comments) {
@@ -630,7 +678,7 @@ fn body(
     // The context line is the accent in every state, as the design draws it.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 14.0;
-        ui.label(egui::RichText::new(&context_line).font(mono(8.5)).color(ACCENT));
+        ui.label(egui::RichText::new(&context_line).font(mono(8.5)).color(ACCENT()));
         if has_selection && names.node_id.is_some() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_action(ui, "×  clear selection", "Comment on the whole page") {
@@ -705,8 +753,8 @@ fn body(
     let rows = state.input.split('\n').map(|line| ((line.chars().count() as f32 / per_line).ceil() as usize).max(1)).sum::<usize>().clamp(1, 8);
     let editing_now = state.editing.is_some();
     let input_response = egui::Frame::NONE
-        .fill(if editing_now { PANEL } else { SOFT })
-        .stroke(Stroke::new(1.0, if editing_now { EDIT } else { BORDER }))
+        .fill(if editing_now { PANEL() } else { SOFT() })
+        .stroke(Stroke::new(1.0, if editing_now { EDIT() } else { BORDER() }))
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(10, 6))
         .show(ui, |ui| {
@@ -716,7 +764,7 @@ fn body(
                     .id(input_id())
                     .frame(egui::Frame::NONE)
                     .font(regular(12.5))
-                    .hint_text(egui::RichText::new(placeholder).font(regular(12.5)).color(FAINT))
+                    .hint_text(egui::RichText::new(placeholder).font(regular(12.5)).color(FAINT()))
                     .desired_rows(rows)
                     .desired_width(ui.available_width()),
             )
@@ -808,7 +856,7 @@ fn body(
             format!("{esc}⏎ save   ·   ⇧⏎ new line   ·   ⌘⏎ send all   ·   {comments} in the tree")
         }
     };
-    ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
+    ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED()));
     out.send = send;
     out
 }
@@ -818,7 +866,7 @@ fn text_action(ui: &mut Ui, label: &str, tip: &str) -> bool {
     let size = vec2(text_width(ui, label, mono(8.5)), 12.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     a11y::button(&resp, label);
-    let ink = if resp.hovered() { INK } else { MUTED };
+    let ink = if resp.hovered() { INK() } else { MUTED() };
     ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, label, mono(8.5), ink);
     resp.on_hover_text(tip).clicked()
 }
@@ -880,17 +928,17 @@ fn draft_marks(app: &FigApp, ctx: &egui::Context, page: Option<NodeId>, selectio
             painter.rect_stroke(rect, CornerRadius::same(radius), Stroke::new(1.0, Color32::from_rgb(0xA9, 0xC2, 0xEE)), StrokeKind::Inside);
         }
         let center = pin_center(rect);
-        painter.circle_filled(center, PIN_R, ACCENT);
+        painter.circle_filled(center, PIN_R, ACCENT());
         painter.text(center, Align2::CENTER_CENTER, count.min(99).to_string(), mono(9.0), Color32::WHITE);
     }
     if selection.len() > 1 {
         let union = selection.iter().filter_map(|id| screen(*id)).reduce(|a, b| a.union(b));
         if let Some(union) = union {
             let label = format!("{} SELECTED", selection.len());
-            let width = painter.layout_no_wrap(label.clone(), mono(7.5), ACCENT).size().x + 20.0;
+            let width = painter.layout_no_wrap(label.clone(), mono(7.5), ACCENT()).size().x + 20.0;
             let chip = Rect::from_min_size(pos2(union.min.x, union.max.y + 4.0), vec2(width.max(72.0), 18.0));
-            painter.rect_filled(chip, CornerRadius::same(9), ACCENT_TINT);
-            painter.text(pos2(chip.min.x + 10.0, chip.center().y), Align2::LEFT_CENTER, label, mono(7.5), ACCENT);
+            painter.rect_filled(chip, CornerRadius::same(9), ACCENT_TINT());
+            painter.text(pos2(chip.min.x + 10.0, chip.center().y), Align2::LEFT_CENTER, label, mono(7.5), ACCENT());
         }
     }
 }
@@ -930,7 +978,7 @@ fn draft_strip(ui: &mut Ui, state: &mut State, included: &[usize], whole_page: b
         }
         let hidden = chips.len().saturating_sub(visible);
         if hidden > 0 {
-            ui.label(egui::RichText::new(format!("+{hidden}")).font(mono(9.0)).color(MUTED));
+            ui.label(egui::RichText::new(format!("+{hidden}")).font(mono(9.0)).color(MUTED()));
         }
     });
     match action {
@@ -966,9 +1014,9 @@ fn page_summary_chip(ui: &mut Ui, count: usize) -> bool {
     let (_, rect) = ui.allocate_space(vec2(width, 20.0));
     let resp = ui.interact(rect, page_summary_id(), Sense::click());
     a11y::button(&resp, &format!("{label}: show each comment"));
-    ui.painter().rect_filled(rect, CornerRadius::same(6), if resp.hovered() { SOFT } else { PANEL });
-    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, BORDER), StrokeKind::Inside);
-    ui.painter().text(pos2(rect.min.x + 12.0, rect.center().y), Align2::LEFT_CENTER, &label, regular(10.5), INK);
+    ui.painter().rect_filled(rect, CornerRadius::same(6), if resp.hovered() { SOFT() } else { PANEL() });
+    ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, BORDER()), StrokeKind::Inside);
+    ui.painter().text(pos2(rect.min.x + 12.0, rect.center().y), Align2::LEFT_CENTER, &label, regular(10.5), INK());
     resp.on_hover_text("Show each comment").clicked()
 }
 
@@ -981,15 +1029,15 @@ fn page_comment_chip(ctx: &egui::Context, bar: Rect, count: usize) -> bool {
     egui::Area::new(Id::new("map_composer_page_comment")).fixed_pos(pos2(bar.min.x, bar.min.y - 26.0 - 8.0)).order(egui::Order::Foreground).show(
         ctx,
         |ui| {
-            let width = ui.painter().layout_no_wrap(label.to_string(), regular(11.0), INK).size().x + 66.0;
+            let width = ui.painter().layout_no_wrap(label.to_string(), regular(11.0), INK()).size().x + 66.0;
             let (_, rect) = ui.allocate_space(vec2(width.max(150.0), 26.0));
             let resp = ui.interact(rect, page_comment_id(), Sense::click());
             a11y::button(&resp, &format!("{label}: {count} on the page"));
-            ui.painter().rect_filled(rect, CornerRadius::same(13), if resp.hovered() { SOFT } else { PANEL });
-            ui.painter().rect_stroke(rect, CornerRadius::same(13), Stroke::new(1.0, BORDER), StrokeKind::Inside);
-            ui.painter().text(pos2(rect.min.x + 14.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.0), INK);
+            ui.painter().rect_filled(rect, CornerRadius::same(13), if resp.hovered() { SOFT() } else { PANEL() });
+            ui.painter().rect_stroke(rect, CornerRadius::same(13), Stroke::new(1.0, BORDER()), StrokeKind::Inside);
+            ui.painter().text(pos2(rect.min.x + 14.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.0), INK());
             let badge = pos2(rect.max.x - 23.0, rect.center().y);
-            ui.painter().circle_filled(badge, 9.0, ACCENT);
+            ui.painter().circle_filled(badge, 9.0, ACCENT());
             ui.painter().text(badge, Align2::CENTER_CENTER, count.min(99).to_string(), mono(9.0), Color32::WHITE);
             clicked = resp.clicked();
         },
@@ -1022,27 +1070,27 @@ fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool, many: bool) -
     let close = close.on_hover_text("Remove");
     let hot = body.hovered() || close.hovered();
     let fill = match (active, many, hot) {
-        (true, _, _) => EDIT_FILL,
-        (false, true, false) => ACCENT_TINT,
-        (false, true, true) => ACCENT_TINT_HOVER,
+        (true, _, _) => EDIT_FILL(),
+        (false, true, false) => ACCENT_TINT(),
+        (false, true, true) => ACCENT_TINT_HOVER(),
         (false, false, true) => Color32::from_rgb(0xF1, 0xF0, 0xED),
-        (false, false, false) => SOFT,
+        (false, false, false) => SOFT(),
     };
     // A pill: 20 pt tall, fully rounded.
     ui.painter().rect_filled(rect, CornerRadius::same(10), fill);
     let border = match (active, many) {
-        (true, _) => EDIT,
-        (false, true) => ACCENT_TINT,
-        (false, false) => BORDER,
+        (true, _) => EDIT(),
+        (false, true) => ACCENT_TINT(),
+        (false, false) => BORDER(),
     };
     ui.painter().rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, border), StrokeKind::Inside);
     let ink = match (active, many) {
-        (true, _) => EDIT,
-        (false, true) => ACCENT,
-        (false, false) => INK,
+        (true, _) => EDIT(),
+        (false, true) => ACCENT(),
+        (false, false) => INK(),
     };
     ui.painter().text(pos2(rect.min.x + 9.0, rect.center().y), Align2::LEFT_CENTER, &shown, regular(10.5), ink);
-    let x_color = if close.hovered() { ACCENT } else { FAINT };
+    let x_color = if close.hovered() { ACCENT() } else { FAINT() };
     ui.painter().text(pos2(rect.max.x - 9.0, rect.center().y), Align2::RIGHT_CENTER, "×", regular(10.5), x_color);
     if close.clicked() {
         Some(DraftAction::Remove(index))
@@ -1056,10 +1104,10 @@ fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool, many: bool) -
 /// The line between the field and the row: why the last Send stayed, else why nobody is chosen.
 fn help_line(state: &State, active: bool) -> Option<(String, Color32)> {
     if let Some(notice) = &state.notice {
-        return Some((notice.clone(), DANGER));
+        return Some((notice.clone(), DANGER()));
     }
     let agents = state.targets.iter().any(|info| !info.new_agent);
-    (active && state.target.is_none() && agents).then(|| (NO_IDLE.to_string(), WORKING))
+    (active && state.target.is_none() && agents).then(|| (NO_IDLE.to_string(), WORKING()))
 }
 
 /// The agent button's text: `Backend · Codex · p1 · idle`.
@@ -1080,14 +1128,14 @@ fn send_button(ui: &mut Ui, label: &str, width: f32, enabled: bool) -> bool {
     let resp = ui.interact(rect, Id::new("map_composer_send"), Sense::click());
     a11y::button(&resp, if label == "Send" { "Send the prompt" } else { label });
     let fill = if !enabled {
-        DISABLED_FILL
+        DISABLED_FILL()
     } else if resp.hovered() {
-        ACCENT_HOVER
+        ACCENT_HOVER()
     } else {
-        ACCENT
+        ACCENT()
     };
     ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, regular(12.0), if enabled { Color32::WHITE } else { FAINT });
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, regular(12.0), if enabled { Color32::WHITE } else { FAINT() });
     resp.clicked() && enabled
 }
 
@@ -1123,20 +1171,22 @@ fn confirm_modal(ctx: &egui::Context, state: &mut State) -> Option<ConfirmOut> {
         }
     };
     let ink = match ready {
-        Readiness::Working => WORKING,
-        Readiness::Blocked => DANGER,
-        Readiness::Ready => MAP_INK,
-        Readiness::Unavailable => MUTED,
+        Readiness::Working => WORKING(),
+        Readiness::Blocked => DANGER(),
+        Readiness::Ready => MAP_INK(),
+        Readiness::Unavailable => MUTED(),
     };
     let width = (ctx.content_rect().width() - 32.0).clamp(240.0, 512.0);
     let mut out = None;
     let modal = egui::Modal::new(Id::new("map_composer_confirm"))
         .backdrop_color(Color32::from_black_alpha(40))
-        .frame(egui::Frame::NONE.fill(PANEL).stroke(Stroke::new(1.0, BORDER)).corner_radius(CornerRadius::same(10)).inner_margin(Margin::same(24)))
+        .frame(
+            egui::Frame::NONE.fill(PANEL()).stroke(Stroke::new(1.0, BORDER())).corner_radius(CornerRadius::same(10)).inner_margin(Margin::same(24)),
+        )
         .show(ctx, |ui| {
             ui.set_width(width - 48.0);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            ui.add(egui::Label::new(egui::RichText::new(title).font(regular(22.0)).color(INK)).wrap());
+            ui.add(egui::Label::new(egui::RichText::new(title).font(regular(22.0)).color(INK())).wrap());
             ui.add_space(14.0);
             if let Some(info) = &info {
                 ui.add(egui::Label::new(egui::RichText::new(recipient(info, true)).font(regular(13.0)).color(ink)).wrap());
@@ -1144,13 +1194,13 @@ fn confirm_modal(ctx: &egui::Context, state: &mut State) -> Option<ConfirmOut> {
                 if let Some(task) = task {
                     ui.add_space(8.0);
                     let task = if ready == Readiness::Working { format!("Current task: {task}") } else { task.to_string() };
-                    paragraph(ui, &task, 12.0, MUTED);
+                    paragraph(ui, &task, 12.0, MUTED());
                 }
             }
             ui.add_space(18.0);
-            paragraph(ui, explanation, 13.0, INK);
+            paragraph(ui, explanation, 13.0, INK());
             ui.add_space(24.0);
-            paragraph(ui, &scope, 11.0, MUTED);
+            paragraph(ui, &scope, 11.0, MUTED());
             ui.add_space(24.0);
             ui.horizontal(|ui| {
                 let (rect, cancel) = ui.allocate_exact_size(vec2(100.0, ROW_H), Sense::click());
@@ -1158,10 +1208,10 @@ fn confirm_modal(ctx: &egui::Context, state: &mut State) -> Option<ConfirmOut> {
                 if focus_cancel {
                     cancel.request_focus();
                 }
-                let ring = if cancel.has_focus() { INK } else { BORDER };
-                ui.painter().rect_filled(rect, CornerRadius::same(6), if cancel.hovered() { SOFT } else { PANEL });
+                let ring = if cancel.has_focus() { INK() } else { BORDER() };
+                ui.painter().rect_filled(rect, CornerRadius::same(6), if cancel.hovered() { SOFT() } else { PANEL() });
                 ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, ring), StrokeKind::Inside);
-                ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Cancel", regular(11.5), INK);
+                ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Cancel", regular(11.5), INK());
                 if cancel.clicked() {
                     out = Some(ConfirmOut::Cancel);
                 }
@@ -1173,7 +1223,7 @@ fn confirm_modal(ctx: &egui::Context, state: &mut State) -> Option<ConfirmOut> {
                         let w = (text_width(ui, &label, regular(11.5)) + 28.0).clamp(174.0, ui.available_width().max(174.0));
                         let (rect, send) = ui.allocate_exact_size(vec2(w, ROW_H), Sense::click());
                         a11y::button(&send, &label);
-                        ui.painter().rect_filled(rect, CornerRadius::same(6), if send.hovered() { ACCENT_HOVER } else { ACCENT });
+                        ui.painter().rect_filled(rect, CornerRadius::same(6), if send.hovered() { ACCENT_HOVER() } else { ACCENT() });
                         let shown = widgets::elide_font(ui, &label, w - 20.0, regular(11.5));
                         ui.painter().text(rect.center(), Align2::CENTER_CENTER, &shown, regular(11.5), Color32::WHITE);
                         if send.clicked() {
@@ -1214,8 +1264,8 @@ pub fn context_menu(app: &mut FigApp, ctx: &egui::Context, pos: Pos2) {
     let mut close = false;
     let area = egui::Area::new(Id::new("map_context_menu")).fixed_pos(pos).order(egui::Order::Foreground).constrain(true).show(ctx, |ui| {
         egui::Frame::NONE
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0, BORDER))
+            .fill(PANEL())
+            .stroke(Stroke::new(1.0, BORDER()))
             .corner_radius(CornerRadius::same(8))
             .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(20) })
             .inner_margin(Margin::symmetric(6, 6))
@@ -1272,18 +1322,18 @@ fn map_menu_item(ui: &mut Ui, label: &str, shortcut: &str, enabled: bool, accent
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), if enabled { Sense::click() } else { Sense::hover() });
     a11y::button(&resp, label);
     if enabled && resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(5), SOFT);
+        ui.painter().rect_filled(rect, CornerRadius::same(5), SOFT());
     }
     let ink = if !enabled {
-        FAINT
+        FAINT()
     } else if accent {
-        ACCENT
+        ACCENT()
     } else {
-        INK
+        INK()
     };
     ui.painter().text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, label, regular(11.5), ink);
     if !shortcut.is_empty() {
-        ui.painter().text(pos2(rect.max.x - 8.0, rect.center().y), Align2::RIGHT_CENTER, shortcut, mono(9.0), FAINT);
+        ui.painter().text(pos2(rect.max.x - 8.0, rect.center().y), Align2::RIGHT_CENTER, shortcut, mono(9.0), FAINT());
     }
     resp.clicked() && enabled
 }

@@ -327,7 +327,7 @@ fn a_click_selects_a_double_click_opens() {
     assert_eq!(file(&recents(&u), "pic")["selected"], true);
     // The selection is drawn as an accent border.
     let s = settle(&mut u);
-    let border = s.iter().any(|s| matches!(s, Shape::Rect(r) if r.stroke.width == 2.0 && r.stroke.color == crate::theme::ACCENT));
+    let border = s.iter().any(|s| matches!(s, Shape::Rect(r) if r.stroke.width == 2.0 && r.stroke.color == crate::theme::accent()));
     assert!(border, "a 2-point accent border");
     double_click(&mut u, at);
     assert!(!u.app.ui.home, "a double-click opens");

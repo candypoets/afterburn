@@ -1,5 +1,9 @@
 //! Sync: the map's drift from the last sync, the code drift since it, and one action.
 //!
+//! The UI calls a Sync a Burn (design: `Mindmap page · Afterburn`): the button, the sidebar and
+//! its action say Burn and show the burning disc ([`crate::burn_disc`]); the code, the command
+//! ids and the node protocol keep the name Sync.
+//!
 //! A sync covers the current page and its subpages by default, or every page. A page sync is
 //! compared with each page's own last sync, and its code side is limited to the paths the page's
 //! cards cite; the service keeps one baseline per page.
@@ -30,7 +34,9 @@ use serde_json::{Value, json};
 use crate::FigApp;
 use crate::a11y;
 use crate::agent_menu;
+use crate::burn_disc;
 use crate::compose::TargetInfo;
+use crate::map_colors::MapColors;
 use crate::theme::{regular, semibold};
 use crate::widgets;
 use crate::workspaces::{self, Target};
@@ -49,21 +55,20 @@ const PAD: f32 = 19.0;
 /// How many scope paths and files the code section shows before `+N more`.
 const FILES: usize = 4;
 
-/// The warm map palette, shared with the composer and the map bar.
-const PANEL: Color32 = Color32::WHITE;
-const SOFT: Color32 = Color32::from_rgb(0xF8, 0xF6, 0xF3);
-const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
-const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
-const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
-const ACCENT_HOVER: Color32 = Color32::from_rgb(0xC2, 0x55, 0x3E);
-const MAP_INK: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
-const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
-/// A changed card's mark and the current card's outline: the agent menu's working amber.
-const AMBER: Color32 = Color32::from_rgb(0xA8, 0x6B, 0x12);
-/// The current row's fill.
-const ROW_HOT: Color32 = Color32::from_rgb(0xF1, 0xEF, 0xEC);
+/// The map palette of the current theme (see `map_colors`).
+fn c() -> MapColors {
+    crate::map_colors::get()
+}
+
+/// `classic` on the Classic theme (Mindmap's look until now), `themed` on the others.
+fn classic_or(classic: Color32, themed: Color32) -> Color32 {
+    if crate::map_colors::theme() == crate::map_colors::Theme::Classic { classic } else { themed }
+}
+
+/// The current row's fill: Classic's warm grey, the theme's soft fill otherwise.
+fn row_hot() -> Color32 {
+    classic_or(Color32::from_rgb(0xF1, 0xEF, 0xEC), c().soft)
+}
 /// A row's height, and one detail line's under the current row.
 const ROW_H: f32 = 42.0;
 const DETAIL_H: f32 = 18.0;
@@ -407,9 +412,26 @@ impl Mark {
 
     fn color(self) -> Color32 {
         match self {
-            Mark::Added => MAP_INK,
-            Mark::Changed => AMBER,
-            Mark::Removed => DANGER,
+            Mark::Added => c().map_ink,
+            Mark::Changed => c().working_ink,
+            Mark::Removed => classic_or(c().danger, c().accent_hover),
+        }
+    }
+
+    /// The badge's fill on the canvas: the theme's teal, working yellow or danger.
+    fn fill(self) -> Color32 {
+        match self {
+            Mark::Added => c().teal,
+            Mark::Changed => c().working,
+            Mark::Removed => c().danger,
+        }
+    }
+
+    /// The glyph on [`Mark::fill`]: ink on the bright working yellow, the accent's text otherwise.
+    fn on_fill(self) -> Color32 {
+        match self {
+            Mark::Changed => classic_or(Color32::WHITE, c().ink),
+            Mark::Added | Mark::Removed => c().on_accent,
         }
     }
 
@@ -668,6 +690,9 @@ pub struct Job {
     /// What the job records: `sync`, or `explain` / `fix` for an agent's own record.
     #[serde(default, rename = "kind")]
     pub work: String,
+    /// The commit a finished job made, when the node says.
+    #[serde(default)]
+    pub commit: Option<String>,
 }
 
 impl Job {
@@ -900,38 +925,62 @@ impl State {
     }
 }
 
-/// The Sync sidebar toggle, used in the canvas header when closed and its own header when open.
+/// The Burn sidebar toggle: in the canvas header while the sidebar is closed (a button with the
+/// disc, `Burn` / `Burn 7` / `Burning…`, and the sidebar toggle at its right), and the open
+/// sidebar's own header (the disc and `Burn`, the toggle at the far right). It says `Burning…`
+/// while a Burn is in flight, open or closed, until the node reports done.
 pub fn header_button(app: &mut FigApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    let syncing = app.sync.in_flight() || app.sync.starting;
+    let burning = app.sync.in_flight() || app.sync.starting;
     let enabled = app.active_workspace.is_some() || app.sync.open;
-    let look = button_look(syncing, enabled, app.sync.changes());
-    let font = regular(13.0);
-    let label_w = text_width(ui, look.label, font.clone());
-    let badge = look.count.map(|count| count.to_string());
-    let badge_w = badge.as_ref().map(|count| (text_width(ui, count, mono(8.0)) + 9.0).max(18.0));
-    let width = if app.sync.open { ui.available_width() } else { label_w + badge_w.map_or(0.0, |w| w + 8.0) + 46.0 };
+    let open = app.sync.open;
+    let look = button_look(burning, enabled, app.sync.changes());
+    let colors = c();
+    let font = regular(if open { 14.0 } else { 13.0 });
+    let disc = if open { 18.0 } else { 16.0 };
+    let label_w = text_width(ui, &look.label, font.clone());
+    let lead = if open { 0.0 } else { 8.0 };
+    let width = if open { ui.available_width() } else { lead + disc + 7.0 + label_w + 12.0 + TOGGLE };
     let (_, rect) = ui.allocate_space(vec2(width, 30.0));
-    let icon_rect = Rect::from_min_max(pos2(rect.right() - 28.0, rect.top()), rect.max);
-    let label_right = (rect.left() + label_w + badge_w.map_or(8.0, |w| w + 16.0)).min(icon_rect.left());
-    let label_rect = Rect::from_min_max(rect.min, pos2(label_right, rect.bottom()));
-    let response = ui.interact(label_rect, ui.id().with("sync_label_toggle"), if enabled { Sense::click() } else { Sense::hover() });
-    let mut cell = ui.new_child(
-        egui::UiBuilder::new().id_salt("sync_sidebar_toggle").max_rect(icon_rect).layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    if !enabled {
-        cell.disable();
-    }
-    let toggle = crate::sidebar_toggle_side(&mut cell, app.sync.open, true);
+    let toggle_rect = Rect::from_min_max(pos2(rect.right() - TOGGLE, rect.top() + 1.0), pos2(rect.right(), rect.bottom() - 1.0));
+    let label_rect = Rect::from_min_max(rect.min, pos2(toggle_rect.left(), rect.bottom()));
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let response = ui.interact(label_rect, ui.id().with("sync_label_toggle"), sense);
+    let toggle = ui.interact(toggle_rect, ui.id().with("sync_sidebar_toggle"), sense);
     app.sync.button_rect = Some(rect);
-    ui.painter().text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, look.label, font, look.ink);
-    if let (Some(count), Some(badge_w)) = (badge, badge_w) {
-        let pill = Rect::from_min_size(pos2(rect.left() + label_w + 8.0, rect.center().y - 9.0), vec2(badge_w, 18.0));
-        ui.painter().rect_filled(pill, CornerRadius::same(9), ACCENT);
-        ui.painter().text(pill.center(), Align2::CENTER_CENTER, count, mono(8.0), Color32::WHITE);
+
+    let mut painter = ui.painter().clone();
+    if !enabled {
+        painter.multiply_opacity(0.45);
     }
-    let label = if app.sync.open { "Hide Sync sidebar" } else { "Show Sync sidebar" };
+    if !open {
+        let chip = rect.shrink2(vec2(0.0, 1.0));
+        let fill = look.fill.unwrap_or(if response.hovered() || toggle.hovered() { colors.soft } else { colors.panel });
+        painter.rect_filled(chip, CornerRadius::same(5), fill);
+    }
+    let disc_rect = Rect::from_center_size(pos2(rect.left() + lead + disc / 2.0, rect.center().y), vec2(disc, disc));
+    let state = if burning { burn_disc::DiscState::Burning { t: ui.input(|input| input.time) } } else { burn_disc::DiscState::Blank };
+    burn_disc::paint(&painter, disc_rect, state, &colors);
+    let ink = if open { if enabled { colors.ink } else { colors.faint } } else { look.ink };
+    let room = (toggle_rect.left() - disc_rect.right() - 12.0).max(20.0);
+    let shown = widgets::elide_font(ui, &look.label, room, font.clone());
+    painter.text(pos2(disc_rect.right() + 7.0, rect.center().y), Align2::LEFT_CENTER, shown, font, ink);
+    let toggle_ink = if toggle.hovered() {
+        colors.accent
+    } else if open || look.fill.is_some() {
+        colors.teal
+    } else {
+        colors.muted
+    };
+    if open {
+        painter.rect_filled(toggle_rect.shrink(1.0), CornerRadius::same(5), colors.selected);
+    }
+    sidebar_mark(&painter, toggle_rect.center(), toggle_ink);
+
+    let label = if open { "Hide Burn sidebar" } else { "Show Burn sidebar" };
     a11y::button(&response, label);
+    a11y::button(&toggle, label);
     let response = response.on_hover_text(label);
+    let toggle = toggle.on_hover_text(label);
     if enabled && (response.clicked() || toggle.clicked()) {
         if app.sync.open {
             app.sync.open = false;
@@ -944,24 +993,40 @@ pub fn header_button(app: &mut FigApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     }
 }
 
+/// The sidebar toggle's width at the button's right.
+const TOGGLE: f32 = 28.0;
+
+/// A right sidebar: an outline with its right edge filled, centred on `c`.
+fn sidebar_mark(painter: &egui::Painter, c: egui::Pos2, ink: Color32) {
+    let outline = Rect::from_center_size(c, vec2(16.0, 14.0));
+    painter.rect_stroke(outline, CornerRadius::same(2), Stroke::new(1.3, ink), StrokeKind::Inside);
+    let edge = Rect::from_min_max(pos2(outline.right() - 5.0, outline.top() + 1.0), pos2(outline.right() - 1.0, outline.bottom() - 1.0));
+    painter.rect_filled(edge, CornerRadius::ZERO, ink);
+}
+
 /// What the header button shows in each designed state.
 #[derive(Debug, PartialEq, Eq)]
 struct ButtonLook {
-    label: &'static str,
-    /// The change count badge, when a diff found changes.
-    count: Option<usize>,
+    label: String,
     ink: Color32,
+    /// The button's fill when it stands out (cards waiting); the panel otherwise.
+    fill: Option<Color32>,
 }
 
-/// Idle `Sync`; Changes `Sync` with its count; Syncing `Syncing…` in the accent; Disabled grey.
-fn button_look(syncing: bool, enabled: bool, changes: Option<usize>) -> ButtonLook {
-    if syncing {
-        return ButtonLook { label: "Syncing…", count: None, ink: ACCENT };
+/// Idle `Burn`; Changes `Burn 7` on the teal; Burning `Burning…` (the disc spins) until the node
+/// reports done, whether the sidebar is open or closed; Disabled greyed.
+fn button_look(burning: bool, enabled: bool, changes: Option<usize>) -> ButtonLook {
+    let colors = c();
+    if burning {
+        return ButtonLook { label: "Burning…".to_string(), ink: colors.muted, fill: None };
     }
     if !enabled {
-        return ButtonLook { label: "Sync", count: None, ink: FAINT };
+        return ButtonLook { label: "Burn".to_string(), ink: colors.faint, fill: None };
     }
-    ButtonLook { label: "Sync", count: changes.filter(|n| *n > 0), ink: INK }
+    match changes.filter(|n| *n > 0) {
+        Some(n) => ButtonLook { label: format!("Burn {n}"), ink: colors.map_ink, fill: Some(colors.selected) },
+        None => ButtonLook { label: "Burn".to_string(), ink: colors.muted, fill: None },
+    }
 }
 
 /// Open the widget and read a fresh diff from the current map.
@@ -972,7 +1037,7 @@ pub fn open_panel(app: &mut FigApp, ctx: &egui::Context) {
         return;
     }
     let Some(workspace) = app.active_workspace.clone() else {
-        app.toast("Open a workspace map to sync.");
+        app.toast("Open a workspace map to burn.");
         return;
     };
     match snapshot_now(app) {
@@ -1059,8 +1124,8 @@ pub fn poll(app: &mut FigApp, ctx: &egui::Context) {
 pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     let area = ui.max_rect();
-    ui.painter().rect_filled(area, CornerRadius::ZERO, PANEL);
-    ui.painter().vline(area.left() + 0.5, area.y_range(), Stroke::new(1.0, BORDER));
+    ui.painter().rect_filled(area, CornerRadius::ZERO, c().panel);
+    ui.painter().vline(area.left() + 0.5, area.y_range(), Stroke::new(1.0, c().border));
     let header_h = if app.ui.mac_inset() { crate::MAC_BAND } else { 44.0 };
     let top = Rect::from_min_size(area.min, vec2(area.width(), header_h));
     if app.ui.title_bar != crate::TitleBar::Native {
@@ -1070,7 +1135,7 @@ pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let mut head =
         ui.new_child(egui::UiBuilder::new().id_salt("sync_header").max_rect(controls).layout(egui::Layout::left_to_right(egui::Align::Center)));
     header_button(app, &mut head, &ctx);
-    ui.painter().hline(top.x_range(), top.bottom() - 0.5, Stroke::new(1.0, BORDER));
+    ui.painter().hline(top.x_range(), top.bottom() - 0.5, Stroke::new(1.0, c().border));
     if !app.sync.open {
         return;
     }
@@ -1179,7 +1244,7 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
         .resizable(false)
         .default_size(170.0)
         .show_separator_line(false)
-        .frame(egui::Frame::NONE.fill(PANEL).inner_margin(egui::Margin { left: 19, right: 19, top: 0, bottom: 17 }))
+        .frame(egui::Frame::NONE.fill(c().panel).inner_margin(egui::Margin { left: 19, right: 19, top: 0, bottom: 17 }))
         .show(ui, |ui| footer(ui, state, compose, rows))
         .inner;
     let mut out = WidgetOut { sync, ..WidgetOut::default() };
@@ -1204,7 +1269,7 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
     }
     if state.dirty {
         ui.add_space(7.0);
-        ui.label(egui::RichText::new("the map changed since this diff").font(mono(8.5)).color(ACCENT));
+        ui.label(egui::RichText::new("the map changed since this diff").font(mono(8.5)).color(c().accent));
     }
     let mut carded = false;
     if let Some(job) = state.job.as_ref() {
@@ -1213,7 +1278,7 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
             flight_card(ui, job, compose);
             carded = true;
         } else if job.failed() {
-            let reason = job.reason.clone().unwrap_or_else(|| "The sync failed.".to_string());
+            let reason = job.reason.clone().unwrap_or_else(|| "The Burn failed.".to_string());
             ui.add_space(7.0);
             failed_card(ui, &reason);
             carded = true;
@@ -1252,7 +1317,7 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
                     }
                     if rows.is_empty() {
                         ui.add_space(7.0);
-                        ui.label(egui::RichText::new("No design changes since the last sync.").font(regular(10.5)).color(MUTED));
+                        ui.label(egui::RichText::new("No design changes since the last Burn.").font(regular(10.5)).color(c().muted));
                         ui.add_space(7.0);
                     }
                     let mut clicked = None;
@@ -1290,10 +1355,10 @@ fn widget_body(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::Sta
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(7.0, 0.0);
                         if state.busy {
-                            ui.add(egui::Spinner::new().size(11.0).color(ACCENT));
-                            ui.label(egui::RichText::new("Reading the diff…").font(regular(11.0)).color(MUTED));
+                            ui.add(egui::Spinner::new().size(11.0).color(c().accent));
+                            ui.label(egui::RichText::new("Reading the diff…").font(regular(11.0)).color(c().muted));
                         } else {
-                            ui.label(egui::RichText::new("No diff read yet.").font(regular(11.0)).color(MUTED));
+                            ui.label(egui::RichText::new("No diff read yet.").font(regular(11.0)).color(c().muted));
                         }
                     });
                     ui.add_space(9.0);
@@ -1311,7 +1376,7 @@ fn header(ui: &mut Ui, state: &mut State, rows: &[Row]) -> Option<u64> {
     let total = rows.len();
     let title = match (&state.diff, total) {
         (None, _) if state.busy => "Reading the diff…".to_string(),
-        (None, _) => "Sync".to_string(),
+        (None, _) => "Burn".to_string(),
         (Some(_), 0) => "Nothing waiting".to_string(),
         (Some(_), 1) => "1 card waiting".to_string(),
         (Some(_), n) => format!("{n} cards waiting"),
@@ -1319,22 +1384,22 @@ fn header(ui: &mut Ui, state: &mut State, rows: &[Row]) -> Option<u64> {
     let stepper_w = 84.0;
     let room = (rect.width() - if total > 0 { stepper_w + 12.0 } else { 0.0 }).max(40.0);
     let shown = widgets::elide_font(ui, &title, room, semibold(16.0));
-    ui.painter().text(pos2(rect.left(), rect.top() + 11.0), Align2::LEFT_CENTER, shown, semibold(16.0), INK);
+    ui.painter().text(pos2(rect.left(), rect.top() + 11.0), Align2::LEFT_CENTER, shown, semibold(16.0), c().ink);
     let line = widgets::elide_font(ui, &header_line(state, rows), room, mono(8.0));
-    ui.painter().text(pos2(rect.left(), rect.top() + 33.0), Align2::LEFT_CENTER, line, mono(8.0), MUTED);
+    ui.painter().text(pos2(rect.left(), rect.top() + 33.0), Align2::LEFT_CENTER, line, mono(8.0), c().muted);
     if total == 0 {
         return None;
     }
     let pill = Rect::from_min_size(pos2(rect.right() - stepper_w, rect.top()), vec2(stepper_w, 24.0));
-    ui.painter().rect_filled(pill, CornerRadius::same(12), PANEL);
-    ui.painter().rect_stroke(pill, CornerRadius::same(12), Stroke::new(1.0, BORDER), StrokeKind::Inside);
+    ui.painter().rect_filled(pill, CornerRadius::same(12), c().panel);
+    ui.painter().rect_stroke(pill, CornerRadius::same(12), Stroke::new(1.0, c().border), StrokeKind::Inside);
     let at = state.current.and_then(|key| rows.iter().position(|row| row.key() == key));
     let count = match at {
         Some(at) => format!("{} / {total}", at + 1),
         None => format!("– / {total}"),
     };
-    ui.painter().text(pill.center(), Align2::CENTER_CENTER, count, regular(11.0), INK);
-    ui.painter().text(pos2(pill.center().x, pill.bottom() + 11.0), Align2::CENTER_CENTER, "[ ]  step", mono(8.0), FAINT);
+    ui.painter().text(pill.center(), Align2::CENTER_CENTER, count, regular(11.0), c().ink);
+    ui.painter().text(pos2(pill.center().x, pill.bottom() + 11.0), Align2::CENTER_CENTER, "[ ]  step", mono(8.0), c().faint);
     let mut moved = None;
     for (delta, glyph, zone, label) in [
         (-1, "‹", Rect::from_min_size(pill.min, vec2(26.0, pill.height())), "Previous waiting card"),
@@ -1343,7 +1408,7 @@ fn header(ui: &mut Ui, state: &mut State, rows: &[Row]) -> Option<u64> {
         let response = ui.interact(zone, Id::new(("sync_step", delta)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
         a11y::button(&response, label);
         let response = response.on_hover_text(format!("{label}  {}", if delta < 0 { "[" } else { "]" }));
-        ui.painter().text(zone.center(), Align2::CENTER_CENTER, glyph, regular(13.0), if response.hovered() { ACCENT } else { MUTED });
+        ui.painter().text(zone.center(), Align2::CENTER_CENTER, glyph, regular(13.0), if response.hovered() { c().accent } else { c().muted });
         if response.clicked()
             && let Some(index) = state.step(rows, delta)
         {
@@ -1357,8 +1422,8 @@ fn header(ui: &mut Ui, state: &mut State, rows: &[Row]) -> Option<u64> {
 fn header_line(state: &State, rows: &[Row]) -> String {
     let since = match state.last.as_ref().map(|last| short_commit(&last.commit)).filter(|commit| !commit.is_empty()) {
         Some(commit) => format!("since {commit}"),
-        None if state.last.is_some() => "since the last sync".to_string(),
-        None => "first sync".to_string(),
+        None if state.last.is_some() => "since the last Burn".to_string(),
+        None => "first Burn".to_string(),
     };
     if state.diff.is_none() || rows.is_empty() {
         return since;
@@ -1366,9 +1431,9 @@ fn header_line(state: &State, rows: &[Row]) -> String {
     let included = state.included(rows);
     let waiting = rows.len() - included;
     match waiting {
-        0 => format!("{included} in this Sync · {since}"),
-        1 => format!("{included} in this Sync · 1 keeps waiting · {since}"),
-        n => format!("{included} in this Sync · {n} keep waiting · {since}"),
+        0 => format!("{included} selected · {since}"),
+        1 => format!("{included} selected · 1 keeps waiting · {since}"),
+        n => format!("{included} selected · {n} keep waiting · {since}"),
     }
 }
 
@@ -1386,7 +1451,7 @@ fn include_line(ui: &mut Ui, covers: &str, rows: bool) -> Option<bool> {
             let response =
                 ui.interact(zone.expand(2.0), Id::new(("sync_include", value)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
             a11y::button(&response, if value { "Include every card" } else { "Leave every card out" });
-            let ink = if response.hovered() { ACCENT } else { MUTED };
+            let ink = if response.hovered() { c().accent } else { c().muted };
             ui.painter().text(pos2(zone.left(), rect.center().y), Align2::LEFT_CENTER, label, mono(8.5), ink);
             if response.clicked() {
                 picked = Some(value);
@@ -1395,16 +1460,16 @@ fn include_line(ui: &mut Ui, covers: &str, rows: bool) -> Option<bool> {
             if value {
                 x = zone.left();
             } else {
-                ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, " · ", mono(8.5), FAINT);
+                ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, " · ", mono(8.5), c().faint);
             }
         }
         let label = "include: ";
         x -= text_width(ui, label, mono(8.5));
-        ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, label, mono(8.5), FAINT);
+        ui.painter().text(pos2(x, rect.center().y), Align2::LEFT_CENTER, label, mono(8.5), c().faint);
     }
     let room = (x - rect.left() - 10.0).max(30.0);
     let covers = widgets::elide_font(ui, covers, room, mono(8.5));
-    ui.painter().text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, covers, mono(8.5), FAINT);
+    ui.painter().text(pos2(rect.left(), rect.center().y), Align2::LEFT_CENTER, covers, mono(8.5), c().faint);
     picked
 }
 
@@ -1441,10 +1506,10 @@ fn row_ui(ui: &mut Ui, row: &Row, current: bool, left_out: bool) -> RowOut {
     // The current row reaches into the widget's padding, with an amber bar on its left.
     let band = Rect::from_min_max(pos2(rect.left() - 12.0, rect.top()), pos2(rect.right() + 6.0, rect.bottom()));
     if current {
-        painter.rect_filled(band, CornerRadius::ZERO, ROW_HOT);
-        painter.rect_filled(Rect::from_min_size(band.min, vec2(3.0, band.height())), CornerRadius::ZERO, AMBER);
+        painter.rect_filled(band, CornerRadius::ZERO, row_hot());
+        painter.rect_filled(Rect::from_min_size(band.min, vec2(3.0, band.height())), CornerRadius::ZERO, c().working);
     } else if response.hovered() {
-        painter.rect_filled(band, CornerRadius::ZERO, SOFT);
+        painter.rect_filled(band, CornerRadius::ZERO, c().soft);
     }
     let dim = |color: Color32| if left_out { color.gamma_multiply(0.55) } else { color };
     painter.text(pos2(rect.left() + 4.0, rect.top() + 15.0), Align2::CENTER_CENTER, row.mark.glyph(), mono(13.0), dim(row.mark.color()));
@@ -1452,11 +1517,11 @@ fn row_ui(ui: &mut Ui, row: &Row, current: bool, left_out: bool) -> RowOut {
     let room = (check.left() - 10.0 - x).max(30.0);
     let removed = row.mark == Mark::Removed;
     let ink = if left_out {
-        FAINT
+        c().faint
     } else if removed {
-        MUTED
+        c().muted
     } else {
-        INK
+        c().ink
     };
     let name = widgets::elide_font(ui, &row.name, room, regular(12.0));
     let galley = painter.layout_no_wrap(name, regular(12.0), ink);
@@ -1468,33 +1533,33 @@ fn row_ui(ui: &mut Ui, row: &Row, current: bool, left_out: bool) -> RowOut {
         painter.line_segment([pos2(x, y), pos2(x + name_w, y)], Stroke::new(1.0, ink));
     }
     let (sub, sub_ink) = if left_out {
-        ("left out · keeps waiting", AMBER)
+        ("left out · keeps waiting", c().working_ink)
     } else if removed {
-        (row.sub.as_str(), DANGER)
+        (row.sub.as_str(), row.mark.color())
     } else {
-        (row.sub.as_str(), MUTED)
+        (row.sub.as_str(), c().muted)
     };
     let sub = widgets::elide_font(ui, sub, room, mono(8.5));
     painter.text(pos2(x, rect.top() + 31.0), Align2::LEFT_CENTER, sub, mono(8.5), sub_ink);
     // The include checkbox: ticked in the accent, empty and outlined when left out.
     let hot = check_response.hovered();
     if left_out {
-        painter.rect_filled(check, CornerRadius::same(4), PANEL);
-        painter.rect_stroke(check, CornerRadius::same(4), Stroke::new(1.2, if hot { ACCENT } else { FAINT }), StrokeKind::Inside);
+        painter.rect_filled(check, CornerRadius::same(4), c().panel);
+        painter.rect_stroke(check, CornerRadius::same(4), Stroke::new(1.2, if hot { c().accent } else { c().faint }), StrokeKind::Inside);
     } else {
-        painter.rect_filled(check, CornerRadius::same(4), if hot { ACCENT_HOVER } else { ACCENT });
+        painter.rect_filled(check, CornerRadius::same(4), if hot { c().accent_hover } else { c().accent });
         let tick = [
             pos2(check.left() + 4.5, check.center().y),
             pos2(check.left() + 7.8, check.bottom() - 5.0),
             pos2(check.right() - 4.0, check.top() + 5.0),
         ];
-        painter.add(egui::Shape::line(tick.to_vec(), Stroke::new(1.6, Color32::WHITE)));
+        painter.add(egui::Shape::line(tick.to_vec(), Stroke::new(1.6, c().on_accent)));
     }
     if let Some(arrow_response) = arrow_response.as_ref() {
-        let fill = if arrow_response.hovered() { SOFT } else { PANEL };
+        let fill = if arrow_response.hovered() { c().soft } else { c().panel };
         painter.rect_filled(arrow, CornerRadius::same(5), fill);
-        painter.rect_stroke(arrow, CornerRadius::same(5), Stroke::new(1.0, BORDER), StrokeKind::Inside);
-        painter.text(arrow.center(), Align2::CENTER_CENTER, "→", regular(11.0), MAP_INK);
+        painter.rect_stroke(arrow, CornerRadius::same(5), Stroke::new(1.0, c().border), StrokeKind::Inside);
+        painter.text(arrow.center(), Align2::CENTER_CENTER, "→", regular(11.0), c().map_ink);
     }
     if listed > 0 {
         let column = x + 18.0;
@@ -1504,9 +1569,9 @@ fn row_ui(ui: &mut Ui, row: &Row, current: bool, left_out: bool) -> RowOut {
         for (index, (layer, what)) in shown.chain(more).enumerate() {
             let y = rect.top() + ROW_H + 2.0 + (index as f32 + 0.5) * DETAIL_H;
             let layer = widgets::elide_font(ui, &layer, (fields_x - column - 8.0).max(30.0), mono(9.0));
-            painter.text(pos2(column, y), Align2::LEFT_CENTER, layer, mono(9.0), INK);
+            painter.text(pos2(column, y), Align2::LEFT_CENTER, layer, mono(9.0), c().ink);
             let what = widgets::elide_font(ui, &what, (rect.right() - fields_x).max(30.0), mono(9.0));
-            painter.text(pos2(fields_x, y), Align2::LEFT_CENTER, what, mono(9.0), MUTED);
+            painter.text(pos2(fields_x, y), Align2::LEFT_CENTER, what, mono(9.0), c().muted);
         }
     }
     let toggle = check_response.clicked();
@@ -1521,17 +1586,23 @@ fn code_line(ui: &mut Ui, last: Option<&Last>, code: &CodeDiff, open: bool) -> b
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let title = match code_since(last, code) {
         Some(commit) => format!("Code since {}", short_commit(&commit)),
-        None if last.is_none() => "Code · first sync".to_string(),
-        None => "Code since the last sync".to_string(),
+        None if last.is_none() => "Code · first Burn".to_string(),
+        None => "Code since the last Burn".to_string(),
     };
     a11y::button(&response, &if open { format!("Fold {title}") } else { format!("Unfold {title}") });
     let hot = response.hovered();
     let glyph = if open { "▾" } else { "▸" };
-    ui.painter().text(pos2(rect.left() + 4.0, rect.center().y), Align2::CENTER_CENTER, glyph, regular(10.0), if hot { ACCENT } else { MUTED });
+    ui.painter().text(
+        pos2(rect.left() + 4.0, rect.center().y),
+        Align2::CENTER_CENTER,
+        glyph,
+        regular(10.0),
+        if hot { c().accent } else { c().muted },
+    );
     let x = rect.left() + 18.0;
-    let galley = ui.painter().layout_no_wrap(title, regular(11.0), if hot { ACCENT } else { INK });
+    let galley = ui.painter().layout_no_wrap(title, regular(11.0), if hot { c().accent } else { c().ink });
     let title_w = galley.size().x;
-    ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, INK);
+    ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley, c().ink);
     let files = code.files.len();
     let commits = code.commits.len();
     let counts = if last.is_none() {
@@ -1543,7 +1614,7 @@ fn code_line(ui: &mut Ui, last: Option<&Last>, code: &CodeDiff, open: bool) -> b
     };
     let room = (rect.right() - x - title_w - 12.0).max(30.0);
     let counts = widgets::elide_font(ui, &counts, room, mono(8.5));
-    ui.painter().text(pos2(x + title_w + 12.0, rect.center().y), Align2::LEFT_CENTER, counts, mono(8.5), MUTED);
+    ui.painter().text(pos2(x + title_w + 12.0, rect.center().y), Align2::LEFT_CENTER, counts, mono(8.5), c().muted);
     response.clicked()
 }
 
@@ -1571,43 +1642,57 @@ fn footer(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State, r
     let ready = state.diff.as_ref().is_some_and(|diff| diff.ok);
     let enabled = state.can_sync(compose);
     let label =
-        if syncing { "Syncing…".to_string() } else { sync_label(state.included(rows), rows.len(), target.map(|target| kind_label(target.kind()))) };
+        if syncing { "Burning…".to_string() } else { sync_label(state.included(rows), rows.len(), target.map(|target| kind_label(target.kind()))) };
     let clicked = action_button(ui, &label, enabled, syncing);
     let hint = if state.blocker().is_some() {
-        Some("Sync waits until the open record is committed or cancelled.")
+        Some("Burn waits until the open record is committed or cancelled.")
     } else if target.is_none() {
-        Some(if compose.targets.is_empty() { "No agent is available in this workspace yet." } else { "Choose an agent to sync." })
+        Some(if compose.targets.is_empty() { "No agent is available in this workspace yet." } else { "Choose an agent to burn." })
     } else if syncing {
-        Some("The map stays editable while the sync runs.")
+        Some("The map stays editable while the Burn runs.")
     } else if state.busy {
         Some("Reading the diff…")
     } else if !ready {
-        Some("Refresh the diff to sync.")
+        Some("Refresh the diff to burn.")
     } else if !state.has_work() {
-        Some(if rows.is_empty() { "Change the map or add a note to sync." } else { "Include a card or add a note to sync." })
+        Some(if rows.is_empty() { "Change the map or add a note to burn." } else { "Include a card or add a note to burn." })
     } else {
         None
     };
     if let Some(hint) = hint {
         ui.add_space(7.0);
-        ui.label(egui::RichText::new(hint).font(mono(8.5)).color(MUTED));
+        ui.label(egui::RichText::new(hint).font(mono(8.5)).color(c().muted));
     }
     let max = ui.max_rect();
-    ui.painter().hline((max.left() - PAD)..=(max.right() + PAD), top, Stroke::new(1.0, BORDER));
+    ui.painter().hline((max.left() - PAD)..=(max.right() + PAD), top, Stroke::new(1.0, c().border));
     clicked
 }
 
-/// `Sync 12 of 14 cards with codex`, `Sync 14 cards with codex`, or `Sync with codex` when no
-/// card waits.
+/// `Burn 12 cards with Codex` (the cards ticked), or `Burn with Codex` when no card waits.
 fn sync_label(included: usize, total: usize, kind: Option<&str>) -> String {
-    let cards = match (included, total) {
-        (_, 0) => String::new(),
-        (included, total) if included == total => format!(" {}", plural(total, "card")),
-        (included, total) => format!(" {included} of {}", plural(total, "card")),
-    };
+    let cards = if total == 0 { String::new() } else { format!(" {}", plural(included, "card")) };
     match kind {
-        Some(kind) => format!("Sync{cards} with {kind}"),
-        None => format!("Sync{cards}"),
+        Some(kind) => format!("Burn{cards} with {}", capitalized(kind)),
+        None => format!("Burn{cards}"),
+    }
+}
+
+/// `codex` → `Codex`.
+fn capitalized(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// The toast when a Burn is done: `Burned a1f9c2e` when the node names the commit, else
+/// `Burned · 3 cards` (or `Burned`).
+fn burned_toast(commit: Option<&str>, cards: usize) -> String {
+    match commit.map(short_commit).filter(|commit| !commit.is_empty()) {
+        Some(commit) => format!("Burned {commit}"),
+        None if cards == 0 => "Burned".to_string(),
+        None => format!("Burned · {}", plural(cards, "card")),
     }
 }
 
@@ -1616,17 +1701,17 @@ fn flight_card(ui: &mut Ui, job: &Job, compose: &crate::compose::State) {
     let kind =
         job.kind().or_else(|| compose.target.as_ref().map(|target| kind_label(target.kind()).to_string())).unwrap_or_else(|| "agent".to_string());
     egui::Frame::NONE
-        .fill(SOFT)
-        .stroke(Stroke::new(1.0, ACCENT))
+        .fill(c().soft)
+        .stroke(Stroke::new(1.0, c().accent))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin { left: 13, right: 13, top: 10, bottom: 10 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 3.0;
-            ui.label(egui::RichText::new(format!("Sync in flight · {kind}")).font(semibold(11.0)).color(ACCENT));
+            ui.label(egui::RichText::new(format!("Burning · {kind}")).font(semibold(11.0)).color(c().accent));
             let started = job.started.trim();
             let line = if started.is_empty() { "started just now".to_string() } else { format!("started {started}") };
-            ui.label(egui::RichText::new(line).font(mono(9.0)).color(MUTED));
+            ui.label(egui::RichText::new(line).font(mono(9.0)).color(c().muted));
         });
 }
 
@@ -1635,18 +1720,18 @@ fn flight_card(ui: &mut Ui, job: &Job, compose: &crate::compose::State) {
 fn open_card(ui: &mut Ui, job: &Job, targets: &[TargetInfo], cancelling: bool, now: Option<u64>) -> bool {
     let mut clicked = false;
     egui::Frame::NONE
-        .fill(SOFT)
-        .stroke(Stroke::new(1.0, ACCENT))
+        .fill(c().soft)
+        .stroke(Stroke::new(1.0, c().accent))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin { left: 13, right: 13, top: 10, bottom: 10 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 3.0;
-            ui.label(egui::RichText::new(open_title(job)).font(semibold(11.0)).color(ACCENT));
+            ui.label(egui::RichText::new(open_title(job)).font(semibold(11.0)).color(c().accent));
             let line = format!("by {} · {}", job_owner(job, targets), waited(&job.started, now));
-            ui.label(egui::RichText::new(line).font(mono(9.0)).color(MUTED));
+            ui.label(egui::RichText::new(line).font(mono(9.0)).color(c().muted));
             if let Some(reason) = job.reason.as_deref().map(str::trim).filter(|reason| !reason.is_empty()) {
-                ui.add(egui::Label::new(egui::RichText::new(reason).font(mono(9.0)).color(MUTED)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new(reason).font(mono(9.0)).color(c().muted)).wrap());
             }
             if job.is_record() {
                 ui.add_space(5.0);
@@ -1654,7 +1739,7 @@ fn open_card(ui: &mut Ui, job: &Job, targets: &[TargetInfo], cancelling: bool, n
                     ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
                     let label = if cancelling { "Cancelling…" } else { "Cancel record" };
                     clicked = secondary_button(ui, label, !cancelling);
-                    ui.label(egui::RichText::new("commits nothing").font(mono(8.5)).color(FAINT));
+                    ui.label(egui::RichText::new("commits nothing").font(mono(8.5)).color(c().faint));
                 });
             }
         });
@@ -1666,7 +1751,7 @@ pub(crate) fn open_title(job: &Job) -> &'static str {
     match job.work.trim() {
         "explain" => "Explanation record open",
         "fix" => "Bug fix record open",
-        _ => "Sync in flight",
+        _ => "Burn in flight",
     }
 }
 
@@ -1713,10 +1798,10 @@ fn secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(width, 22.0), if enabled { Sense::click() } else { Sense::hover() });
     let response = response.on_hover_cursor(if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default });
     a11y::button(&response, label);
-    let fill = if enabled && response.hovered() { PANEL } else { SOFT };
+    let fill = if enabled && response.hovered() { c().panel } else { c().soft };
     ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
-    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, if enabled { ACCENT } else { BORDER }), StrokeKind::Inside);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(10.0), if enabled { ACCENT } else { FAINT });
+    ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, if enabled { c().accent } else { c().border }), StrokeKind::Inside);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(10.0), if enabled { c().accent } else { c().faint });
     response.clicked() && enabled
 }
 
@@ -1782,28 +1867,28 @@ fn poll_cancel(app: &mut FigApp) {
 /// A failed job's reason, kept in the widget so the next sync can be set up.
 fn failed_card(ui: &mut Ui, reason: &str) {
     egui::Frame::NONE
-        .fill(SOFT)
-        .stroke(Stroke::new(1.0, DANGER))
+        .fill(c().soft)
+        .stroke(Stroke::new(1.0, c().danger))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin { left: 13, right: 13, top: 10, bottom: 10 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 3.0;
-            ui.label(egui::RichText::new("Sync failed").font(semibold(11.0)).color(DANGER));
-            ui.add(egui::Label::new(egui::RichText::new(reason).font(mono(9.0)).color(DANGER)).wrap());
+            ui.label(egui::RichText::new("Burn failed").font(semibold(11.0)).color(c().danger));
+            ui.add(egui::Label::new(egui::RichText::new(reason).font(mono(9.0)).color(c().danger)).wrap());
         });
 }
 
 /// A request error (a refused diff, a lost status poll).
 fn error_block(ui: &mut Ui, error: &str) {
     egui::Frame::NONE
-        .fill(SOFT)
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(c().soft)
+        .stroke(Stroke::new(1.0, c().border))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            paragraph(ui, error, 10.5, DANGER);
+            paragraph(ui, error, 10.5, c().danger);
         });
 }
 
@@ -1818,13 +1903,13 @@ fn code_section(ui: &mut Ui, last: Option<&Last>, code: &CodeDiff) {
             line.push_str(&format!(" +{} more", code.scope.len() - FILES));
         }
         ui.add_space(7.0);
-        ui.add(egui::Label::new(egui::RichText::new(line).font(regular(10.0)).color(FAINT)).wrap());
+        ui.add(egui::Label::new(egui::RichText::new(line).font(regular(10.0)).color(c().faint)).wrap());
     }
     ui.add_space(7.0);
     if first {
-        ui.label(egui::RichText::new("first sync: the map is the baseline.").font(regular(10.5)).color(MUTED));
+        ui.label(egui::RichText::new("first Burn: the map is the baseline.").font(regular(10.5)).color(c().muted));
     } else if code.files.is_empty() && code.commits.is_empty() && code.note.as_deref().unwrap_or("").trim().is_empty() {
-        ui.label(egui::RichText::new("No code changes since the last sync.").font(regular(10.5)).color(MUTED));
+        ui.label(egui::RichText::new("No code changes since the last Burn.").font(regular(10.5)).color(c().muted));
     }
     for file in code.files.iter().take(FILES) {
         ui.add_space(7.0);
@@ -1832,11 +1917,11 @@ fn code_section(ui: &mut Ui, last: Option<&Last>, code: &CodeDiff) {
     }
     if code.files.len() > FILES {
         ui.add_space(7.0);
-        ui.label(egui::RichText::new(format!("+{} more files", code.files.len() - FILES)).font(regular(10.0)).color(FAINT));
+        ui.label(egui::RichText::new(format!("+{} more files", code.files.len() - FILES)).font(regular(10.0)).color(c().faint));
     }
     if let Some(note) = code.note.as_deref().map(str::trim).filter(|note| !note.is_empty()) {
         ui.add_space(7.0);
-        paragraph(ui, note, 10.0, FAINT);
+        paragraph(ui, note, 10.0, c().faint);
     }
 }
 
@@ -1845,7 +1930,7 @@ fn file_row(ui: &mut Ui, file: &FileDelta) {
     let stats = format!("   +{}/−{}", file.added, file.removed);
     let room = (ui.available_width() - text_width(ui, &stats, regular(10.0))).max(40.0);
     let path = widgets::elide_start_font(ui, &file.path, room, regular(10.0));
-    ui.label(egui::RichText::new(format!("{path}{stats}")).font(regular(10.0)).color(INK));
+    ui.label(egui::RichText::new(format!("{path}{stats}")).font(regular(10.0)).color(c().ink));
 }
 
 /// The agent button and its menu, shared with the composer; the pick, if any.
@@ -1881,19 +1966,19 @@ fn scope_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(vec2(width, 19.0), sense);
     let response = if enabled { response.on_hover_cursor(egui::CursorIcon::PointingHand) } else { response };
-    a11y::button(&response, &format!("Sync {}", label.to_lowercase()));
+    a11y::button(&response, &format!("Burn {}", label.to_lowercase()));
     let hot = enabled && response.hovered();
     let fill = if selected {
-        Color32::from_rgb(0xF1, 0xEC, 0xE7)
+        classic_or(Color32::from_rgb(0xF1, 0xEC, 0xE7), c().accent_tint)
     } else if hot {
-        SOFT
+        c().soft
     } else {
-        PANEL
+        c().panel
     };
     ui.painter().rect_filled(rect, CornerRadius::same(5), fill);
-    let border = if selected { ACCENT } else { BORDER };
+    let border = if selected { c().accent } else { c().border };
     ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, border), StrokeKind::Inside);
-    let ink = if selected || hot { ACCENT } else { MUTED };
+    let ink = if selected || hot { c().accent } else { c().muted };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, semibold(9.5), ink);
     response.clicked() && enabled && !selected
 }
@@ -1902,8 +1987,8 @@ fn scope_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
 fn note_field(ui: &mut Ui, note: &mut String) {
     // One line tall until the note needs more, as the design draws it.
     egui::Frame::NONE
-        .fill(Color32::from_rgb(0xF1, 0xF0, 0xED))
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(classic_or(Color32::from_rgb(0xF1, 0xF0, 0xED), c().panel))
+        .stroke(Stroke::new(1.0, c().border))
         .corner_radius(CornerRadius::same(6))
         .inner_margin(egui::Margin::symmetric(11, 8))
         .show(ui, |ui| {
@@ -1916,7 +2001,7 @@ fn note_field(ui: &mut Ui, note: &mut String) {
                         .font(regular(10.5))
                         .desired_width(f32::INFINITY)
                         .desired_rows(1)
-                        .hint_text(egui::RichText::new("Note for this Sync…").font(regular(10.5)).color(FAINT)),
+                        .hint_text(egui::RichText::new("Note for this Burn…").font(regular(10.5)).color(c().faint)),
                 )
             });
         });
@@ -1931,12 +2016,24 @@ fn action_button(ui: &mut Ui, label: &str, enabled: bool, busy: bool) -> bool {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), if enabled { Sense::click() } else { Sense::hover() });
     let response = response.on_hover_cursor(if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default });
     a11y::button(&response, label);
-    let fill = if enabled { if response.hovered() { ACCENT_HOVER } else { ACCENT } } else { Color32::from_rgb(0xE8, 0xE5, 0xE0) };
+    let fill = if enabled {
+        if response.hovered() { c().accent_hover } else { c().accent }
+    } else {
+        classic_or(Color32::from_rgb(0xE8, 0xE5, 0xE0), c().disabled_fill)
+    };
     ui.painter().rect_filled(rect, CornerRadius::same(7), fill);
-    let ink = if enabled { Color32::WHITE } else { FAINT };
-    let room = (rect.width() - 80.0).max(40.0);
+    let ink = if enabled { c().on_accent } else { c().faint };
+    // The disc at the left: blank, spinning while the Burn runs; faded while the action can't run.
+    let disc = Rect::from_center_size(pos2(rect.left() + 14.0 + 12.0, rect.center().y), vec2(24.0, 24.0));
+    let mut painter = ui.painter().clone();
+    if !enabled && !busy {
+        painter.multiply_opacity(0.5);
+    }
+    let state = if busy { burn_disc::DiscState::Burning { t: ui.input(|input| input.time) } } else { burn_disc::DiscState::Blank };
+    burn_disc::paint(&painter, disc, state, &c());
+    let room = (rect.right() - 60.0 - (disc.right() + 10.0)).max(40.0);
     let shown = widgets::elide_font(ui, label, room, regular(13.0));
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, shown, regular(13.0), ink);
+    ui.painter().text(pos2(disc.right() + 10.0, rect.center().y), Align2::LEFT_CENTER, shown, regular(13.0), ink);
     if !busy {
         let hint = format!("{}↵", if crate::shortcuts::platform() == figcraft_engine::keymap::Platform::Mac { "⌘" } else { "Ctrl+" });
         ui.painter().text(pos2(rect.right() - 14.0, rect.center().y), Align2::RIGHT_CENTER, hint, mono(8.5), ink.gamma_multiply(0.7));
@@ -1994,21 +2091,21 @@ pub(crate) fn canvas_marks(app: &FigApp, painter: &egui::Painter) {
             union = Some(union.map_or(bounds, |u| u.union(bounds)));
             if current {
                 let ring = bounds.expand(5.0);
-                painter.rect_stroke(ring, CornerRadius::same(6), Stroke::new(7.0, AMBER.gamma_multiply(0.28)), StrokeKind::Outside);
-                painter.rect_stroke(ring, CornerRadius::same(4), Stroke::new(2.5, AMBER), StrokeKind::Inside);
+                painter.rect_stroke(ring, CornerRadius::same(6), Stroke::new(7.0, c().working.gamma_multiply(0.28)), StrokeKind::Outside);
+                painter.rect_stroke(ring, CornerRadius::same(4), Stroke::new(2.5, c().working), StrokeKind::Inside);
             }
-            let color = if left_out { row.mark.color().gamma_multiply(0.5) } else { row.mark.color() };
+            let color = if left_out { row.mark.fill().gamma_multiply(0.5) } else { row.mark.fill() };
             let at = bounds.right_top();
             painter.circle_filled(at, 8.0, color);
-            painter.circle_stroke(at, 8.0, Stroke::new(1.5, Color32::WHITE));
-            painter.text(at, Align2::CENTER_CENTER, row.mark.glyph(), mono(10.0), Color32::WHITE);
+            painter.circle_stroke(at, 8.0, Stroke::new(1.5, c().panel));
+            painter.text(at, Align2::CENTER_CENTER, row.mark.glyph(), mono(10.0), row.mark.on_fill());
         }
         if let (true, Some(union)) = (current, union) {
             let text = chip_text(row, index, total);
-            let galley = painter.layout_no_wrap(text, mono(9.0), Color32::WHITE);
+            let galley = painter.layout_no_wrap(text, mono(9.0), c().panel);
             let chip = Rect::from_min_size(pos2(union.left(), union.bottom() + 14.0), galley.size() + vec2(20.0, 12.0));
-            painter.rect_filled(chip, CornerRadius::same(5), INK);
-            painter.galley(chip.min + vec2(10.0, 6.0), galley, Color32::WHITE);
+            painter.rect_filled(chip, CornerRadius::same(5), c().ink);
+            painter.galley(chip.min + vec2(10.0, 6.0), galley, c().panel);
         }
     }
 }
@@ -2028,15 +2125,15 @@ pub fn chip_text(row: &Row, index: usize, total: usize) -> String {
 /// Read the current document's snapshot and the page it is limited to (`None` for every page). The
 /// doc and its current page must both exist.
 fn snapshot_now(app: &FigApp) -> Result<(Snapshot, Option<u64>), String> {
-    let doc = app.session.doc().map_err(|_| "Open a map to sync.".to_string())?;
-    let page = app.session.page().map_err(|_| "This map has no page to sync.".to_string())?;
+    let doc = app.session.doc().map_err(|_| "Open a map to burn.".to_string())?;
+    let page = app.session.page().map_err(|_| "This map has no page to burn.".to_string())?;
     if doc.node(page).is_none() {
-        return Err("This map's page is not available to sync.".to_string());
+        return Err("This map's page is not available to burn.".to_string());
     }
     let scope = (!app.sync.all_pages).then_some(page);
     let snapshot = Snapshot::of_pages(doc, scope);
     if snapshot.pages.is_empty() {
-        return Err("This map has no pages to sync.".to_string());
+        return Err("This map has no pages to burn.".to_string());
     }
     Ok((snapshot, scope.map(|page| page.0)))
 }
@@ -2106,7 +2203,7 @@ fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, _snapsho
         return;
     }
     let Some(target) = app.compose.target.clone() else {
-        app.toast("Choose an agent to sync with.");
+        app.toast("Choose an agent to burn with.");
         return;
     };
     let node = match workspaces::active_node(app) {
@@ -2150,7 +2247,7 @@ fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, _snapsho
         app.sync.job_rx = None;
         app.sync.busy = false;
         app.sync.starting = false;
-        app.sync.error = Some(format!("Could not start the sync: {e}"));
+        app.sync.error = Some(format!("Could not start the Burn: {e}"));
     }
 }
 
@@ -2204,10 +2301,10 @@ fn start_poll(app: &mut FigApp, ctx: &egui::Context, job_id: String) {
     });
     if let Err(e) = spawned {
         app.sync.job_rx = None;
-        app.sync.error = Some(format!("Could not poll the sync: {e}"));
+        app.sync.error = Some(format!("Could not poll the Burn: {e}"));
         if let Some(job) = app.sync.job.as_mut() {
             job.state = "failed".to_string();
-            job.reason = Some(format!("Could not poll the sync: {e}"));
+            job.reason = Some(format!("Could not poll the Burn: {e}"));
         }
     }
 }
@@ -2344,8 +2441,8 @@ fn apply_job(app: &mut FigApp, ctx: &egui::Context, received: JobMsg) {
                         app.sync.refresh = true;
                         app.sync.error = None;
                         app.sync.current = None;
-                        let cards = app.sync.applied;
-                        app.toast(if cards == 0 { "Synced".to_string() } else { format!("Synced · {}", plural(cards, "card")) });
+                        let commit = app.sync.job.as_ref().and_then(|job| job.commit.clone());
+                        app.toast_burned(burned_toast(commit.as_deref(), app.sync.applied));
                         // An exploration this Sync covered is built: the state of the art now.
                         if let Some(scope) = app.sync.job_scope
                             && !app.sync.job.as_ref().is_some_and(Job::is_record)
@@ -2354,8 +2451,8 @@ fn apply_job(app: &mut FigApp, ctx: &egui::Context, received: JobMsg) {
                         }
                     }
                     "failed" => {
-                        let reason = app.sync.job.as_ref().and_then(|job| job.reason.clone()).unwrap_or_else(|| "The sync failed.".to_string());
-                        app.toast(format!("Sync failed: {reason}"));
+                        let reason = app.sync.job.as_ref().and_then(|job| job.reason.clone()).unwrap_or_else(|| "The Burn failed.".to_string());
+                        app.toast(format!("Burn failed: {reason}"));
                     }
                     other => {
                         let message = if other.is_empty() {
@@ -2439,7 +2536,7 @@ fn paragraph(ui: &mut Ui, text: &str, size: f32, color: Color32) {
 
 fn divider(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, BORDER));
+    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, c().border));
 }
 
 fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {

@@ -2,7 +2,9 @@
 //! the right (design: `Sidebar pages · window`).
 //!
 //! Like an editor's status bar it is chrome, not canvas: it costs no header space. The worktree
-//! names the open design (`repo / branch`); a click opens the palette on the workspaces.
+//! names the open design (`repo / branch`); a click opens the palette on the workspaces. After
+//! it, the workspace's agent count (`mindmap / main  ·  3 agents`, design: `Sync pane redesign`;
+//! it lived in the sidebar's workspace switcher); a click lists the agents.
 //! After it comes the open page's path (`Overview › Canvas and layers › Paint › Fills`): every
 //! crumb before the last opens its page. At the right, the agent summary opens the palette on the
 //! workspace's agents, beside the count of people on the map.
@@ -128,6 +130,12 @@ struct Ink {
 
 impl Ink {
     fn of(t: &Tokens) -> Ink {
+        let theme = crate::map_colors::theme();
+        if !matches!(theme, crate::map_colors::Theme::Classic | crate::map_colors::Theme::ClassicDark) {
+            let c = theme.colors();
+            return Ink { panel: c.panel, border: c.border, text: c.ink, faint: c.faint, selected: c.selected };
+        }
+        // Classic and Classic Dark keep the bar's own inks.
         if t.dark {
             Ink { panel: t.panel, border: t.border, text: t.text, faint: t.text_tertiary, selected: t.hover }
         } else {
@@ -176,6 +184,12 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     ui.painter().text(pos2(bar.min.x + 12.0, bar.center().y + 0.5), Align2::LEFT_CENTER, &chip, font.clone(), ink.text);
     if chip_resp.on_hover_text("Switch workspace (⌃⌘O)").clicked() {
         crate::switcher::toggle(app);
+    }
+    #[allow(unused_mut)]
+    let mut after_chip = chip_rect.max.x;
+    #[cfg(not(target_arch = "wasm32"))]
+    if !home && let Some(count) = agent_count(app) {
+        after_chip = agents_after_chip(app, ui, &ink, bar, after_chip, &count);
     }
 
     if !home {
@@ -236,13 +250,45 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         right -= live_w + 16.0;
 
         let path = app.session.doc().ok().zip(app.session.page().ok()).map(|(doc, page)| crumbs(doc, page)).unwrap_or_default();
-        if let Some(page) = path_ui(ui, &ink, chip_rect.max.x + 2.0, right, bar, &path) {
+        if let Some(page) = path_ui(ui, &ink, after_chip + 2.0, right, bar, &path) {
             app.run("page.select", serde_json::json!({"id": page.0}));
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     track_switch(app);
+    // Over a map the creation modals (⇧⌘N, Add machine) draw here: the bar shows whether or not
+    // the sidebar does. The Workspaces screen draws its own.
+    if !home {
+        crate::workspaces::map_modals(app, ui);
+    }
+}
+
+/// The open workspace's agent count (`3 agents`), when the listing knows the workspace.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn agent_count(app: &FigApp) -> Option<String> {
+    let active = crate::workspaces::node_identity(app);
+    active_row(active.as_ref(), &app.ws.rows).map(crate::workspaces::pane_agents)
+}
+
+/// `  ·  3 agents` after the worktree from `x`; a click lists the agents. Returns where it ends.
+#[cfg(not(target_arch = "wasm32"))]
+fn agents_after_chip(app: &mut FigApp, ui: &mut Ui, ink: &Ink, bar: Rect, x: f32, count: &str) -> f32 {
+    let font = regular(11.0);
+    let y = bar.center().y + 0.5;
+    ui.painter().text(pos2(x + 4.0, y), Align2::LEFT_CENTER, "·", font.clone(), ink.faint);
+    let w = ui.painter().layout_no_wrap(count.to_string(), font.clone(), ink.text).size().x;
+    let rect = Rect::from_min_size(pos2(x + 10.0, bar.min.y + 3.0), vec2(w + 12.0, bar.height() - 5.0));
+    let resp = ui.interact(rect, Id::new("status_agent_count"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    crate::a11y::button(&resp, "Agents");
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(4), ink.selected);
+    }
+    ui.painter().text(pos2(rect.min.x + 6.0, y), Align2::LEFT_CENTER, count, font, ink.text);
+    if resp.on_hover_text("Agents").clicked() {
+        crate::map_palette::open(app, crate::map_palette::Scope::Agents);
+    }
+    rect.max.x
 }
 
 /// ` · Overview › Canvas and layers › Fills` from `x`, up to `right`; returns a clicked crumb.

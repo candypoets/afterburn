@@ -1048,17 +1048,18 @@ pub(crate) mod shell {
                     focus: t.focus,
                 }
             } else {
+                let c = crate::map_colors::get();
                 Self {
-                    panel: Color32::WHITE,
-                    text: Color32::from_rgb(0x1A, 0x1A, 0x1A),
-                    muted: Color32::from_rgb(0x6E, 0x6C, 0x68),
-                    faint: Color32::from_rgb(0x9A, 0x96, 0x8F),
-                    border: Color32::from_rgb(0xE3, 0xE2, 0xDF),
-                    soft: Color32::from_rgb(0xF1, 0xF0, 0xED),
-                    hover: Color32::from_rgb(0xF7, 0xF6, 0xF3),
-                    accent: Color32::from_rgb(0xB5, 0x45, 0x2F),
-                    teal: Color32::from_rgb(0x2F, 0x6F, 0x6A),
-                    ink: Color32::from_rgb(0x1A, 0x1A, 0x1A),
+                    panel: c.panel,
+                    text: c.ink,
+                    muted: c.muted,
+                    faint: c.faint,
+                    border: c.border,
+                    soft: c.tab_inactive,
+                    hover: c.tab_row,
+                    accent: c.accent,
+                    teal: c.map_ink,
+                    ink: c.ink,
                     ink_hover: Color32::from_rgb(0x33, 0x33, 0x33),
                     on_ink: Color32::WHITE,
                     warn_fill: Color32::from_rgb(0xFB, 0xF4, 0xF1),

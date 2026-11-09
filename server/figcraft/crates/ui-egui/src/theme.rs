@@ -45,6 +45,11 @@ pub struct Tokens {
 }
 
 pub const ACCENT: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
+/// The interface accent in the current colour theme (Classic: [`ACCENT`]); the design editor's
+/// selection, handles and focus rings follow the theme with it.
+pub fn accent() -> Color32 {
+    crate::map_colors::theme().tokens().accent
+}
 pub const COMPONENT: Color32 = Color32::from_rgb(0x97, 0x47, 0xFF);
 /// Handoff status badges (white text on these, in both themes).
 pub const DEV_READY: Color32 = Color32::from_rgb(0x14, 0xAE, 0x5C);

@@ -17,7 +17,7 @@ use crate::i18n::{tr, tr_noop, trf};
 use crate::icons::{self, Icon};
 use crate::proto_editor::{Cx, Slot, set_action};
 use crate::right::{menu_item, menu_popup, row};
-use crate::theme::{ACCENT, Tokens, regular, semibold};
+use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{self, FIELD_H, FieldEdit, Lead, PAD};
 
 /// The interaction whose editor popover is open: (layer, index).
@@ -605,8 +605,8 @@ fn interactions(app: &mut FigApp, ui: &mut Ui, doc: &Document, page: NodeId, nod
         }
         // A small connection glyph.
         let g = pos2(body.min.x + 14.0, body.center().y);
-        ui.painter().circle_stroke(g, 5.0, Stroke::new(1.2, ACCENT));
-        ui.painter().circle_filled(g, 2.0, ACCENT);
+        ui.painter().circle_stroke(g, 5.0, Stroke::new(1.2, crate::theme::accent()));
+        ui.painter().circle_filled(g, 2.0, crate::theme::accent());
         let tx = body.min.x + 28.0;
         let clip = ui.painter().with_clip_rect(body);
         clip.text(pos2(tx, body.center().y - 7.0), Align2::LEFT_CENTER, trigger_summary(&it.trigger), semibold(11.0), t.text);
@@ -1048,7 +1048,7 @@ fn animation_rows(app: &mut FigApp, ui: &mut Ui, node: NodeId, k: usize, it: &In
                     let w = ui.available_width().max(200.0);
                     let (r, rr) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click());
                     if rr.hovered() {
-                        ui.painter().rect_filled(r, CornerRadius::same(5), ACCENT);
+                        ui.painter().rect_filled(r, CornerRadius::same(5), crate::theme::accent());
                     }
                     let col = if rr.hovered() { Color32::WHITE } else { t.text };
                     curve(ui.painter(), Rect::from_min_size(pos2(r.min.x + 6.0, r.min.y + 4.0), vec2(28.0, 18.0)), *e, col, None);
@@ -1104,7 +1104,7 @@ fn animation_rows(app: &mut FigApp, ui: &mut Ui, node: NodeId, k: usize, it: &In
         } else {
             1.0
         };
-        curve(ui.painter(), box_r.shrink2(vec2(10.0, 12.0)), it.easing, ACCENT, Some(phase));
+        curve(ui.painter(), box_r.shrink2(vec2(10.0, 12.0)), it.easing, crate::theme::accent(), Some(phase));
     }
 }
 

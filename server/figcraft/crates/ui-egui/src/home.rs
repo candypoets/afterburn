@@ -13,7 +13,7 @@ use crate::FigApp;
 use crate::a11y;
 use crate::i18n::{tr, tr_noop};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, Tokens, regular, semibold};
+use crate::theme::{Tokens, regular, semibold};
 use crate::widgets;
 
 /// The section the home screen shows.
@@ -202,7 +202,7 @@ fn dropped(app: &mut FigApp, ctx: &egui::Context) {
 
 fn sidebar(app: &mut FigApp, ui: &mut Ui, t: &Tokens, left: Rect) {
     let mut y = left.min.y + 20.0;
-    icons::paint(ui.painter(), Rect::from_min_size(pos2(left.min.x + 16.0, y), vec2(20.0, 20.0)), Icon::Logo, ACCENT);
+    icons::paint(ui.painter(), Rect::from_min_size(pos2(left.min.x + 16.0, y), vec2(20.0, 20.0)), Icon::Logo, crate::theme::accent());
     ui.painter().text(pos2(left.min.x + 44.0, y + 10.0), Align2::LEFT_CENTER, "Mindmap", semibold(14.0), t.text);
     y += 48.0;
     let search = Rect::from_min_size(pos2(left.min.x + 8.0, y), vec2(SIDEBAR - 16.0, widgets::FIELD_H));
@@ -324,7 +324,7 @@ fn action_card(ui: &mut Ui, t: &Tokens, icon: Icon, title: &str, sub: &str) -> b
     }
     card_frame(ui, t, r, &resp);
     let ir = Rect::from_min_size(pos2(r.min.x + 16.0, r.center().y - 16.0), vec2(32.0, 32.0));
-    ui.painter().rect_filled(ir, CornerRadius::same(6), ACCENT);
+    ui.painter().rect_filled(ir, CornerRadius::same(6), crate::theme::accent());
     icons::paint(ui.painter(), ir.shrink(8.0), icon, Color32::WHITE);
     ui.painter().text(pos2(r.min.x + 60.0, r.center().y - 8.0), Align2::LEFT_CENTER, title_shown, semibold(12.0), t.text);
     ui.painter().text(pos2(r.min.x + 60.0, r.center().y + 9.0), Align2::LEFT_CENTER, sub_shown, regular(11.0), t.text_secondary);
@@ -388,8 +388,14 @@ fn open_files(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize {
     let mut switch = None;
     for (i, d) in app.session.docs.iter().enumerate().filter(|(_, d)| hit(d)) {
         let detail = d.path.as_deref().unwrap_or_default();
-        let row =
-            FileRow { mark: Some((Icon::Logo, ACCENT)), name: &d.doc.name, ink: t.text, detail, detail_size: 11.0, detail_ink: t.text_secondary };
+        let row = FileRow {
+            mark: Some((Icon::Logo, crate::theme::accent())),
+            name: &d.doc.name,
+            ink: t.text,
+            detail,
+            detail_size: 11.0,
+            detail_ink: t.text_secondary,
+        };
         if listed(ui, t, ui.id().with(("open", d.uid)), 36.0, &row) {
             switch = Some(i);
         }

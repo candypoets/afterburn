@@ -140,12 +140,15 @@ pub fn run(app: &mut FigApp, ctx: &egui::Context, id: &str) -> bool {
     switch_composer(app, ctx);
     match id {
         "map.openWorkspace" | "map.close" => workspace_home(app),
+        // ⇧⌘N: the creation modal. Over a map the window keeps it, and the new workspace opens
+        // in a new window tab; on the Workspaces screen it opens there. The Workspaces screen
+        // draws the modal, and over a map the status bar does.
         "map.newWorkspace" => {
-            // This dialog is drawn by the existing Workspaces screen/pane.
-            workspace_home(app);
+            let over_map = map_visible(app);
             if !app.new_workspace.open {
                 crate::new_workspace::open(app);
             }
+            app.new_workspace.new_window = over_map;
         }
         "map.save" => save(app, ctx),
         "map.reconnect" => {
@@ -486,10 +489,12 @@ mod tests {
     fn creation_opens_the_existing_form_without_resetting_an_open_form() {
         let mut app = app();
         let ctx = egui::Context::default();
+        app.ui.home = false;
         app.compose.drafts.push(draft("retained"));
         assert!(run(&mut app, &ctx, "map.newWorkspace"));
-        assert!(app.ui.home);
+        assert!(!app.ui.home, "over a map, the window keeps it");
         assert!(app.new_workspace.open);
+        assert!(app.new_workspace.new_window, "the workspace opens in a new window tab");
         app.new_workspace.folder = "/synthetic/folder".into();
         assert!(run(&mut app, &ctx, "map.newWorkspace"));
         assert_eq!(app.new_workspace.folder, "/synthetic/folder");

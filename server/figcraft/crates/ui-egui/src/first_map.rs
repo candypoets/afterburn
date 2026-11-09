@@ -14,10 +14,22 @@ use crate::FigApp;
 use crate::theme::semibold;
 use crate::workspaces::{Busy, Target};
 
-const PANEL: Color32 = Color32::WHITE;
-const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
+#[allow(non_snake_case)]
+fn PANEL() -> Color32 {
+    crate::map_colors::get().panel
+}
+#[allow(non_snake_case)]
+fn INK() -> Color32 {
+    crate::map_colors::get().ink
+}
+#[allow(non_snake_case)]
+fn MUTED() -> Color32 {
+    crate::map_colors::get().muted
+}
+#[allow(non_snake_case)]
+fn ACCENT() -> Color32 {
+    crate::map_colors::get().accent
+}
 const TIP: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
 
 /// The banner's width, as drawn.
@@ -142,8 +154,8 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, header_h: f32) {
             .interactable(false)
             .show(ctx, |ui| {
                 egui::Frame::NONE
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, ACCENT))
+                    .fill(PANEL())
+                    .stroke(Stroke::new(1.0, ACCENT()))
                     .corner_radius(CornerRadius::same(8))
                     .shadow(egui::epaint::Shadow { offset: [0, 3], blur: 10, spread: 0, color: Color32::from_black_alpha(16) })
                     .inner_margin(Margin { left: 15, right: 15, top: 10, bottom: 10 })
@@ -151,12 +163,12 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context, header_h: f32) {
                         ui.set_width(width - 30.0);
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 10.0;
-                            ui.add(egui::Spinner::new().size(12.0).color(ACCENT));
+                            ui.add(egui::Spinner::new().size(12.0).color(ACCENT()));
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(egui::RichText::new(format!("{kind} is drawing the map")).font(semibold(12.0)).color(INK));
+                                ui.label(egui::RichText::new(format!("{kind} is drawing the map")).font(semibold(12.0)).color(INK()));
                                 let detail = detail_line(drawing.path.as_deref(), cards);
-                                ui.add(egui::Label::new(egui::RichText::new(detail).font(egui::FontId::monospace(9.0)).color(MUTED)).truncate());
+                                ui.add(egui::Label::new(egui::RichText::new(detail).font(egui::FontId::monospace(9.0)).color(MUTED())).truncate());
                             });
                         });
                     });

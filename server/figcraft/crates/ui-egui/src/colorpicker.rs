@@ -594,7 +594,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     ui.painter().rect_stroke(
                         r,
                         CornerRadius::same(3),
-                        Stroke::new(if i == sel { 2.0 } else { 1.0 }, if i == sel { crate::theme::ACCENT } else { Color32::WHITE }),
+                        Stroke::new(if i == sel { 2.0 } else { 1.0 }, if i == sel { crate::theme::accent() } else { Color32::WHITE }),
                         StrokeKind::Outside,
                     );
                     if resp.clicked() || resp.drag_started() {
@@ -1013,7 +1013,7 @@ fn saved_preset_row(ui: &mut Ui, name: &str) -> Option<PresetAction> {
     let del_resp = ui.interact(del, ui.id().with(("cp_preset_del", name)), Sense::click()).tip(tr("Delete preset"));
     let hot = resp.hovered() || del_resp.hovered();
     if hot {
-        ui.painter().rect_filled(r, CornerRadius::same(5), crate::theme::ACCENT);
+        ui.painter().rect_filled(r, CornerRadius::same(5), crate::theme::accent());
     }
     let col = if hot { Color32::WHITE } else { t.text };
     ui.painter().text(pos2(r.min.x + 8.0, r.center().y), Align2::LEFT_CENTER, name, regular(11.5), col);

@@ -111,7 +111,7 @@ fn the_widget_names_the_page_scope_and_the_code_it_covers() {
     });
     run(&mut app);
     let shown = run(&mut app);
-    for needle in ["This page", "All pages", "Backend + 1 subpage", "Code · first sync"] {
+    for needle in ["This page", "All pages", "Backend + 1 subpage", "Code · first Burn"] {
         assert!(shown.iter().any(|text| text == needle), "{needle:?} not in {shown:?}");
     }
     // The code folds to one line; unfolded, it names the paths it is limited to.

@@ -103,10 +103,12 @@ fn leaving_cards_out_counts_them_and_sends_only_listed_ids() {
     assert_eq!(state.included(&rows), 3);
     assert_eq!(state.excluded_ids(&rows), [2, 5, 6]);
     assert!(rows[4].left_out(&state.excluded));
-    assert_eq!(header_line(&state, &rows), "3 in this Sync · 2 keep waiting · first sync");
-    assert_eq!(sync_label(3, 5, Some("codex")), "Sync 3 of 5 cards with codex");
-    assert_eq!(sync_label(5, 5, Some("codex")), "Sync 5 cards with codex");
-    assert_eq!(sync_label(0, 0, None), "Sync");
+    assert_eq!(header_line(&state, &rows), "3 selected · 2 keep waiting · first Burn");
+    assert_eq!(sync_label(3, 5, Some("codex")), "Burn 3 cards with Codex");
+    assert_eq!(sync_label(5, 5, Some("codex")), "Burn 5 cards with Codex");
+    assert_eq!(sync_label(1, 5, Some("codex")), "Burn 1 card with Codex");
+    assert_eq!(sync_label(0, 0, Some("claude")), "Burn with Claude");
+    assert_eq!(sync_label(0, 0, None), "Burn");
     state.toggle(&rows[1]);
     assert_eq!(state.excluded_ids(&rows), [5, 6]);
     for row in &rows {
@@ -281,7 +283,7 @@ fn the_pane_lists_cards_with_their_checkboxes_the_folded_code_and_the_sticky_act
     let shown = frames.run(&mut app, Vec::new());
     for needle in [
         "3 cards waiting",
-        "2 in this Sync · 1 keeps waiting · first sync",
+        "2 selected · 1 keeps waiting · first Burn",
         "Sidebar pages · window",
         "new · 75 layers",
         "Rules",
@@ -291,8 +293,8 @@ fn the_pane_lists_cards_with_their_checkboxes_the_folded_code_and_the_sticky_act
         "include: ",
         "all",
         "none",
-        "Code · first sync",
-        "Sync 2 of 3 cards",
+        "Code · first Burn",
+        "Burn 2 cards",
         "No agent is available in this workspace yet.",
         "– / 3",
         "[ ]  step",
@@ -426,6 +428,70 @@ fn closed_sidebar_still_receives_job_status_and_diff_replies() {
     assert!(app.sync.excluded.contains(&77));
 }
 
+#[test]
+fn the_header_says_burning_while_a_burn_runs_even_with_the_sidebar_closed() {
+    let (mut app, ..) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    app.sync.open = false;
+    let idle = frames.run(&mut app, Vec::new());
+    assert!(idle.iter().any(|text| text.starts_with("Burn")) && !idle.iter().any(|text| text == "Burning…"), "{idle:?}");
+    app.sync.job = Some(Job { id: "running".into(), state: "in_flight".into(), ..Job::default() });
+    let shown = frames.run(&mut app, Vec::new());
+    assert!(!app.sync.open);
+    assert!(shown.iter().any(|text| text == "Burning…"), "the closed toggle says Burning…: {shown:?}");
+    // Open, the sidebar's header and its action say it too.
+    app.sync.open = true;
+    frames.run(&mut app, Vec::new());
+    let shown = frames.run(&mut app, Vec::new());
+    assert!(shown.iter().filter(|text| *text == "Burning…").count() >= 2, "{shown:?}");
+}
+
+#[test]
+fn the_button_looks_idle_waiting_burning_and_disabled() {
+    let colors = crate::map_colors::get();
+    let idle = button_look(false, true, None);
+    assert_eq!((idle.label.as_str(), idle.fill), ("Burn", None));
+    assert_eq!(button_look(false, true, Some(0)), idle, "nothing waiting is idle");
+    let waiting = button_look(false, true, Some(7));
+    assert_eq!((waiting.label.as_str(), waiting.ink, waiting.fill), ("Burn 7", colors.map_ink, Some(colors.selected)));
+    let burning = button_look(true, true, Some(7));
+    assert_eq!((burning.label.as_str(), burning.fill), ("Burning…", None));
+    assert_eq!(button_look(true, false, None).label, "Burning…", "a Burn in flight says so even with no map open");
+    let disabled = button_look(false, false, Some(7));
+    assert_eq!((disabled.label.as_str(), disabled.ink), ("Burn", colors.faint));
+}
+
+#[test]
+fn a_finished_burn_names_its_commit_or_its_cards() {
+    assert_eq!(burned_toast(Some("a1f9c2e5d0b7"), 3), "Burned a1f9c2e");
+    assert_eq!(burned_toast(Some("  "), 3), "Burned · 3 cards");
+    assert_eq!(burned_toast(None, 1), "Burned · 1 card");
+    assert_eq!(burned_toast(None, 0), "Burned");
+    let job: Job = serde_json::from_value(json!({"id": "j", "state": "done", "commit": "a1f9c2e5d0"})).unwrap();
+    assert_eq!(job.commit.as_deref(), Some("a1f9c2e5d0"));
+    let job: Job = serde_json::from_value(json!({"id": "j", "state": "done", "commit": null})).unwrap();
+    assert_eq!(job.commit, None);
+}
+
+#[test]
+fn a_done_status_toasts_burned_with_the_commit_and_a_failure_says_burn_failed() {
+    let (mut app, ..) = map();
+    let mut frames = Frames::new();
+    open(&mut app, &mut frames);
+    for (job, toast) in [
+        (Job { id: "j".into(), state: "done".into(), commit: Some("a1f9c2e5d0".into()), ..Job::default() }, "Burned a1f9c2e"),
+        (Job { id: "j".into(), state: "failed".into(), reason: Some("agent stopped".into()), ..Job::default() }, "Burn failed: agent stopped"),
+    ] {
+        app.sync.job = Some(Job { id: "j".into(), state: "in_flight".into(), ..Job::default() });
+        let (tx, rx) = mpsc::channel();
+        app.sync.job_rx = Some(rx);
+        tx.send(JobMsg::Status(Ok(StatusReply { ok: true, job: Some(job), ..StatusReply::default() }))).unwrap();
+        frames.run(&mut app, Vec::new());
+        assert_eq!(app.ui.toast.as_ref().map(|(text, _)| text.as_str()), Some(toast));
+    }
+}
+
 fn command_enter(pos: Pos2) -> Vec<Event> {
     vec![Event::PointerMoved(pos), Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND }]
 }
@@ -519,7 +585,7 @@ fn text_rect(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Rect {
             _ => None,
         }
     }
-    // The empty-list action and header both say Sync; the footer is painted last.
+    // The empty-list action and header both say Burn; the footer is painted last.
     shapes.iter().rev().find_map(|shape| find(&shape.shape, needle)).unwrap_or_else(|| panic!("missing text {needle:?}"))
 }
 
@@ -555,8 +621,8 @@ fn docked_shell_and_footer_fill_the_window_with_short_and_long_lists() {
                 collect_rects(&clipped.shape, &mut rects);
             }
             let expected = Rect::from_min_max(pos2(1080.0, 0.0), pos2(1440.0, height));
-            let shell = rects.iter().find(|rect| rect.fill == PANEL && rect.rect == expected).unwrap_or_else(|| {
-                let white_rects: Vec<_> = rects.iter().filter(|rect| rect.fill == PANEL).map(|rect| (rect.rect, rect.corner_radius)).collect();
+            let shell = rects.iter().find(|rect| rect.fill == crate::map_colors::get().panel && rect.rect == expected).unwrap_or_else(|| {
+                let white_rects: Vec<_> = rects.iter().filter(|rect| rect.fill == crate::map_colors::get().panel).map(|rect| (rect.rect, rect.corner_radius)).collect();
                 panic!("missing flat full-height Sync shell: expected={expected:?}, cards={count}, open={}, viewport={:?}, header={:?}, white_rects={white_rects:?}",
                     app.sync.open, frames.ctx.viewport_rect(), app.sync.button_rect);
             });

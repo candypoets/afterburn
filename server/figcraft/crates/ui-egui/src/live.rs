@@ -24,7 +24,7 @@ use crate::a11y::{self, Tip};
 use crate::i18n::{tr, tr_noop, trf, trn};
 use crate::icons::{self, Icon};
 use crate::right::{menu_item, menu_item_with, menu_popup};
-use crate::theme::{ACCENT, Tokens, regular, semibold};
+use crate::theme::{Tokens, regular, semibold};
 use crate::widgets;
 
 /// In the browser: what joining needs (a page can't host, and https pages can't reach `ws://`).
@@ -146,12 +146,12 @@ impl LiveUi {
 
 /// A person's colour (`#RRGGBB` from the session), or the accent for anything else.
 pub fn color(s: &str) -> Color32 {
-    parse_color(s).map_or(ACCENT, |(r, g, b)| Color32::from_rgb(r, g, b))
+    parse_color(s).map_or(crate::theme::accent(), |(r, g, b)| Color32::from_rgb(r, g, b))
 }
 
 /// The palette colour `i` (comment authors use it too).
 pub fn people(i: usize) -> Color32 {
-    PEOPLE.get(i % PEOPLE.len()).map_or(ACCENT, |c| color(c))
+    PEOPLE.get(i % PEOPLE.len()).map_or(crate::theme::accent(), |c| color(c))
 }
 
 /// Text that reads on `fill`.
@@ -344,7 +344,7 @@ pub fn chat_box(app: &mut FigApp, ctx: &egui::Context) {
     let first = chat.typed.is_none();
     let typed = *chat.typed.get_or_insert(now);
     let live = app.session.live();
-    let fill = live.info.as_ref().map_or(ACCENT, |i| color(&i.color));
+    let fill = live.info.as_ref().map_or(crate::theme::accent(), |i| color(&i.color));
     let tip = live.cursor.map_or(app.canvas.rect.center(), |(x, y)| app.to_screen(x, y));
     let reduce = app.reduce_motion();
     if !chat.editing {

@@ -456,16 +456,17 @@ impl Pal {
                 hover: t.hover,
             }
         } else {
+            let c = crate::map_colors::get();
             Pal {
-                bg: Color32::from_rgb(0xF4, 0xF4, 0xF2),
-                panel: Color32::WHITE,
-                border: Color32::from_rgb(0xE3, 0xE2, 0xDF),
-                text: Color32::from_rgb(0x1A, 0x1A, 0x1A),
-                muted: Color32::from_rgb(0x6E, 0x6C, 0x68),
-                faint: Color32::from_rgb(0x9A, 0x97, 0x91),
-                accent: Color32::from_rgb(0xB5, 0x45, 0x2F),
-                accent_hover: Color32::from_rgb(0xC2, 0x55, 0x3E),
-                teal: Color32::from_rgb(0x2F, 0x6F, 0x6A),
+                bg: c.canvas,
+                panel: c.panel,
+                border: c.border,
+                text: c.ink,
+                muted: c.muted,
+                faint: c.faint,
+                accent: c.accent,
+                accent_hover: c.accent_hover,
+                teal: c.map_ink,
                 teal_soft: Color32::from_rgb(0xEE, 0xF4, 0xF3),
                 warm: Color32::from_rgb(0xF1, 0xEC, 0xE7),
                 disabled: Color32::from_rgb(0xE8, 0xE5, 0xE0),

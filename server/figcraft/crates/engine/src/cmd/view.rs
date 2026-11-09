@@ -364,6 +364,21 @@ pub fn specs() -> Vec<CommandSpec> {
             s.prefs.theme = "system".into();
             ok()
         }),
+        spec!(
+            "view.colorTheme",
+            "Colour theme",
+            "{theme: \"afterburn\" | \"classic\"}  the colour theme's family; light, dark or the system's choice lights it",
+            false,
+            |s, p| {
+                match p.get("theme").and_then(serde_json::Value::as_str) {
+                    Some(theme @ ("afterburn" | "classic")) => {
+                        s.prefs.color_theme = theme.into();
+                        ok()
+                    }
+                    _ => Err(bad("view.colorTheme", "`theme` is \"afterburn\" or \"classic\"")),
+                }
+            }
+        ),
         spec!("pref.keepTool", "Keep tool selected after use", "{on?}", false, |s, p| pref(s, p, |x| &mut x.keep_tool)),
         spec!("pref.highlightHover", "Highlight layers on hover", "{on?}", false, |s, p| pref(s, p, |x| &mut x.highlight_on_hover)),
         spec!("pref.renameDuplicates", "Rename duplicated layers", "{on?}", false, |s, p| pref(s, p, |x| &mut x.rename_duplicates)),

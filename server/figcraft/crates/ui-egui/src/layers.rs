@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::a11y::{self, Region, RowInfo, Tip};
 use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
-use crate::theme::{ACCENT, COMPONENT, Tokens, regular, semibold};
+use crate::theme::{COMPONENT, Tokens, regular, semibold};
 use crate::{FigApp, LeftTab};
 
 pub const ROW: f32 = 32.0;
@@ -239,7 +239,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 // The gap between rows counts too.
                 && pointer.is_some_and(|p| resp.interact_rect.expand2(vec2(0.0, 3.0)).contains(p))
             {
-                ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(2.0, crate::theme::accent()), egui::StrokeKind::Inside);
                 if ui.input(|i| i.pointer.any_released()) {
                     move_to = Some((id, name.clone()));
                 }
@@ -805,7 +805,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 ui.painter().rect_stroke(
                     rr,
                     CornerRadius::same(5),
-                    Stroke::new(1.0, if is_comp { COMPONENT } else { ACCENT }),
+                    Stroke::new(1.0, if is_comp { COMPONENT } else { crate::theme::accent() }),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -943,7 +943,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     _ => r.center().y,
                 };
                 if zone == 0 {
-                    ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(rr, CornerRadius::same(5), Stroke::new(2.0, crate::theme::accent()), egui::StrokeKind::Inside);
                     // Holding over a collapsed group or frame opens it, to drop deeper inside.
                     if row.has_kids && !app.ui.expanded.contains(&row.id) {
                         let hold_id = Id::new("layer_drag_hold");

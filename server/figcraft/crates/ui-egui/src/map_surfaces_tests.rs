@@ -15,6 +15,10 @@ fn map_registry_has_exact_agreed_ids_and_parseable_platform_bindings() {
         "openWorkspace",
         "newSubpage",
         "newWorkspace",
+        "newPage",
+        "colorTheme",
+        "nextColorTheme",
+        "followSystemAppearance",
         "save",
         "close",
         "preferences",
@@ -131,7 +135,10 @@ fn palette_only_actions_and_platform_help_are_explicit() {
             "map.reconnect",
             "map.pageTree",
             "map.agents",
-            "app.checkForUpdates"
+            "app.checkForUpdates",
+            "map.colorTheme",
+            "map.nextColorTheme",
+            "map.followSystemAppearance"
         ])
     );
     let mac = crate::shortcuts_panel::map_help_rows("map.actions", Platform::Mac);

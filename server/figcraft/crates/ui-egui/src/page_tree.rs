@@ -175,10 +175,6 @@ const ICON: f32 = 14.0;
 /// The activity mark at the right of a busy page's row, and how far × moves in beside it.
 const ACTIVITY: f32 = 18.0;
 const ACTIVITY_GAP: f32 = 24.0;
-/// The burning disc's blank and burned parts, and its rim; the designing arc's turns per second.
-const DISC: Color32 = Color32::from_rgb(0xEC, 0xE9, 0xE4);
-const DISC_RIM: Color32 = Color32::from_rgb(0xC9, 0xC4, 0xBC);
-const BURNED_SHARE: f32 = 0.62;
 
 /// The tree's state plus the orphan-cleanup clock.
 #[derive(Default)]
@@ -203,8 +199,24 @@ pub struct State {
 /// How long a new page is watched for the agent marking it an exploration (seconds).
 const NEW_PAGE_WATCH: f64 = 30.0 * 60.0;
 
-/// The rename field's selected text: a soft accent behind ink.
-const SELECTION: Color32 = Color32::from_rgb(0xF3, 0xDC, 0xD5);
+/// The rename field's selected text: a soft accent behind ink (Classic's own, the theme's
+/// accent tint otherwise).
+fn selection() -> Color32 {
+    match crate::map_colors::theme() {
+        crate::map_colors::Theme::Classic => Color32::from_rgb(0xF3, 0xDC, 0xD5),
+        _ => crate::map_colors::get().accent_tint,
+    }
+}
+
+/// The open row's fill: Classic's warm grey as designed, the dark skin's selection on Classic
+/// Dark, the theme's selected teal otherwise.
+fn current_fill(s: &Skin) -> Color32 {
+    match crate::map_colors::theme() {
+        crate::map_colors::Theme::Classic => Color32::from_rgb(0xEF, 0xEE, 0xEA),
+        crate::map_colors::Theme::ClassicDark => s.selected,
+        _ => crate::map_colors::get().selected,
+    }
+}
 
 /// Start editing `page`'s name in its row.
 pub fn start_rename(app: &mut FigApp, page: NodeId) {
@@ -243,7 +255,7 @@ fn rename_field(ui: &mut Ui, s: &Skin, field: Rect, page: NodeId, text: &mut Str
     let resp = ui
         .scope(|ui| {
             let visuals = ui.visuals_mut();
-            visuals.selection.bg_fill = SELECTION;
+            visuals.selection.bg_fill = selection();
             visuals.selection.stroke = Stroke::new(1.0, s.text);
             visuals.text_cursor.stroke = Stroke::new(1.0, s.text);
             ui.put(field, edit)
@@ -481,8 +493,7 @@ enum Ask {
 pub fn docked(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
     let tokens = Tokens::get(ui.ctx());
     let s = Skin::of(&tokens);
-    // The open row's fill, as designed (the dark skin's selection otherwise).
-    let current_fill = if tokens.dark { s.selected } else { Color32::from_rgb(0xEF, 0xEE, 0xEA) };
+    let current_fill = current_fill(&s);
     let (lines, total) = match app.session.doc() {
         Ok(doc) => {
             let building = building_pages(doc, app.sync.building());
@@ -618,7 +629,7 @@ fn row(
     let is_editing = editing.is_some();
     if let Some(text) = editing {
         let field = Rect::from_min_max(pos2(x - 4.0, rect.center().y - 11.0), pos2(rect.max.x - 6.0, rect.center().y + 11.0));
-        ui.painter().rect_filled(field, CornerRadius::same(5), Color32::WHITE);
+        ui.painter().rect_filled(field, CornerRadius::same(5), crate::map_colors::get().panel);
         ui.painter().rect_stroke(field, CornerRadius::same(5), Stroke::new(1.0, s.accent), egui::StrokeKind::Inside);
         end = rename_field(ui, s, field.shrink2(vec2(2.0, 1.0)), line.page, text, select_name);
     } else {
@@ -629,7 +640,7 @@ fn row(
     let trail = pos2(rect.max.x - 14.0, rect.center().y);
     if let (false, Some(activity)) = (is_editing, &line.activity) {
         let at = Rect::from_center_size(trail, vec2(ACTIVITY, ACTIVITY));
-        paint_activity(ui, s, dark, at, activity);
+        paint_activity(ui, s, at, activity);
         ui.interact(at, Id::new(("page_tree_activity", line.page.0)), Sense::hover()).on_hover_text(activity.tip(&line.name));
     }
     if is_editing {
@@ -683,52 +694,27 @@ fn row(
     (ask, outer, end)
 }
 
-/// A busy page's mark in `at`: a CD burning (its burned part turning, like a disc in a drive), or
-/// an agent's brush in a turning arc. Both move, so the tree repaints while one shows.
-fn paint_activity(ui: &Ui, s: &Skin, dark: bool, at: Rect, activity: &Activity) {
-    let t = ui.input(|i| i.time) as f32;
+/// A busy page's mark in `at`: the Burn disc being written (see [`crate::burn_disc`]), or an
+/// agent's brush in a turning arc. Both move, so the tree repaints while one shows.
+fn paint_activity(ui: &Ui, s: &Skin, at: Rect, activity: &Activity) {
+    let time = ui.input(|i| i.time);
     let painter = ui.painter();
-    let c = at.center();
-    let r = at.width() / 2.0;
     match activity {
         Activity::Burning => {
-            let (blank, rim) = if dark { (s.soft, s.faint) } else { (DISC, DISC_RIM) };
-            annulus(painter, c, r - 0.5, r * 0.26, 0.0, std::f32::consts::TAU, blank);
-            let start = -std::f32::consts::FRAC_PI_2 + t * std::f32::consts::PI * 0.6;
-            annulus(painter, c, r - 0.5, r * 0.26, start, start + BURNED_SHARE * std::f32::consts::TAU, s.accent);
-            painter.circle_stroke(c, r - 0.5, Stroke::new(0.75, rim));
-            painter.circle_stroke(c, r * 0.28, Stroke::new(0.75, rim));
+            crate::burn_disc::paint(painter, at, crate::burn_disc::DiscState::Burning { t: time }, &crate::map_colors::get());
         }
         Activity::Designing(_) => {
+            let t = time as f32;
+            let c = at.center();
+            let r = at.width() / 2.0;
             let ink = s.map_ink;
             let start = t * std::f32::consts::TAU * 0.8;
-            let arc: Vec<egui::Pos2> = (0..=16)
-                .map(|i| start + i as f32 / 16.0 * 1.75)
-                .map(|a| c + vec2(a.cos(), a.sin()) * (r - 1.0))
-                .collect();
+            let arc: Vec<egui::Pos2> = (0..=16).map(|i| start + i as f32 / 16.0 * 1.75).map(|a| c + vec2(a.cos(), a.sin()) * (r - 1.0)).collect();
             painter.add(egui::Shape::line(arc, Stroke::new(1.4, ink)));
             crate::icons::paint(painter, Rect::from_center_size(c, vec2(12.0, 12.0)), crate::icons::Icon::Brush, ink);
         }
     }
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
-}
-
-/// A ring from radius `inner` to `outer` around `c`, from angle `a0` to `a1`, filled.
-fn annulus(painter: &egui::Painter, c: egui::Pos2, outer: f32, inner: f32, a0: f32, a1: f32, color: Color32) {
-    let steps = ((a1 - a0).abs() / std::f32::consts::TAU * 48.0).ceil().max(2.0) as u32;
-    let mut mesh = egui::Mesh::default();
-    for i in 0..=steps {
-        let a = a0 + (a1 - a0) * i as f32 / steps as f32;
-        let d = vec2(a.cos(), a.sin());
-        mesh.colored_vertex(c + d * outer, color);
-        mesh.colored_vertex(c + d * inner, color);
-        if i > 0 {
-            let k = 2 * i;
-            mesh.add_triangle(k - 2, k - 1, k);
-            mesh.add_triangle(k - 1, k + 1, k);
-        }
-    }
-    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// The Mark as items' width, the page menu's.

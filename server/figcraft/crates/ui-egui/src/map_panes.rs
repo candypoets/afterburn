@@ -121,7 +121,7 @@ fn splitter_edge(ui: &mut egui::Ui, name: &str, x: f32, rows: egui::Rangef, requ
     let resp = ui.interact(rect, id, egui::Sense::click_and_drag());
     if resp.hovered() || resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        ui.painter().vline(x, rows, egui::Stroke::new(2.0, egui::Color32::from_rgb(0xB5, 0x45, 0x2F)));
+        ui.painter().vline(x, rows, egui::Stroke::new(2.0, crate::map_colors::get().accent));
     }
     if resp.double_clicked() {
         return Some(default);

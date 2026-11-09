@@ -231,6 +231,7 @@ fn a_finished_background_render_wakes_the_ui() {
         skip: vec![],
         solo: None,
         proof: false,
+        background: None,
         uid: 0,
         zoom_preview: false,
         at: web_time::Instant::now(),

@@ -21,25 +21,58 @@ const MENU_LIST_H: f32 = 160.0;
 const MENU_ROW_H: f32 = 26.0;
 
 /// The warm map palette, as the composer draws it.
-const PANEL: Color32 = Color32::WHITE;
-const SOFT: Color32 = Color32::from_rgb(0xF8, 0xF6, 0xF3);
-const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
-const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
-const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
-const MAP_INK: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
-const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
+#[allow(non_snake_case)]
+fn PANEL() -> Color32 {
+    crate::map_colors::get().panel
+}
+#[allow(non_snake_case)]
+fn SOFT() -> Color32 {
+    crate::map_colors::get().soft
+}
+#[allow(non_snake_case)]
+fn BORDER() -> Color32 {
+    crate::map_colors::get().border
+}
+#[allow(non_snake_case)]
+fn INK() -> Color32 {
+    crate::map_colors::get().ink
+}
+#[allow(non_snake_case)]
+fn MUTED() -> Color32 {
+    crate::map_colors::get().muted
+}
+#[allow(non_snake_case)]
+fn FAINT() -> Color32 {
+    crate::map_colors::get().faint
+}
+#[allow(non_snake_case)]
+fn ACCENT() -> Color32 {
+    crate::map_colors::get().accent
+}
+#[allow(non_snake_case)]
+fn MAP_INK() -> Color32 {
+    crate::map_colors::get().map_ink
+}
+#[allow(non_snake_case)]
+fn DANGER() -> Color32 {
+    crate::map_colors::get().danger
+}
 /// Agent status inks, as the menu draws its dots.
 const IDLE: Color32 = Color32::from_rgb(0x2F, 0x7A, 0x4F);
-const WORKING: Color32 = Color32::from_rgb(0xA8, 0x6B, 0x12);
+#[allow(non_snake_case)]
+fn WORKING() -> Color32 {
+    crate::map_colors::get().working_ink
+}
 const DONE: Color32 = Color32::from_rgb(0x41, 0x6F, 0x91);
 /// The button's fill: green for a ready agent, amber for a working one, red for blocked.
 const READY_FILL: Color32 = Color32::from_rgb(0xEA, 0xF3, 0xF0);
 const WORKING_FILL: Color32 = Color32::from_rgb(0xFF, 0xF4, 0xDB);
 const BLOCKED_FILL: Color32 = Color32::from_rgb(0xFB, 0xED, 0xEA);
 /// The selected row in the menu.
-const CHOSEN_FILL: Color32 = Color32::from_rgb(0xF1, 0xEC, 0xE7);
+#[allow(non_snake_case)]
+fn CHOSEN_FILL() -> Color32 {
+    crate::map_colors::get().soft
+}
 
 /// The menu's own state; whether it is open belongs to the screen that owns the button.
 #[derive(Clone, Debug, Default)]
@@ -121,17 +154,17 @@ pub(crate) fn button(ui: &mut Ui, id: Id, targets: &[TargetInfo], target: Option
     let line = target.map(Target::line);
     let chosen = line.as_ref().and_then(|line| targets.iter().find(|info| &info.target.line() == line));
     let (fill, stroke, ink) = match (target, chosen) {
-        (Some(Target::New { .. }), _) => (PANEL, BORDER, INK),
+        (Some(Target::New { .. }), _) => (PANEL(), BORDER(), INK()),
         (Some(_), Some(info)) => match readiness(&info.status) {
-            Readiness::Ready => (READY_FILL, MAP_INK, INK),
-            Readiness::Working => (WORKING_FILL, WORKING, WORKING),
-            Readiness::Blocked => (BLOCKED_FILL, DANGER, DANGER),
-            Readiness::Unavailable => (PANEL, BORDER, MUTED),
+            Readiness::Ready => (READY_FILL, MAP_INK(), INK()),
+            Readiness::Working => (WORKING_FILL, WORKING(), WORKING()),
+            Readiness::Blocked => (BLOCKED_FILL, DANGER(), DANGER()),
+            Readiness::Unavailable => (PANEL(), BORDER(), MUTED()),
         },
-        _ => (PANEL, BORDER, MUTED),
+        _ => (PANEL(), BORDER(), MUTED()),
     };
     let enabled = ui.is_enabled();
-    let fill = if enabled && (resp.hovered() || open) { fill.lerp_to_gamma(SOFT, 0.35) } else { fill };
+    let fill = if enabled && (resp.hovered() || open) { fill.lerp_to_gamma(SOFT(), 0.35) } else { fill };
     ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
     ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, stroke), StrokeKind::Inside);
     let shown = widgets::elide_font(ui, label, (rect.width() - 40.0).max(24.0), regular(11.0));
@@ -161,8 +194,8 @@ pub(crate) fn popup(
         return None;
     }
     let frame = egui::Frame::NONE
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0, BORDER))
+        .fill(PANEL())
+        .stroke(Stroke::new(1.0, BORDER()))
         .corner_radius(CornerRadius::same(8))
         .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(24) })
         .inner_margin(Margin::same(12));
@@ -230,7 +263,7 @@ pub(crate) fn body(
     let before = state.query.clone();
     let search = egui::Frame::NONE
         .fill(Color32::from_rgb(0xF6, 0xF5, 0xF2))
-        .stroke(Stroke::new(1.0, BORDER))
+        .stroke(Stroke::new(1.0, BORDER()))
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(10, 7))
         .show(ui, |ui| {
@@ -239,7 +272,7 @@ pub(crate) fn body(
                     .id(search_id(id))
                     .frame(egui::Frame::NONE)
                     .font(regular(11.5))
-                    .hint_text(egui::RichText::new("Find an agent…").font(regular(11.5)).color(MUTED))
+                    .hint_text(egui::RichText::new("Find an agent…").font(regular(11.5)).color(MUTED()))
                     .desired_width(ui.available_width()),
             )
         })
@@ -278,14 +311,14 @@ pub(crate) fn body(
             }
         });
     } else if options.loading && count == 0 {
-        paragraph(ui, "Looking for agents…", 11.0, MUTED);
+        paragraph(ui, "Looking for agents…", 11.0, MUTED());
     } else if count == 0 {
-        paragraph(ui, "No agents in this workspace yet.", 11.0, MUTED);
+        paragraph(ui, "No agents in this workspace yet.", 11.0, MUTED());
     } else {
-        paragraph(ui, "No agent matches the search.", 11.0, MUTED);
+        paragraph(ui, "No agent matches the search.", 11.0, MUTED());
     }
     if let Some(error) = options.error {
-        paragraph(ui, error, 10.5, DANGER);
+        paragraph(ui, error, 10.5, DANGER());
     }
 
     ui.add_space(8.0);
@@ -295,7 +328,7 @@ pub(crate) fn body(
     ui.add_space(4.0);
     let clis: Vec<&TargetInfo> = targets.iter().filter(|info| info.new_agent).collect();
     if clis.is_empty() {
-        paragraph(ui, "No agent CLIs installed on the project host.", 11.0, MUTED);
+        paragraph(ui, "No agent CLIs installed on the project host.", 11.0, MUTED());
     } else {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
@@ -321,14 +354,14 @@ fn agent_row(ui: &mut Ui, info: &TargetInfo, selected: bool, cursor: bool, enabl
     a11y::button(&resp, &format!("{} · {meta}", info.label));
     let hot = enabled && (resp.hovered() || cursor);
     if selected || hot {
-        ui.painter().rect_filled(rect.shrink2(vec2(2.0, 0.0)), CornerRadius::same(5), if selected { CHOSEN_FILL } else { SOFT });
+        ui.painter().rect_filled(rect.shrink2(vec2(2.0, 0.0)), CornerRadius::same(5), if selected { CHOSEN_FILL() } else { SOFT() });
     }
     let dot = pos2(rect.min.x + 12.0, rect.center().y);
     ui.painter().circle_filled(dot, 3.0, status_color(&info.status));
     if info.focused {
-        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, MAP_INK));
+        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, MAP_INK()));
     }
-    let (ink, meta_ink) = if enabled { (INK, MUTED) } else { (FAINT, FAINT) };
+    let (ink, meta_ink) = if enabled { (INK(), MUTED()) } else { (FAINT(), FAINT()) };
     let meta_x = rect.min.x + 132.0;
     let label = widgets::elide_font(ui, &info.label, (meta_x - rect.min.x - 32.0).max(24.0), regular(11.5));
     ui.painter().text(pos2(rect.min.x + 24.0, rect.center().y), Align2::LEFT_CENTER, &label, regular(11.5), ink);
@@ -345,16 +378,16 @@ fn cli_chip(ui: &mut Ui, kind: &str, selected: bool) -> bool {
     a11y::button(&resp, &format!("Start a new {}", label));
     let hot = resp.hovered();
     let fill = if selected {
-        CHOSEN_FILL
+        CHOSEN_FILL()
     } else if hot {
-        SOFT
+        SOFT()
     } else {
-        PANEL
+        PANEL()
     };
     ui.painter().rect_filled(rect, CornerRadius::same(11), fill);
-    let border = if selected || hot { ACCENT } else { BORDER };
+    let border = if selected || hot { ACCENT() } else { BORDER() };
     ui.painter().rect_stroke(rect, CornerRadius::same(11), Stroke::new(1.0, border), StrokeKind::Inside);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, regular(10.5), if selected || hot { ACCENT } else { INK });
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, regular(10.5), if selected || hot { ACCENT() } else { INK() });
     resp.clicked()
 }
 
@@ -422,7 +455,7 @@ pub(crate) fn search_id(id: Id) -> Id {
 }
 
 fn eyebrow(ui: &mut Ui, text: &str) {
-    ui.label(egui::RichText::new(text).font(FontId::monospace(8.5)).color(MUTED));
+    ui.label(egui::RichText::new(text).font(FontId::monospace(8.5)).color(MUTED()));
 }
 
 fn paragraph(ui: &mut Ui, text: &str, size: f32, color: Color32) {
@@ -431,17 +464,17 @@ fn paragraph(ui: &mut Ui, text: &str, size: f32, color: Color32) {
 
 fn divider(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, BORDER));
+    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, BORDER()));
 }
 
 /// A status dot's ink: green idle, amber working, red blocked, blue done.
 pub(crate) fn status_color(status: &str) -> Color32 {
     match status.trim().to_ascii_lowercase().as_str() {
-        "working" | "busy" | "running" | "thinking" => WORKING,
-        "blocked" | "waiting" | "error" | "failed" => ACCENT,
+        "working" | "busy" | "running" | "thinking" => WORKING(),
+        "blocked" | "waiting" | "error" | "failed" => ACCENT(),
         "idle" | "ready" => IDLE,
         "done" => DONE,
-        _ => FAINT,
+        _ => FAINT(),
     }
 }
 

@@ -35,6 +35,7 @@ fn global_action(id: &str) -> bool {
             | "map.fullscreen"
             | "map.openWorkspace"
             | "map.newWorkspace"
+            | "map.newPage"
             | "map.save"
             | "map.close"
             | "map.closeTab"
@@ -97,6 +98,14 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
         "map.newSubpage" => {
             crate::new_page::start_subpage(app);
         }
+        // ⌘N: the New page dialog, as the page tree's + opens it.
+        "map.newPage" => {
+            let total = app.session.doc().map_or(0, |doc| doc.pages.len());
+            app.new_page.start(total + 1);
+        }
+        "map.colorTheme" => crate::map_palette::open_themes(app),
+        "map.nextColorTheme" => crate::map_palette::next_theme(app),
+        "map.followSystemAppearance" => crate::map_palette::follow_system(app),
         "map.undo" => crate::map_delete::undo(app, false),
         "map.redo" => crate::map_delete::undo(app, true),
         id if crate::map_action_catalog::workspace_number(id).is_some() => {

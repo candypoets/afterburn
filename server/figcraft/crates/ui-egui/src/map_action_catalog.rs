@@ -29,7 +29,15 @@ pub const ACTIONS: &[Action] = &[
         "Ctrl+Shift+O",
         "Workspace: browse every workspace on every machine; Init the ones without a map."
     ),
-    action!("map.newWorkspace", "New workspace", "Workspaces + app", "Cmd+N", "Ctrl+N", "Workspace: open workspace creation."),
+    action!("map.newPage", "New page", "Workspaces + app", "Cmd+N", "Ctrl+N", "Map: the New page dialog: a name and a first prompt for an agent."),
+    action!(
+        "map.newWorkspace",
+        "New workspace",
+        "Workspaces + app",
+        "Shift+Cmd+N",
+        "Ctrl+Shift+N",
+        "Workspace: open workspace creation; the new workspace opens in a new window tab, never in place."
+    ),
     action!("map.save", "Save map", "Workspaces + app", "Cmd+S", "Ctrl+S", "Map: ask the node to persist; show saving, saved or error."),
     action!(
         "map.reconnect",
@@ -201,7 +209,17 @@ pub const ACTIONS: &[Action] = &[
     action!("map.agents", "Agents", "Workspaces + app", "", "", "Workspace: list this workspace's agents; focus one's pane."),
     action!("map.newAgent", "New agent", "Comments + composer", "Alt+Cmd+N", "Ctrl+Alt+N", "Composer: choose the CLI a new agent starts with."),
     action!("map.focusComposer", "Focus composer", "Comments + composer", "", "", "Composer: focus the prompt field without sending anything."),
-    action!("map.syncReview", "Open Sync review", "Workspaces + app", "", "", "Workspace: review Sync; opening this view never starts Sync."),
+    action!("map.syncReview", "Open Burn review", "Workspaces + app", "", "", "Workspace: review the Burn; opening this view never starts one."),
+    action!("map.colorTheme", "Colour theme", "Appearance", "", "", "App: choose Afterburn, Afterburn Night, Classic or Classic Dark; ↑↓ previews."),
+    action!("map.nextColorTheme", "Next colour theme", "Appearance", "", "", "App: switch to the next colour theme."),
+    action!(
+        "map.followSystemAppearance",
+        "Follow system appearance",
+        "Appearance",
+        "",
+        "",
+        "App: light by day, dark by night, as the system is; the colour theme keeps its family."
+    ),
     action!(
         "app.checkForUpdates",
         "Check for Updates…",
@@ -422,6 +440,9 @@ pub fn disabled_reason(app: &crate::FigApp, action: &Action) -> Option<&'static 
         | "map.openWorkspace"
         | "map.newWorkspace"
         | "map.preferences"
+        | "map.colorTheme"
+        | "map.nextColorTheme"
+        | "map.followSystemAppearance"
         | "map.fullscreen"
         | "map.focusMode"
         | "map.workspacePane"
@@ -462,6 +483,7 @@ pub fn toggle_state(app: &crate::FigApp, action: &Action) -> Option<&'static str
     let view = app.session.ds().ok().filter(|_| !app.ui.home).map(|ds| &ds.view);
     match action.id {
         "map.workspacePane" => Some(shown(app.ws.pane_open)),
+        "map.followSystemAppearance" => Some(on(app.session.prefs.theme.eq_ignore_ascii_case("system"))),
         "map.fullscreen" => Some(on(app.ui.fullscreen)),
         "map.focusMode" => view.map(|v| on(v.ui_hidden)),
         "map.comments" => view.map(|v| shown(v.comments)),

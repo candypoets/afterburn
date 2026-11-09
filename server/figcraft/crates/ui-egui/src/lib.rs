@@ -115,15 +115,17 @@ pub(crate) fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
 pub(crate) fn sidebar_toggle_side(ui: &mut egui::Ui, open: bool, right: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 30.0), egui::Sense::click());
     let hot = resp.hovered();
+    let c = map_colors::get();
     let color = if open {
-        egui::Color32::from_rgb(0x2F, 0x6F, 0x6A)
+        c.map_ink
     } else if hot {
-        egui::Color32::from_rgb(0xB5, 0x45, 0x2F)
+        c.accent
     } else {
-        egui::Color32::from_rgb(0x6E, 0x6C, 0x68)
+        c.muted
     };
     if open || hot {
-        ui.painter().rect_filled(rect.shrink(1.0), egui::CornerRadius::same(5), egui::Color32::from_rgb(0xE8, 0xEE, 0xEB));
+        let fill = if map_colors::theme() == map_colors::Theme::Classic { egui::Color32::from_rgb(0xE8, 0xEE, 0xEB) } else { c.selected };
+        ui.painter().rect_filled(rect.shrink(1.0), egui::CornerRadius::same(5), fill);
     }
     let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(18.0, 15.0));
     let p = ui.painter();
@@ -136,8 +138,8 @@ pub(crate) fn sidebar_toggle_side(ui: &mut egui::Ui, open: bool, right: bool) ->
         p.line_segment([egui::pos2(from, y), egui::pos2(to, y)], egui::Stroke::new(1.0, color));
     }
     let label = match (right, open) {
-        (true, true) => "Hide Sync sidebar",
-        (true, false) => "Show Sync sidebar",
+        (true, true) => "Hide Burn sidebar",
+        (true, false) => "Show Burn sidebar",
         (false, true) => "Hide sidebar",
         (false, false) => "Show sidebar",
     };
@@ -145,7 +147,9 @@ pub(crate) fn sidebar_toggle_side(ui: &mut egui::Ui, open: bool, right: bool) ->
     resp.on_hover_text(label)
 }
 
+pub mod burn_disc;
 pub mod machine_modal;
+pub mod map_colors;
 pub mod menus;
 pub mod missing_fonts;
 pub mod native_menu;
@@ -563,14 +567,14 @@ pub struct ToastMark {
 /// What a toast's action does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastAction {
-    /// Open the Sync sidebar.
+    /// Open the Burn sidebar.
     OpenSync,
 }
 
 impl ToastAction {
     fn label(self) -> &'static str {
         match self {
-            ToastAction::OpenSync => "Open Sync",
+            ToastAction::OpenSync => "Open Burn",
         }
     }
 }
@@ -662,8 +666,12 @@ pub struct UiState {
     pub icon_gallery: bool,
     /// A message at the bottom of the window and how long it has been showing.
     pub toast: Option<(String, ToastClock)>,
+    /// A colour theme the palette is previewing (↑↓ in Colour theme); `None` draws the chosen one.
+    pub theme_preview: Option<map_colors::Theme>,
     /// The current toast's icon and action, when it has them.
     pub toast_mark: Option<ToastMark>,
+    /// The current toast says a Burn finished: a burned disc leads it.
+    pub toast_disc: bool,
     pub present: Option<present::Presenter>,
     /// A presentation kept alive while its design tab or Home is in front.
     pub paused_present: Option<present::Presenter>,
@@ -819,6 +827,8 @@ impl Default for UiState {
             icon_gallery: false,
             toast: None,
             toast_mark: None,
+            toast_disc: false,
+            theme_preview: None,
             present: None,
             paused_present: None,
             present_uid: None,
@@ -1127,6 +1137,13 @@ impl FigApp {
     pub fn toast(&mut self, msg: impl Into<String>) {
         self.ui.toast = Some((msg.into(), ToastClock::Raised));
         self.ui.toast_mark = None;
+        self.ui.toast_disc = false;
+    }
+
+    /// A Burn finished: the toast leads with the burned disc (design: `Burn loading`, 40 · toast).
+    pub fn toast_burned(&mut self, msg: impl Into<String>) {
+        self.toast(msg);
+        self.ui.toast_disc = true;
     }
 
     /// A toast with an icon before its message and, optionally, an action after it.
@@ -1536,7 +1553,11 @@ impl FigApp {
         self.ui.dark = dark;
         // New files take the theme's page colour (existing pages keep theirs).
         self.session.set_ui_dark(dark);
-        theme::apply_with(ctx, if dark { theme::Tokens::dark() } else { theme::Tokens::light() }, self.reduce_motion());
+        // The colour theme: its family lit light or dark; the palette's live preview wins while
+        // it shows one.
+        let colour_theme = self.ui.theme_preview.unwrap_or_else(|| map_colors::Theme::of(&self.session.prefs.color_theme, dark));
+        map_colors::set(colour_theme);
+        theme::apply_with(ctx, colour_theme.tokens(), self.reduce_motion());
         if self.worker.is_none() {
             self.worker = Some(render_worker::Worker::new(ctx.clone()));
         }
@@ -1778,7 +1799,7 @@ impl FigApp {
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(t.panel))
                 .show(ui, |ui| {
-                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Sync, egui::accesskit::Role::Pane, "Sync");
+                    a11y::region(&mut self.ui.nav, ui, a11y::Region::Sync, egui::accesskit::Role::Pane, "Burn");
                     sync::pane(self, ui);
                 });
         }
@@ -1883,7 +1904,7 @@ impl FigApp {
                 .exact_size(header_h)
                 .resizable(false)
                 .show_separator_line(false)
-                .frame(egui::Frame::NONE.fill(map_tabs::ROW))
+                .frame(egui::Frame::NONE.fill(map_tabs::ROW()))
                 .show(ui, |ui| {
                     a11y::region(&mut self.ui.nav, ui, a11y::Region::Toolbar, egui::accesskit::Role::Navigation, "Pages");
                     let rect = ui.max_rect();
@@ -2037,10 +2058,12 @@ impl FigApp {
         if left <= 0.0 {
             self.ui.toast = None;
             self.ui.toast_mark = None;
+            self.ui.toast_disc = false;
             return;
         }
         let msg = msg.clone();
         let mark = self.ui.toast_mark;
+        let disc = self.ui.toast_disc;
         let mut acted = None;
         // Nothing moves while it shows: the next frame it needs is the one that hides it.
         if matches!(clock, ToastClock::Since(_)) {
@@ -2060,6 +2083,15 @@ impl FigApp {
                         // Wrapped at a readable width (the area alone would wrap at a sliver).
                         let width = (screen.width() - 64.0).clamp(120.0, 480.0);
                         let galley = ui.painter().layout(msg, theme::regular(12.0), egui::Color32::WHITE, width);
+                        if disc {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                let (at, _) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::hover());
+                                burn_disc::paint(ui.painter(), at, burn_disc::DiscState::Done, &map_colors::get());
+                                ui.label(galley);
+                            });
+                            return;
+                        }
                         let Some(mark) = mark else {
                             ui.label(galley);
                             return;
@@ -2071,7 +2103,8 @@ impl FigApp {
                             ui.label(galley);
                             if let Some(action) = mark.action {
                                 ui.add_space(16.0);
-                                let link = egui::RichText::new(action.label()).font(theme::regular(12.0)).color(egui::Color32::from_rgb(0xF2, 0xB8, 0xA8));
+                                let link =
+                                    egui::RichText::new(action.label()).font(theme::regular(12.0)).color(egui::Color32::from_rgb(0xF2, 0xB8, 0xA8));
                                 let resp = ui.add(egui::Label::new(link).sense(egui::Sense::click()));
                                 crate::a11y::button(&resp, action.label());
                                 if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {

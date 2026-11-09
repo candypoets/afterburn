@@ -28,17 +28,44 @@ pub const SEPARATOR: f32 = 1.0;
 /// The active tab's underline.
 pub const UNDERLINE: f32 = 2.0;
 
-const INACTIVE: Color32 = Color32::from_rgb(0xF1, 0xF0, 0xED);
-const ACTIVE: Color32 = Color32::WHITE;
+#[allow(non_snake_case)]
+fn INACTIVE() -> Color32 {
+    crate::map_colors::get().tab_inactive
+}
+#[allow(non_snake_case)]
+fn ACTIVE() -> Color32 {
+    crate::map_colors::get().panel
+}
 /// The title row behind the cells.
-pub const ROW: Color32 = Color32::from_rgb(0xF7, 0xF6, 0xF3);
-const HOVER: Color32 = Color32::from_rgb(0xEA, 0xE9, 0xE5);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
-const RULE: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
+#[allow(non_snake_case)]
+pub fn ROW() -> Color32 {
+    crate::map_colors::get().tab_row
+}
+#[allow(non_snake_case)]
+fn HOVER() -> Color32 {
+    crate::map_colors::get().tab_hover
+}
+#[allow(non_snake_case)]
+fn MUTED() -> Color32 {
+    crate::map_colors::get().muted
+}
+#[allow(non_snake_case)]
+fn INK() -> Color32 {
+    crate::map_colors::get().ink
+}
+#[allow(non_snake_case)]
+fn ACCENT() -> Color32 {
+    crate::map_colors::get().accent
+}
+#[allow(non_snake_case)]
+fn RULE() -> Color32 {
+    crate::map_colors::get().border
+}
 /// The × button's hover fill.
-const CLOSE_HOVER: Color32 = Color32::from_rgb(0xDF, 0xDE, 0xD9);
+#[allow(non_snake_case)]
+fn CLOSE_HOVER() -> Color32 {
+    crate::map_colors::get().border
+}
 /// The × button: a 12 pt square in the cell's tail, its centre this far from the right edge.
 const CLOSE: f32 = 12.0;
 const CLOSE_INSET: f32 = 12.0;
@@ -246,20 +273,20 @@ pub fn close_rect(cell: Rect) -> Rect {
 fn paint_cell(ui: &Ui, cell: Rect, clip: Rect, label: &str, active: bool, hovered: bool, closable: bool) {
     let painter = ui.painter().with_clip_rect(clip);
     let fill = if active {
-        ACTIVE
+        ACTIVE()
     } else if hovered {
-        HOVER
+        HOVER()
     } else {
-        INACTIVE
+        INACTIVE()
     };
     painter.rect_filled(cell, egui::CornerRadius::ZERO, fill);
-    let text = if active || hovered { INK } else { MUTED };
+    let text = if active || hovered { INK() } else { MUTED() };
     // The label stops before the × when the cell shows one.
     let end = if closable { close_rect(cell).left() - 4.0 } else { cell.right() - 6.0 };
     let label_clip = Rect::from_min_max(cell.min, pos2(end, cell.bottom())).intersect(clip);
     ui.painter().with_clip_rect(label_clip).text(label_pos(cell), Align2::LEFT_CENTER, label, font(), text);
     if active {
-        painter.rect_filled(underline(cell), egui::CornerRadius::ZERO, ACCENT);
+        painter.rect_filled(underline(cell), egui::CornerRadius::ZERO, ACCENT());
     }
 }
 
@@ -279,7 +306,7 @@ pub fn strip(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
         Err(_) => Vec::new(),
     };
     let page_count = app.session.doc().map(|doc| doc.pages.len()).unwrap_or(0);
-    let measure = |text: &str| ui.painter().layout_no_wrap(text.to_string(), font(), INK).size().x;
+    let measure = |text: &str| ui.painter().layout_no_wrap(text.to_string(), font(), INK()).size().x;
     let natural: Vec<f32> = tabs.iter().map(|(_, name)| (PAD + measure(name) + TAIL).ceil()).collect();
     let plus_w = (PAD + measure("+ Page") + TAIL).ceil();
     let separators = SEPARATOR * tabs.len() as f32;
@@ -315,7 +342,7 @@ pub fn strip(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
     let mut act = None;
     let mut cells = Vec::with_capacity(tabs.len() + 1);
     let mut x = rect.left() - scroll;
-    let rule = Stroke::new(SEPARATOR, RULE);
+    let rule = Stroke::new(SEPARATOR, RULE());
     for ((id, name), w) in tabs.iter().zip(&widths) {
         let cell = Rect::from_min_max(pos2(x, rect.top()), pos2(x + w, rect.bottom()));
         let hit = cell.intersect(rect);
@@ -330,9 +357,9 @@ pub fn strip(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
             let close = ui.interact(button.intersect(rect), Id::new(("map_tab_close", id.0)), Sense::click());
             let painter = ui.painter().with_clip_rect(rect);
             if close.hovered() {
-                painter.rect_filled(button, egui::CornerRadius::same(3), CLOSE_HOVER);
+                painter.rect_filled(button, egui::CornerRadius::same(3), CLOSE_HOVER());
             }
-            let ink = if close.hovered() { INK } else { MUTED };
+            let ink = if close.hovered() { INK() } else { MUTED() };
             let c = button.center();
             let stroke = Stroke::new(1.0, ink);
             painter.line_segment([pos2(c.x - CROSS, c.y - CROSS), pos2(c.x + CROSS, c.y + CROSS)], stroke);
@@ -376,7 +403,7 @@ pub fn strip(app: &mut FigApp, ui: &mut Ui, rect: Rect) {
     if tabs.is_empty() {
         // Every tab closed: say how to open a page again.
         let at = pos2(plus.right() + 12.0, rect.center().y);
-        ui.painter().with_clip_rect(rect).text(at, Align2::LEFT_CENTER, "No page open · pick one in the tree", font(), MUTED);
+        ui.painter().with_clip_rect(rect).text(at, Align2::LEFT_CENTER, "No page open · pick one in the tree", font(), MUTED());
     }
     app.page_tabs.cells = cells;
 

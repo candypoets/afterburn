@@ -24,7 +24,7 @@ use figcraft_engine::keymap::{Platform, parse};
 use crate::FigApp;
 use crate::map_action_catalog::{self, Action};
 
-/// Workspace › Add machine…: the Workspaces sidebar's command, not a keyboard action.
+/// Workspace › Add machine…: the Workspaces screen's command, not a keyboard action.
 pub const ADD_MACHINE: &str = "map.addMachine";
 /// The prefix of a listed workspace's or worktree's item id: `workspace.choose:<address>\t<id>`.
 pub const CHOOSE: &str = "workspace.choose:";
@@ -187,12 +187,14 @@ pub fn menus() -> Vec<Menu> {
             title: "File",
             role: Role::Plain,
             entries: vec![
+                titled("map.newPage", "New page…"),
+                titled("map.newWorkspace", "New workspace…"),
                 titled("map.newWindowTab", "New window tab…"),
                 Sep,
                 titled("map.closeTab", "Close tab"),
                 titled("map.close", "Close map"),
                 Sep,
-                titled("map.syncReview", "Sync…"),
+                titled("map.syncReview", "Burn…"),
                 Sep,
                 titled("map.save", "Save"),
                 titled("map.export", "Export…"),
@@ -208,7 +210,6 @@ pub fn menus() -> Vec<Menu> {
                 Entry::Worktrees,
                 Sep,
                 titled("map.openWorkspace", "All workspaces…"),
-                titled("map.newWorkspace", "New workspace…"),
                 titled(ADD_MACHINE, "Add machine…"),
                 Sep,
                 titled("map.agents", "Agents…"),
@@ -316,10 +317,7 @@ pub fn enabled(app: &FigApp, id: &str) -> bool {
 /// Run a clicked (or key-equivalent) item as the in-app menu does ([`crate::menus::invoke`]).
 pub fn run(app: &mut FigApp, id: &str) {
     if id == ADD_MACHINE {
-        // The modal draws on the Workspaces screen and in the workspace pane beside a map.
-        if !app.ui.home {
-            app.ws.pane_open = true;
-        }
+        // The modal draws on the Workspaces screen, and over a map (the status bar draws it).
         crate::machine_modal::open(app);
         return;
     }

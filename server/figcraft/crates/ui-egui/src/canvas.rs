@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::FigApp;
 use crate::i18n::{tr, trf, trn};
 use crate::render_worker::{Done, Job, Worker};
-use crate::theme::{ACCENT, COMPONENT, Tokens, doc_c32, regular, semibold};
+use crate::theme::{COMPONENT, Tokens, doc_c32, regular, semibold};
 
 pub struct CanvasState {
     pub rect: Rect,
@@ -148,6 +148,31 @@ struct JobKey {
     /// Text lays out anew when fonts arrive (system fonts load in the background).
     fonts: u64,
     proof: bool,
+    /// The map's paper, when the colour theme draws it.
+    paper: Option<[u8; 3]>,
+}
+
+/// The paper a map page is drawn on: a page left on the default background (Classic's paper)
+/// takes the colour theme's canvas; a page with its own background keeps it. Only in map mode.
+pub(crate) fn map_paper(page_background: figcraft_color::Color) -> Option<figcraft_color::Color> {
+    if !crate::map_mode() {
+        return None;
+    }
+    let default = crate::map_colors::CLASSIC.canvas;
+    let near = |a: f32, b: u8| (a - f32::from(b) / 255.0).abs() < 1.5 / 255.0;
+    if !(near(page_background.r, default.r()) && near(page_background.g, default.g()) && near(page_background.b, default.b())) {
+        return None;
+    }
+    let c = crate::map_colors::get().canvas;
+    Some(figcraft_color::Color { r: f32::from(c.r()) / 255.0, g: f32::from(c.g()) / 255.0, b: f32::from(c.b()) / 255.0, a: 1.0 })
+}
+
+/// The page's background as the map draws it (see [`map_paper`]).
+fn page_background(doc: &figcraft_doc::Document, page: NodeId) -> Option<figcraft_color::Color> {
+    match doc.node(page).map(|n| &n.kind) {
+        Some(NodeKind::Page { background, .. }) => Some(map_paper(*background).unwrap_or(*background)),
+        _ => None,
+    }
 }
 
 impl FigApp {
@@ -247,7 +272,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         .ds()
         .ok()
         .and_then(|ds| match ds.doc.node(ds.page).map(|n| &n.kind) {
-            Some(NodeKind::Page { background, .. }) => Some(doc_c32(&ctx, *background)),
+            Some(NodeKind::Page { background, .. }) => Some(doc_c32(&ctx, map_paper(*background).unwrap_or(*background))),
             _ => None,
         })
         .unwrap_or(t.canvas);
@@ -269,8 +294,8 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
     if let (Some(start), Some(p)) = (app.canvas.zoom_drag, ctx.input(|i| i.pointer.hover_pos())) {
         let area = Rect::from_two_pos(start, p);
         if area.width() > 4.0 || area.height() > 4.0 {
-            painter.rect_filled(area, CornerRadius::ZERO, ACCENT.gamma_multiply(0.1));
-            painter.rect_stroke(area, CornerRadius::ZERO, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
+            painter.rect_filled(area, CornerRadius::ZERO, crate::theme::accent().gamma_multiply(0.1));
+            painter.rect_stroke(area, CornerRadius::ZERO, Stroke::new(1.0, crate::theme::accent()), StrokeKind::Inside);
         }
     }
     crate::dev_mode::draw(app, &painter);
@@ -395,6 +420,7 @@ fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_s
     let visible = (visible_w, visible_h);
     let requested = (ox - f64::from(margin) / scale, oy - f64::from(margin) / scale);
     let size = (visible_w.saturating_add(margin * 2).min(max_texture_side), visible_h.saturating_add(margin * 2).min(max_texture_side));
+    let paper = page_background(&doc, ds.page).filter(|_| crate::map_mode());
     let key = JobKey {
         doc: Arc::as_ptr(&doc) as usize,
         page: ds.page,
@@ -408,6 +434,7 @@ fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_s
         solo: ds.focused(),
         fonts: figcraft_text::layout_generation(),
         proof,
+        paper: paper.map(|c| [(c.r * 255.0).round() as u8, (c.g * 255.0).round() as u8, (c.b * 255.0).round() as u8]),
     };
     if let Some(previous) = &app.canvas.submitted {
         let previous_origin = (previous.origin.0 as f64 / 1000.0, previous.origin.1 as f64 / 1000.0);
@@ -430,6 +457,7 @@ fn request_render(app: &mut FigApp, worker: &mut Worker, ppp: f32, max_texture_s
         skip: vec![],
         solo: key.solo,
         proof,
+        background: paper,
         uid: ds.uid,
         zoom_preview: ds.view.pixel_preview_scale().is_none(),
         at: web_time::Instant::now(),
@@ -1054,7 +1082,7 @@ fn swap_highlight(app: &FigApp, painter: &egui::Painter, doc: &Document, id: Nod
 fn outline_colour(doc: &Document, id: NodeId) -> Color32 {
     use figcraft_engine::components::{owning_component, owning_instance};
     let set = matches!(doc.node(id).map(|n| &n.kind), Some(NodeKind::ComponentSet { .. }));
-    if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() { COMPONENT } else { ACCENT }
+    if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() { COMPONENT } else { crate::theme::accent() }
 }
 
 /// The outline path of shapes (ellipses, vectors) for hover/selection outlines.
@@ -1143,7 +1171,7 @@ fn detail_badges(app: &mut FigApp, ui: &mut Ui) {
         Err(_) => Vec::new(),
     };
     let painter = ui.painter().clone();
-    let ink = Color32::from_rgb(0xB5, 0x45, 0x2F);
+    let ink = crate::map_colors::get().accent;
     for (id, page_id, corner, zoom) in links {
         let galley = painter.layout_no_wrap("subpage".to_owned(), egui::FontId::monospace(8.0 * zoom), ink);
         let mark = 6.0 * zoom;
@@ -1256,7 +1284,7 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
         for id in doc.subtree(page) {
             let Some(n) = doc.node(id).filter(|n| n.visible) else { continue };
             if view.mask_outlines && n.is_mask {
-                draw_outline(app, painter, &doc, id, stroke(ACCENT, 1.0));
+                draw_outline(app, painter, &doc, id, stroke(crate::theme::accent(), 1.0));
             } else if view.frame_outlines && n.kind.is_frame_like() {
                 draw_outline(app, painter, &doc, id, stroke(t.text_secondary, 1.0));
             } else if view.show_slices
@@ -1272,20 +1300,20 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
     if let Some(d) = ov.drop_target
         && let Some(q) = node_quad(app, &doc, d)
     {
-        quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { COMPONENT } else { ACCENT }, 1.0));
+        quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { COMPONENT } else { crate::theme::accent() }, 1.0));
     }
     slot_badges(app, painter, &doc, &sel, ov.drop_target);
     if let Some(t) = ov.swap_target {
         swap_highlight(app, painter, &doc, t);
     }
     if let Some([x0, y0, x1, y1]) = ov.insert_line {
-        painter.line_segment([app.to_screen(x0, y0), app.to_screen(x1, y1)], stroke(ACCENT, 2.0));
+        painter.line_segment([app.to_screen(x0, y0), app.to_screen(x1, y1)], stroke(crate::theme::accent(), 2.0));
     }
     if let Some([x0, y0, x1, y1]) = ov.drop_cell {
         let r = Rect::from_two_pos(app.to_screen(x0, y0), app.to_screen(x1, y1));
-        painter.rect_filled(r, CornerRadius::same(2), ACCENT.gamma_multiply(0.12));
+        painter.rect_filled(r, CornerRadius::same(2), crate::theme::accent().gamma_multiply(0.12));
         let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-        painter.add(Shape::dashed_line(&pts, stroke(ACCENT, 1.5), 4.0, 3.0));
+        painter.add(Shape::dashed_line(&pts, stroke(crate::theme::accent(), 1.5), 4.0, 3.0));
     }
     // Vector edit mode, with the transform box around several selected points.
     // The selection's size label, which measurement labels keep clear of.
@@ -1308,13 +1336,13 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             width_overlay(app, painter, &doc, &ve, zoom);
         } else if let Some(c) = app.session.vector_edit_box() {
             let label = format!("{} × {}", fmt((c[1] - c[0]).hypot()), fmt((c[3] - c[0]).hypot()));
-            size_label = transform_box(app, painter, c.map(|p| app.to_screen(p.x, p.y)), ACCENT, true, 4, label);
+            size_label = transform_box(app, painter, c.map(|p| app.to_screen(p.x, p.y)), crate::theme::accent(), true, 4, label);
         }
     }
     // Selection.
     let editing = ds.text_edit.clone();
     if !sel.is_empty() && editing.is_none() && ds.vector_edit.is_none() {
-        let col = if sel.iter().any(|i| outline_colour(&doc, *i) == COMPONENT) { COMPONENT } else { ACCENT };
+        let col = if sel.iter().any(|i| outline_colour(&doc, *i) == COMPONENT) { COMPONENT } else { crate::theme::accent() };
         for id in &sel {
             draw_outline(app, painter, &doc, *id, stroke(col, 1.0));
         }
@@ -1387,12 +1415,12 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
     {
         let layout = &text.layout;
         if let Some(q) = node_quad(app, edoc, te.id) {
-            quad(painter, q, stroke(ACCENT, 1.0));
+            quad(painter, q, stroke(crate::theme::accent(), 1.0));
         }
         let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
         if a != b && preedit.is_none() {
             for q in text.selection(app, a, b) {
-                painter.add(Shape::convex_polygon(q.to_vec(), ACCENT.gamma_multiply(0.3), Stroke::NONE));
+                painter.add(Shape::convex_polygon(q.to_vec(), crate::theme::accent().gamma_multiply(0.3), Stroke::NONE));
             }
         }
         if let Some(p) = preedit {
@@ -1423,8 +1451,8 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
     // Marquee.
     if let Some([x0, y0, x1, y1]) = ov.marquee.or(app.ui.key_box) {
         let r = Rect::from_two_pos(app.to_screen(x0, y0), app.to_screen(x1, y1));
-        painter.rect_filled(r, CornerRadius::ZERO, ACCENT.gamma_multiply(0.1));
-        painter.rect_stroke(r, CornerRadius::ZERO, stroke(ACCENT, 1.0), StrokeKind::Inside);
+        painter.rect_filled(r, CornerRadius::ZERO, crate::theme::accent().gamma_multiply(0.1));
+        painter.rect_stroke(r, CornerRadius::ZERO, stroke(crate::theme::accent(), 1.0), StrokeKind::Inside);
     }
     // Pen path.
     if !ov.pen.is_empty() {
@@ -1439,7 +1467,7 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
             }
             for p in &pts {
                 painter.circle_filled(*p, 3.5, Color32::WHITE);
-                painter.circle_stroke(*p, 3.5, stroke(ACCENT, 1.0));
+                painter.circle_stroke(*p, 3.5, stroke(crate::theme::accent(), 1.0));
             }
             if let Some([x0, y0, x1, y1]) = ov.rubber {
                 let (a, b) = (app.to_screen(x0, y0), app.to_screen(x1, y1));
@@ -1451,11 +1479,11 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
                             [a, h, b, b],
                             false,
                             Color32::TRANSPARENT,
-                            stroke(ACCENT, 1.0),
+                            stroke(crate::theme::accent(), 1.0),
                         ));
                     }
                     None => {
-                        painter.line_segment([a, b], stroke(ACCENT, 1.0));
+                        painter.line_segment([a, b], stroke(crate::theme::accent(), 1.0));
                     }
                 }
             }
@@ -1466,7 +1494,7 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
         let c = app.to_screen(x, y);
         let rs = (r * app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0)) as f32;
         painter.circle_stroke(c, rs, stroke(Color32::WHITE, 3.0));
-        painter.circle_stroke(c, rs, stroke(ACCENT, 1.5));
+        painter.circle_stroke(c, rs, stroke(crate::theme::accent(), 1.5));
     }
     // Lasso (vector edit mode).
     if ov.lasso.len() > 1 {
@@ -1474,7 +1502,7 @@ fn overlays(app: &FigApp, painter: &egui::Painter, t: &Tokens) -> Vec<(NodeId, [
         if let Some(first) = pts.first().copied() {
             pts.push(first);
         }
-        painter.add(Shape::dashed_line(&pts, stroke(ACCENT, 1.0), 4.0, 3.0));
+        painter.add(Shape::dashed_line(&pts, stroke(crate::theme::accent(), 1.0), 4.0, 3.0));
     }
     // Guides (under the rulers).
     crate::guides::draw(app, painter);
@@ -1565,7 +1593,7 @@ fn width_overlay(app: &FigApp, painter: &egui::Painter, doc: &Document, ve: &fig
     let sp = |p: &[f64; 2]| app.to_screen(p[0], p[1]);
     let draw = |h: &figcraft_engine::vectoredit::WidthHandle, ghost: bool| {
         let (c, a, b) = (sp(&h.at), sp(&h.sides[0]), sp(&h.sides[1]));
-        let col = if ghost { ACCENT.gamma_multiply(0.5) } else { ACCENT };
+        let col = if ghost { crate::theme::accent().gamma_multiply(0.5) } else { crate::theme::accent() };
         painter.line_segment([a, b], stroke(Color32::from_white_alpha(160), 3.0));
         painter.line_segment([a, b], stroke(col, 1.0));
         for (e, side) in [(a, WidthSide::Right), (b, WidthSide::Left)] {
@@ -1577,7 +1605,7 @@ fn width_overlay(app: &FigApp, painter: &egui::Painter, doc: &Document, ve: &fig
         let on = !ghost && ve.width_point == Some(h.index);
         let hovered = !ghost && hover == Some(WHit::Point { index: h.index });
         let r = if hovered { 5.0 } else { 4.0 };
-        painter.circle_filled(c, r, if on { ACCENT } else { Color32::WHITE });
+        painter.circle_filled(c, r, if on { crate::theme::accent() } else { Color32::WHITE });
         painter.circle_stroke(c, r, stroke(col, 1.0));
     };
     for h in width_handles(doc, ve, zoom) {
@@ -1593,9 +1621,9 @@ fn width_overlay(app: &FigApp, painter: &egui::Painter, doc: &Document, ve: &fig
 /// A bezier handle from its anchor `v` to its end `e` (screen points): the line, and a dot of
 /// radius `r` filled with `fill` (vector edit mode and the Pen draw them alike).
 fn bezier_handle(painter: &egui::Painter, v: Pos2, e: Pos2, r: f32, fill: Color32) {
-    painter.line_segment([v, e], stroke(ACCENT, 1.0));
+    painter.line_segment([v, e], stroke(crate::theme::accent(), 1.0));
     painter.circle_filled(e, r, fill);
-    painter.circle_stroke(e, r, stroke(ACCENT, 1.0));
+    painter.circle_stroke(e, r, stroke(crate::theme::accent(), 1.0));
 }
 
 /// Vector edit mode: a layer's segments, handles and points (`points`) with its `hover`ed part, and
@@ -1614,7 +1642,7 @@ fn vector_overlay(
     // Paint bucket target: hatched like a fill to come.
     if active && !ov.face.is_empty() {
         let polys: Vec<Vec<Pos2>> = ov.face.iter().map(|poly| poly.iter().map(sp).collect()).collect();
-        hatched(painter, &polys, ACCENT);
+        hatched(painter, &polys, crate::theme::accent());
     }
     if active {
         region_hatch(app, painter);
@@ -1632,7 +1660,7 @@ fn vector_overlay(
         } else {
             1.5
         };
-        painter.add(egui::epaint::CubicBezierShape::from_points_stroke([a, b, c, d], false, Color32::TRANSPARENT, stroke(ACCENT, w)));
+        painter.add(egui::epaint::CubicBezierShape::from_points_stroke([a, b, c, d], false, Color32::TRANSPARENT, stroke(crate::theme::accent(), w)));
     }
     if !points {
         return;
@@ -1640,7 +1668,13 @@ fn vector_overlay(
     for h in &o.handles {
         let hovered = hover == Some(VHit::Handle { seg: h.seg, start: h.start });
         let on = o.selected_handles.contains(&(h.seg, h.start));
-        bezier_handle(painter, sp(&h.vertex), sp(&h.handle), if hovered { 4.5 } else { 3.5 }, if on { ACCENT } else { Color32::WHITE });
+        bezier_handle(
+            painter,
+            sp(&h.vertex),
+            sp(&h.handle),
+            if hovered { 4.5 } else { 3.5 },
+            if on { crate::theme::accent() } else { Color32::WHITE },
+        );
     }
     for (i, v) in o.vertices.iter().enumerate() {
         let p = sp(v);
@@ -1648,14 +1682,14 @@ fn vector_overlay(
         let size = if hovered { 9.0 } else { 7.0 };
         let r = Rect::from_center_size(p, vec2(size, size));
         let on = o.selected_vertices.contains(&i);
-        painter.rect_filled(r, CornerRadius::same(5), if on { ACCENT } else { Color32::WHITE });
-        painter.rect_stroke(r, CornerRadius::same(5), stroke(ACCENT, 1.0), StrokeKind::Inside);
+        painter.rect_filled(r, CornerRadius::same(5), if on { crate::theme::accent() } else { Color32::WHITE });
+        painter.rect_stroke(r, CornerRadius::same(5), stroke(crate::theme::accent(), 1.0), StrokeKind::Inside);
         if o.anchor == Some(i) {
-            painter.circle_stroke(p, 7.5, stroke(ACCENT, 1.0));
+            painter.circle_stroke(p, 7.5, stroke(crate::theme::accent(), 1.0));
         }
     }
     if let Some([x0, y0, x1, y1]) = ov.rubber.filter(|_| active) {
-        painter.add(Shape::dashed_line(&[app.to_screen(x0, y0), app.to_screen(x1, y1)], stroke(ACCENT, 1.0), 4.0, 3.0));
+        painter.add(Shape::dashed_line(&[app.to_screen(x0, y0), app.to_screen(x1, y1)], stroke(crate::theme::accent(), 1.0), 4.0, 3.0));
     }
 }
 
@@ -1672,7 +1706,7 @@ fn region_hatch(app: &FigApp, painter: &egui::Painter) {
     let r = painter.clip_rect();
     let clip = figcraft_geom::Rect::new(f64::from(r.min.x), f64::from(r.min.y), f64::from(r.max.x), f64::from(r.max.y));
     for [a, b] in app.session.vector_region_hatch(view, Some(clip)) {
-        painter.line_segment([pos2(a.x as f32, a.y as f32), pos2(b.x as f32, b.y as f32)], stroke(ACCENT, REGION_HATCH_WIDTH));
+        painter.line_segment([pos2(a.x as f32, a.y as f32), pos2(b.x as f32, b.y as f32)], stroke(crate::theme::accent(), REGION_HATCH_WIDTH));
     }
 }
 
@@ -1687,10 +1721,10 @@ fn builder_overlay(app: &FigApp, painter: &egui::Painter, t: &Tokens, arr: &figc
     for r in &arr.regions {
         for poly in screen(r) {
             painter.add(Shape::closed_line(poly.clone(), stroke(Color32::from_white_alpha(150), 2.5)));
-            painter.add(Shape::closed_line(poly, stroke(ACCENT, 1.0)));
+            painter.add(Shape::closed_line(poly, stroke(crate::theme::accent(), 1.0)));
         }
     }
-    let col = if ov.builder_remove { t.danger } else { ACCENT };
+    let col = if ov.builder_remove { t.danger } else { crate::theme::accent() };
     for r in ov.builder_regions.iter().filter_map(|i| arr.regions.get(*i)) {
         hatched(painter, &screen(r), col);
     }
@@ -1800,8 +1834,16 @@ fn rulers(app: &FigApp, painter: &egui::Painter, t: &Tokens, doc: &Document, sel
     // Highlight the selection's span.
     if let Some(b) = doc.bounds_of(sel) {
         let (a, bb) = (app.to_screen(b.x0, b.y0), app.to_screen(b.x1, b.y1));
-        painter.rect_filled(Rect::from_min_max(pos2(a.x, r.min.y), pos2(bb.x, r.min.y + size)), CornerRadius::ZERO, ACCENT.gamma_multiply(0.15));
-        painter.rect_filled(Rect::from_min_max(pos2(r.min.x, a.y), pos2(r.min.x + size, bb.y)), CornerRadius::ZERO, ACCENT.gamma_multiply(0.15));
+        painter.rect_filled(
+            Rect::from_min_max(pos2(a.x, r.min.y), pos2(bb.x, r.min.y + size)),
+            CornerRadius::ZERO,
+            crate::theme::accent().gamma_multiply(0.15),
+        );
+        painter.rect_filled(
+            Rect::from_min_max(pos2(r.min.x, a.y), pos2(r.min.x + size, bb.y)),
+            CornerRadius::ZERO,
+            crate::theme::accent().gamma_multiply(0.15),
+        );
     }
     let mut x = (p0.x / step).floor() * step;
     while x <= p1.x {

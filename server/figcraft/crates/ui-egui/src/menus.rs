@@ -996,6 +996,8 @@ pub fn set_palette(ui: &mut crate::UiState, open: bool) {
     // Mindmap's palette opens on its actions (`>` typed); ⌘P opens it on the pages.
     ui.palette = open.then(|| if crate::map_mode() { ">".to_string() } else { String::new() });
     ui.palette_box = crate::map_palette::State::default();
+    // A colour theme previewed in the box goes with it.
+    ui.theme_preview = None;
     ui.palette_tab = PaletteTab::All;
     ui.palette_hi = 0;
     ui.palette_armed = open;
@@ -1421,7 +1423,7 @@ pub(crate) fn map_action_id(id: &str) -> Option<&'static str> {
         "help.shortcuts" => "map.help",
         "edit.findReplace" => "map.search",
         "file.open" | "file.openRecent" => "map.openWorkspace",
-        "file.new" => "map.newWorkspace",
+        "file.new" => "map.newPage",
         "file.save" => "map.save",
         "file.close" => "map.close",
         "app.preferences" => "map.preferences",

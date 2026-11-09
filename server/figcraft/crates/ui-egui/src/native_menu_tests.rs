@@ -65,7 +65,9 @@ fn app_window_and_help_menus_follow_the_design() {
         [Entry::Item { id: "map.help", label: "Keyboard shortcuts" }, Entry::Item { id: DOCS, label: "Docs" }, Entry::Native(Native::About)]
     );
     let file: Vec<_> = items(&menu("File")).into_iter().map(|(_, label)| label).collect();
-    assert_eq!(file, ["New window tab…", "Close tab", "Close map", "Sync…", "Save", "Export…"]);
+    assert_eq!(file, ["New page…", "New workspace…", "New window tab…", "Close tab", "Close map", "Burn…", "Save", "Export…"]);
+    assert_eq!(key_equivalent("map.newPage"), Some("Cmd+N"));
+    assert_eq!(key_equivalent("map.newWorkspace"), Some("Shift+Cmd+N"));
 }
 
 #[test]
@@ -79,7 +81,6 @@ fn the_workspace_menu_lists_workspaces_then_switches_and_creates() {
             Entry::Worktrees,
             Entry::Separator,
             Entry::Item { id: "map.openWorkspace", label: "All workspaces…" },
-            Entry::Item { id: "map.newWorkspace", label: "New workspace…" },
             Entry::Item { id: ADD_MACHINE, label: "Add machine…" },
             Entry::Separator,
             Entry::Item { id: "map.agents", label: "Agents…" },
@@ -128,7 +129,8 @@ fn the_bar_offers_exactly_the_live_bindings_of_the_shortcuts_page() {
 #[test]
 fn only_command_shortcuts_become_key_equivalents() {
     assert_eq!(key_equivalent("map.save"), Some("Cmd+S"));
-    assert_eq!(key_equivalent("map.newWorkspace"), Some("Cmd+N"));
+    assert_eq!(key_equivalent("map.newPage"), Some("Cmd+N"));
+    assert_eq!(key_equivalent("map.newWorkspace"), Some("Shift+Cmd+N"));
     assert_eq!(key_equivalent("map.preferences"), Some("Cmd+,"));
     assert_eq!(key_equivalent("map.fullscreen"), Some("Ctrl+Cmd+F"));
     assert_eq!(key_equivalent("map.actions"), Some("Shift+Cmd+P"));

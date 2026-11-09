@@ -11,7 +11,7 @@ use crate::i18n::{tr, trf, trn};
 use crate::icons::{self, Icon};
 use crate::list_drag::{ListDrag, move_flags, remove_flags};
 use crate::style_picker::{self, StyleSlot};
-use crate::theme::{ACCENT, Tokens, regular, semibold};
+use crate::theme::{Tokens, regular, semibold};
 use crate::widgets::{self, Edit, FIELD_H, FieldEdit, Lead, PAD};
 use crate::{FigApp, RightTab};
 
@@ -88,7 +88,7 @@ pub fn right_panel(app: &mut FigApp, ui: &mut Ui) {
     let sw = (label.size().x + 24.0).max(56.0);
     let share = Rect::from_min_size(pos2(top.max.x - 14.0 - sw, top.center().y - 16.0), vec2(sw, 32.0));
     let sresp = ui.interact(share, ui.id().with("share"), Sense::click()).tip(tr("Share: live session, export"));
-    ui.painter().rect_filled(share, CornerRadius::same(6), if sresp.hovered() { t.accent_hover } else { ACCENT });
+    ui.painter().rect_filled(share, CornerRadius::same(6), if sresp.hovered() { t.accent_hover } else { crate::theme::accent() });
     ui.painter().galley(share.center() - label.size() / 2.0, label, Color32::WHITE);
     crate::live::share_popover(app, &sresp);
     // Play presents; its chevron opens the play menu (present, or preview in a pane).
@@ -284,7 +284,7 @@ pub fn menu_row(ui: &mut Ui, label: &str, shortcut: &str, art_w: f32, art: impl 
     a11y::own_focus(&resp);
     let hovered = resp.hovered() || resp.has_focus();
     if hovered {
-        ui.painter().rect_filled(r, CornerRadius::same(5), ACCENT);
+        ui.painter().rect_filled(r, CornerRadius::same(5), crate::theme::accent());
     }
     let col = if hovered { Color32::WHITE } else { t.text };
     ui.painter().galley(pos2(r.min.x + MENU_PAD, r.center().y - text.size().y / 2.0), text, col);

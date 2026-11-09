@@ -100,6 +100,9 @@ pub struct State {
     pub created: bool,
     /// Why the node could not create it.
     pub create_error: Option<String>,
+    /// Opened over a map (⇧⌘N): the workspace opens in a new window tab and this window keeps its
+    /// map. From the Workspaces screen it opens there.
+    pub new_window: bool,
     #[cfg(not(target_arch = "wasm32"))]
     create_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
@@ -125,6 +128,7 @@ impl State {
         self.creating = false;
         self.created = false;
         self.create_error = None;
+        self.new_window = false;
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.create_rx = None;
@@ -574,16 +578,48 @@ fn start_create(app: &mut FigApp, ctx: &egui::Context) {
 }
 
 /// The workspace exists: it opens its map, or the Empty map page, where the composer's agent
-/// button and menu choose the agent.
+/// button and menu choose the agent. Asked for over a map, it opens in a new window tab instead
+/// ([`open_in_new_window`]) and this window keeps its map.
 fn hand_off(app: &mut FigApp, ctx: &egui::Context, id: &str) {
     let map = app.ws.rows.iter().find(|w| w.id == id).map(Workspace::map_state).unwrap_or(MapState::None);
+    let new_window = std::mem::take(&mut app.new_workspace.new_window);
+    #[cfg(not(target_arch = "wasm32"))]
+    let address = app.new_workspace.machine.address.clone();
     app.new_workspace.close();
+    #[cfg(not(target_arch = "wasm32"))]
+    if new_window && !ctx.embed_viewports() {
+        open_in_new_window(app, ctx, &address, id);
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = new_window;
     app.ws.select(id);
     if map == MapState::Map {
         app.ws.act(ctx, id, false);
     } else {
         app.ui.home = true;
     }
+}
+
+/// Open the new workspace `id`, on the machine at `address`, in a window (tab) of its own: the
+/// machine becomes the one in use, then [`crate::window_tabs::open_workspace`] joins its map (a
+/// workspace without one gets an empty map there, the composer's agent button ready for Init).
+#[cfg(not(target_arch = "wasm32"))]
+fn open_in_new_window(app: &mut FigApp, ctx: &egui::Context, address: &str, id: &str) {
+    let in_use = crate::workspaces::service_addr();
+    if !address.is_empty() && address != in_use {
+        let host = crate::node_hosts::hosts(&app.ws.hosts)
+            .iter()
+            .find(|host| host.address == address)
+            .cloned()
+            .unwrap_or_else(|| crate::node_hosts::resolve(address));
+        crate::workspaces::switch_to(app, &host, Some(id));
+        if crate::workspaces::in_use_key(app).as_deref() != Some(address) {
+            app.toast("Another workspace is still opening.");
+            return;
+        }
+    }
+    crate::window_tabs::open_workspace(app, ctx, &crate::workspaces::service_addr(), id);
 }
 
 /// "Wait for it": once Herdr reports the agent idle, Init goes to it.

@@ -34,7 +34,7 @@ fn an_open_record_says_what_it_is_whose_it_is_and_how_long_it_waited() {
     assert!(job.is_record());
     assert_eq!(open_title(&job), "Explanation record open");
     assert_eq!(open_title(&record("fix", None)), "Bug fix record open");
-    assert_eq!(open_title(&record("sync", None)), "Sync in flight");
+    assert_eq!(open_title(&record("sync", None)), "Burn in flight");
     assert_eq!(job_owner(&job, &[claude("wX:p2")]), "small brain · claude");
     assert_eq!(job_owner(&job, &[]), "pane wX:p2");
     assert_eq!(job_owner(&record("explain", None), &[]), "an agent outside Herdr");
@@ -98,7 +98,7 @@ fn the_panel_shows_the_open_record_with_cancel_and_holds_sync() {
     app.sync.diff = Some(DiffReply { ok: true, open: Some(record("explain", Some("wX:p2"))), ..DiffReply::default() });
     run(&mut app);
     let shown = run(&mut app);
-    for needle in ["Explanation record open", "Cancel record", "commits nothing", "Sync waits until the open record is committed or cancelled."] {
+    for needle in ["Explanation record open", "Cancel record", "commits nothing", "Burn waits until the open record is committed or cancelled."] {
         assert!(shown.iter().any(|text| text == needle), "{needle:?} not in {shown:?}");
     }
     assert!(shown.iter().any(|text| text.starts_with("by small brain · claude · waited")), "{shown:?}");

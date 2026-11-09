@@ -10,6 +10,12 @@
 //! (the status bar's agent count). ⌫ in an empty field goes back to the list the scope was opened
 //! from (the actions when it was opened directly); Escape or a click outside closes the box.
 //!
+//! Colour theme (design: `Palette Actions · theme` and `Palette Colour theme`): typing "theme" in
+//! the actions lists the Appearance actions; Colour theme… (and Settings › Colour theme) opens the
+//! themes, each with a map and an IDE thumbnail drawn from its own colours. ↑↓ previews the
+//! highlighted theme live (`ui.theme_preview`), ↵ applies it ([`apply_theme`]), ⌫ and Escape keep
+//! the current one.
+//!
 //! The actions come from `map_action_catalog` and run through
 //! [`crate::menus::activate_map_action`], the guard every map surface shares; the workspaces and
 //! worktrees from [`crate::switcher`]; the agents from the composer's targets.
@@ -22,6 +28,7 @@ use serde_json::json;
 use crate::FigApp;
 use crate::agents::AgentState;
 use crate::map_action_catalog::{self as catalog, ACTIONS, Action};
+use crate::map_colors::Theme;
 use crate::switcher::Row;
 use crate::theme::{Tokens, regular};
 use crate::workspaces::{MapState, Target};
@@ -33,6 +40,10 @@ const SEARCH_H: f32 = 44.0;
 /// A one-line row, and a row with a line under its label.
 const ROW_H: f32 = 32.0;
 const ROW2_H: f32 = 40.0;
+/// A colour theme's row, tall enough for its thumbnails.
+const THEME_ROW_H: f32 = 56.0;
+/// A theme thumbnail.
+const THUMB: egui::Vec2 = vec2(56.0, 36.0);
 /// The footer under the last rule.
 const FOOTER_H: f32 = 29.0;
 /// The box's top below the window's title row.
@@ -67,6 +78,8 @@ pub enum Scope {
     Name,
     /// The open workspace's agents.
     Agents,
+    /// The colour themes.
+    Theme,
 }
 
 /// The box's state beyond the field's text (`ui.palette`) and the highlighted row
@@ -128,6 +141,7 @@ pub fn toggle_pages(app: &mut FigApp) {
 
 pub fn close(app: &mut FigApp) {
     app.ui.palette = None;
+    app.ui.theme_preview = None;
     app.ui.palette_box = State::default();
 }
 
@@ -160,6 +174,7 @@ fn pop(app: &mut FigApp) {
         }
         None => {}
     }
+    app.ui.theme_preview = None;
     app.ui.palette_box.caret_to_end = true;
     app.ui.palette_hi = 0;
 }
@@ -184,6 +199,27 @@ struct Pal {
 
 impl Pal {
     fn of(t: &Tokens) -> Pal {
+        let theme = crate::map_colors::theme();
+        if !matches!(theme, Theme::Classic | Theme::ClassicDark) {
+            let c = theme.colors();
+            return Pal {
+                panel: c.panel,
+                border: c.border,
+                rule: c.border,
+                text: c.ink,
+                muted: c.muted,
+                faint: c.faint,
+                teal: c.map_ink,
+                amber: c.working_ink,
+                danger: c.danger,
+                hi: c.selected,
+                hover: c.soft,
+                cap: c.soft,
+                off: c.border,
+                scrim: if theme.dark() { Color32::from_black_alpha(90) } else { with_alpha(c.ink, 0x2E) },
+            };
+        }
+        // Classic and Classic Dark keep the palette's own inks.
         if t.dark {
             Pal {
                 panel: t.panel,
@@ -220,6 +256,10 @@ impl Pal {
             }
         }
     }
+}
+
+fn with_alpha(color: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
 }
 
 /// The ink a row's tag or status is drawn in, resolved against the palette when drawn.
@@ -269,8 +309,11 @@ pub(crate) enum Right {
         text: String,
         more: bool,
     },
-    /// The theme's three segments, the chosen one's index.
-    Theme(usize),
+    /// A colour theme's map and IDE thumbnails; the current one wears a check.
+    Colour {
+        theme: Theme,
+        current: bool,
+    },
 }
 
 /// What choosing a row does.
@@ -285,8 +328,12 @@ pub(crate) enum Pick {
     Toggle(&'static str),
     /// A preference command that flips a setting; the box stays open.
     Pref(&'static str),
-    /// The theme: Enter steps to the next one, a click on a segment chooses it.
-    Theme,
+    /// Open the colour themes in the box.
+    Themes,
+    /// Apply a colour theme.
+    ApplyTheme(Theme),
+    /// Flip Follow the system.
+    FollowSystem,
     Language(String),
     EditName,
     SaveName,
@@ -336,7 +383,13 @@ impl Item {
     }
 
     fn height(&self) -> f32 {
-        if self.sub.is_some() { ROW2_H } else { ROW_H }
+        if matches!(self.right, Right::Colour { .. }) {
+            THEME_ROW_H
+        } else if self.sub.is_some() {
+            ROW2_H
+        } else {
+            ROW_H
+        }
     }
 }
 
@@ -345,6 +398,8 @@ impl Item {
 pub(crate) struct Section {
     pub title: Option<String>,
     pub items: Vec<Item>,
+    /// A rule above it (Follow the system under the themes).
+    pub rule: bool,
 }
 
 /// Everything the box shows for its scope and text.
@@ -473,6 +528,7 @@ fn pages_view(app: &FigApp, query: &str) -> View {
     let mut sections: Vec<Section> = groups
         .into_iter()
         .map(|(title, hits)| Section {
+            rule: false,
             title: title.map(str::to_string),
             items: hits.into_iter().map(|hit| Item::new(hit.name, Some(Pick::Page(hit.id))).sub(Some(hit.path))).collect(),
         })
@@ -482,7 +538,7 @@ fn pages_view(app: &FigApp, query: &str) -> View {
         let row = Item::new(search_map_label(query), search.map(|_| Pick::SearchMap)).right(Right::Keys(caps_of("map.search"))).gap();
         match sections.first_mut() {
             Some(section) => section.items.push(row),
-            None => sections.push(Section { title: None, items: vec![row] }),
+            None => sections.push(Section { rule: false, title: None, items: vec![row] }),
         }
     }
     let count = if query.trim().is_empty() { format!("{total} page{}", plural(total)) } else { format!("{matched} of {total}") };
@@ -553,24 +609,61 @@ pub(crate) fn no_match_label(query: &str) -> String {
 /// An action as a row: its key caps, its switch when it is a toggle, or why it cannot run.
 fn action_item(app: &FigApp, action: &'static Action, boxed: bool) -> Item {
     let reason = catalog::disabled_reason(app, action);
-    let label = if boxed { format!("{}…", action.label) } else { action.label.to_string() };
+    let label = if boxed || action.id == "map.colorTheme" { format!("{}…", action.label) } else { action.label.to_string() };
     let right = match (reason, catalog::toggle_state(app, action)) {
         (Some(reason), _) => Right::Note(reason.to_string()),
         (None, Some(state)) => Right::Toggle(matches!(state, "Shown" | "On")),
+        // Colour theme… names the current theme.
+        (None, None) if action.id == "map.colorTheme" => {
+            Right::Tag { text: current_theme(app).name().to_string(), ink: Ink::Teal, check: false, more: true }
+        }
         (None, None) if action.id == "map.switchWorktree" => Right::Keys(vec!["›".to_string()]),
         (None, None) => Right::Keys(caps(action, platform())),
     };
     Item::new(label, reason.is_none().then_some(Pick::Action(action.id))).right(right)
 }
 
+/// The colour theme actions' group.
+pub(crate) const APPEARANCE: &str = "Appearance";
+
+/// A search that finds an Appearance action lists the whole group, then Settings (design:
+/// `Palette Actions · theme`): "theme" finds Colour theme…, Next colour theme, Follow system
+/// appearance and Settings ›. Other hits follow, untitled.
+fn appearance_first(groups: Vec<(Option<&'static str>, Vec<&'static Action>)>) -> Vec<(Option<&'static str>, Vec<&'static Action>)> {
+    let hits: Vec<&'static Action> = match groups.as_slice() {
+        [(None, hits)] if hits.iter().any(|a| a.group == APPEARANCE) => hits.clone(),
+        _ => return groups,
+    };
+    let group: Vec<&'static Action> = ACTIONS.iter().filter(|a| a.group == APPEARANCE).chain(catalog::find("map.preferences")).collect();
+    let rest: Vec<&'static Action> = hits.into_iter().filter(|a| !group.iter().any(|g| g.id == a.id)).collect();
+    let mut out = vec![(Some(APPEARANCE), group)];
+    if !rest.is_empty() {
+        out.push((None, rest));
+    }
+    out
+}
+
 fn actions_view(app: &FigApp, query: &str) -> View {
-    let groups = sections(app, query);
+    let groups = appearance_first(sections(app, query));
     let matched: usize = groups.iter().map(|(_, rows)| rows.len()).sum();
     let mut sections: Vec<Section> = groups
         .into_iter()
         .map(|(title, rows)| {
             let boxed = title == Some(OPEN_IN_BOX);
-            Section { title: title.map(|t| t.to_string()), items: rows.into_iter().map(|action| action_item(app, action, boxed)).collect() }
+            let appearance = title == Some(APPEARANCE);
+            let items = rows
+                .into_iter()
+                .map(|action| {
+                    let item = action_item(app, action, boxed);
+                    // Settings under the Appearance actions opens its list: › rather than its keys.
+                    if appearance && action.id == "map.preferences" && item.pick.is_some() {
+                        item.right(Right::Value { text: String::new(), more: true })
+                    } else {
+                        item
+                    }
+                })
+                .collect();
+            Section { rule: false, title: title.map(|t| t.to_string()), items }
         })
         .collect();
     let mut hints = "↑↓ choose   ↵ run   ⌫ back to pages".to_string();
@@ -581,8 +674,11 @@ fn actions_view(app: &FigApp, query: &str) -> View {
             Some(reason) => Right::Note(reason.to_string()),
             None => Right::Keys(caps_of("map.search")),
         };
-        sections
-            .push(Section { title: None, items: vec![Item::new(search_map_label(query), reason.is_none().then_some(Pick::SearchMap)).right(right)] });
+        sections.push(Section {
+            rule: false,
+            title: None,
+            items: vec![Item::new(search_map_label(query), reason.is_none().then_some(Pick::SearchMap)).right(right)],
+        });
         hints = no_match_label(query);
     }
     View { chip: None, placeholder: "Run an action…".to_string(), sections, hints, count: count_label(query, matched), enter_cap: false }
@@ -597,13 +693,13 @@ fn switch_view(app: &FigApp) -> Option<Vec<Section>> {
             Item::new(format!("Opening {}…", switch.branch), None).sub(Some(format!("Still viewing {}.", switch.from))),
             Item::new("Cancel switch", Some(Pick::CancelSwitch)).gap(),
         ];
-        return Some(vec![Section { title: None, items }]);
+        return Some(vec![Section { rule: false, title: None, items }]);
     }
     let (switch, reason) = app.status.failed.as_ref()?;
     let mut failed = Item::new(format!("Could not open {}", switch.branch), None).sub(Some(reason.clone()));
     failed.sub_ink = Some(Ink::Danger);
     let items = vec![failed, Item::new("Retry", Some(Pick::Retry)).gap(), Item::new(format!("Stay on {}", switch.from), Some(Pick::Stay))];
-    Some(vec![Section { title: None, items }])
+    Some(vec![Section { rule: false, title: None, items }])
 }
 
 /// A workspace's tag: ✓ OPEN, its worktrees, or its map's state.
@@ -644,11 +740,12 @@ fn workspace_view(app: &FigApp, query: &str) -> View {
                     };
                     items.push(Item::new(note, None));
                 }
-                Section { title: Some(group.title), items }
+                Section { rule: false, title: Some(group.title), items }
             })
             .collect();
         if sections.is_empty() {
             sections.push(Section {
+                rule: false,
                 title: None,
                 items: vec![Item::new("No matching workspace", None).sub(Some("Try a name, a branch or a folder.".into()))],
             });
@@ -693,7 +790,7 @@ fn worktree_view(app: &FigApp, query: &str, address: &str, id: &str, name: &str,
                 })
                 .collect()
         };
-        vec![Section { title: None, items }]
+        vec![Section { rule: false, title: None, items }]
     });
     let hints = if current {
         "↑↓ choose   ↵ open   ⌫ back".to_string()
@@ -710,14 +807,92 @@ fn worktree_view(app: &FigApp, query: &str, address: &str, id: &str, name: &str,
     }
 }
 
-// ---- Settings ----------------------------------------------------------------------------------
+// ---- Colour theme ------------------------------------------------------------------------------
 
-/// The theme's segments, as the preference names them, and the commands that choose them.
-pub(crate) const THEMES: [(&str, &str); 3] = [("System", "view.themeSystem"), ("Light", "view.themeLight"), ("Dark", "view.themeDark")];
-
-fn theme_index(app: &FigApp) -> usize {
-    THEMES.iter().position(|(name, _)| app.session.prefs.theme.eq_ignore_ascii_case(name)).unwrap_or(0)
+/// The theme the window draws with (without a preview): the family lit as the window is now.
+pub(crate) fn current_theme(app: &FigApp) -> Theme {
+    Theme::of(&app.session.prefs.color_theme, app.ui.dark)
 }
+
+/// Whether the theme follows the system's light and dark.
+pub(crate) fn follows_system(app: &FigApp) -> bool {
+    app.session.prefs.theme.eq_ignore_ascii_case("system")
+}
+
+/// Apply `theme`. The family (`view.colorTheme`) always becomes the theme's. Its lightness: with
+/// Follow the system on, a theme as light or as dark as the system is now keeps following it (so
+/// Classic chosen by day is Classic by day and Classic Dark by night); a theme of the other
+/// lightness turns following off and sets its own (`view.themeLight` / `view.themeDark`), since
+/// the person asked to see that theme now. With following off, the theme's lightness is set.
+pub(crate) fn apply_theme(app: &mut FigApp, theme: Theme) {
+    app.ui.theme_preview = None;
+    app.run("view.colorTheme", json!({"theme": theme.family()}));
+    if follows_system(app) && theme.dark() == app.ui.dark {
+        return;
+    }
+    app.run(if theme.dark() { "view.themeDark" } else { "view.themeLight" }, json!({}));
+    app.ui.dark = theme.dark();
+}
+
+/// Next colour theme: the one after the current in the picker's order, applied as a choice.
+pub(crate) fn next_theme(app: &mut FigApp) {
+    let current = current_theme(app);
+    let at = Theme::ALL.iter().position(|t| *t == current).unwrap_or(0);
+    if let Some(next) = Theme::ALL.get((at + 1) % Theme::ALL.len()) {
+        apply_theme(app, *next);
+    }
+}
+
+/// Follow the system: on, the system lights the family; off, the window keeps the lightness it
+/// shows now.
+pub(crate) fn follow_system(app: &mut FigApp) {
+    if follows_system(app) {
+        app.run(if app.ui.dark { "view.themeDark" } else { "view.themeLight" }, json!({}));
+    } else {
+        app.run("view.themeSystem", json!({}));
+    }
+}
+
+/// Open the box afresh on the colour themes, the current one highlighted.
+pub(crate) fn open_themes(app: &mut FigApp) {
+    open(app, Scope::Theme);
+    highlight_current_theme(app);
+}
+
+fn highlight_current_theme(app: &mut FigApp) {
+    let current = current_theme(app);
+    app.ui.palette_hi = Theme::ALL.iter().position(|t| *t == current).unwrap_or(0);
+}
+
+fn theme_view(app: &FigApp, query: &str) -> View {
+    let current = current_theme(app);
+    let query = query.trim().to_lowercase();
+    let mut items: Vec<Item> = Theme::ALL
+        .iter()
+        .filter(|t| query.is_empty() || t.name().to_lowercase().contains(&query) || t.note().to_lowercase().contains(&query))
+        .map(|t| {
+            Item::new(t.name(), Some(Pick::ApplyTheme(*t))).sub(Some(t.note().to_string())).right(Right::Colour { theme: *t, current: *t == current })
+        })
+        .collect();
+    let shown = items.len();
+    if items.is_empty() {
+        items.push(Item::new("No matching theme", None));
+    }
+    let (day, night) = (Theme::of(current.family(), false), Theme::of(current.family(), true));
+    let follow = Item::new("Follow the system", Some(Pick::FollowSystem))
+        .sub(Some(format!("{} by day · {} by night", day.name(), night.name())))
+        .right(Right::Toggle(follows_system(app)));
+    View {
+        chip: Some("Colour theme".to_string()),
+        placeholder: "Filter themes…".to_string(),
+        sections: vec![Section { rule: false, title: Some("Themes".to_string()), items }, Section { rule: true, title: None, items: vec![follow] }],
+        hints: format!("↑↓ preview   ↵ apply   ⌫ back   esc keep {}", current.name()),
+        count: format!("{shown} theme{}", plural(shown)),
+        enter_cap: false,
+    }
+}
+
+// ---- Settings ----------------------------------------------------------------------------------
 
 /// The languages the UI can show: System (the OS's), then each by its own name.
 fn languages() -> Vec<(&'static str, &'static str)> {
@@ -750,7 +925,7 @@ fn settings_view(app: &FigApp, query: &str) -> View {
         map_toggle(app, "map.workspacePane", "Workspace pane"),
     ];
     let general = vec![
-        Item::new("Theme", Some(Pick::Theme)).right(Right::Theme(theme_index(app))),
+        Item::new("Colour theme", Some(Pick::Themes)).right(Right::Value { text: current_theme(app).name().to_string(), more: true }),
         Item::new("Reduce motion", Some(Pick::Pref("pref.reduceMotion"))).right(Right::Toggle(prefs.reduce_motion)),
         Item::new("Your name in comments", Some(Pick::EditName)).right(Right::Value { text: name, more: false }),
         Item::new("Language", Some(Pick::Languages)).right(Right::Value { text: language_name(app).to_string(), more: true }),
@@ -761,12 +936,12 @@ fn settings_view(app: &FigApp, query: &str) -> View {
     let mut sections = Vec::new();
     for (title, items) in [("MAP", keep(map)), ("APP", keep(general))] {
         if !items.is_empty() {
-            sections.push(Section { title: Some(title.to_string()), items });
+            sections.push(Section { rule: false, title: Some(title.to_string()), items });
         }
     }
     let shown: usize = sections.iter().map(|s| s.items.len()).sum();
     if sections.is_empty() {
-        sections.push(Section { title: None, items: vec![Item::new("No matching setting", None)] });
+        sections.push(Section { rule: false, title: None, items: vec![Item::new("No matching setting", None)] });
     }
     View {
         chip: Some("Settings".to_string()),
@@ -793,7 +968,7 @@ fn language_view(app: &FigApp, query: &str) -> View {
     View {
         chip: Some("Settings › Language".to_string()),
         placeholder: "Filter languages…".to_string(),
-        sections: vec![Section { title: None, items }],
+        sections: vec![Section { rule: false, title: None, items }],
         hints: "↑↓ choose   ↵ use it   ⌫ back".to_string(),
         count: format!("{shown} language{}", plural(shown)),
         enter_cap: false,
@@ -806,7 +981,7 @@ fn name_view(text: &str) -> View {
     View {
         chip: Some("Settings › Your name".to_string()),
         placeholder: "Your name in comments…".to_string(),
-        sections: vec![Section { title: None, items: vec![Item::new(label, Some(Pick::SaveName))] }],
+        sections: vec![Section { rule: false, title: None, items: vec![Item::new(label, Some(Pick::SaveName))] }],
         hints: "↵ save   esc cancel".to_string(),
         count: String::new(),
         enter_cap: true,
@@ -869,7 +1044,7 @@ fn agents_view(app: &FigApp, query: &str) -> View {
     View {
         chip: Some("Agents".to_string()),
         placeholder: "Filter agents…".to_string(),
-        sections: vec![Section { title: Some(title), items }],
+        sections: vec![Section { rule: false, title: Some(title), items }],
         hints: "↑↓ choose   ↵ focus its pane   ⌫ back".to_string(),
         count: format!("{shown} agent{}", plural(shown)),
         enter_cap: false,
@@ -889,6 +1064,7 @@ pub(crate) fn view(app: &FigApp, text: &str) -> View {
         Scope::Language => language_view(app, text),
         Scope::Name => name_view(text),
         Scope::Agents => agents_view(app, text),
+        Scope::Theme => theme_view(app, text),
     }
 }
 
@@ -931,6 +1107,15 @@ pub(crate) fn choose(app: &mut FigApp, ctx: &egui::Context, pick: Pick, text: &s
         Pick::SearchMap => {
             search_map(app, ctx, text.strip_prefix('>').unwrap_or(text));
         }
+        // The Appearance actions stay in the box: Colour theme… opens its list here (⌫ comes
+        // back), the others flip and show their new state.
+        Pick::Action("map.colorTheme") => {
+            push(app, Scope::Theme);
+            highlight_current_theme(app);
+        }
+        Pick::Action(id @ ("map.nextColorTheme" | "map.followSystemAppearance")) => {
+            crate::map_actions::run(app, ctx, id);
+        }
         Pick::Action(id) => {
             crate::menus::activate_map_action(app, ctx, id);
         }
@@ -956,12 +1141,15 @@ pub(crate) fn choose(app: &mut FigApp, ctx: &egui::Context, pick: Pick, text: &s
         Pick::Pref(command) => {
             app.run(command, json!({}));
         }
-        Pick::Theme => {
-            let next = (theme_index(app) + 1) % THEMES.len();
-            if let Some((_, command)) = THEMES.get(next) {
-                app.run(command, json!({}));
-            }
+        Pick::Themes => {
+            push(app, Scope::Theme);
+            highlight_current_theme(app);
         }
+        Pick::ApplyTheme(theme) => {
+            apply_theme(app, theme);
+            close(app);
+        }
+        Pick::FollowSystem => follow_system(app),
         Pick::Language(code) => {
             app.run("pref.language", json!({"language": code}));
             pop(app);
@@ -1022,28 +1210,66 @@ fn switch(ui: &Ui, pal: &Pal, on: bool, right: f32, cy: f32) -> f32 {
     r.min.x
 }
 
-/// The theme's segments ending at `right`; returns their rects, left to right.
-fn segments(ui: &Ui, pal: &Pal, chosen: usize, right: f32, cy: f32) -> Vec<Rect> {
-    let mut rects = Vec::new();
-    let mut x = right - 3.0 * 56.0 - 2.0 * 2.0;
-    for (i, (name, _)) in THEMES.iter().enumerate() {
-        let r = Rect::from_min_size(pos2(x, cy - 11.0), vec2(56.0, 22.0));
-        if i == chosen {
-            ui.painter().rect_filled(r, CornerRadius::same(5), pal.panel);
-            ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, pal.rule), StrokeKind::Inside);
-        } else {
-            ui.painter().rect_filled(r, CornerRadius::same(5), pal.cap);
-        }
-        let ink = if i == chosen { pal.text } else { pal.muted };
-        ui.painter().text(r.center(), Align2::CENTER_CENTER, *name, regular(11.5), ink);
-        rects.push(r);
-        x += 58.0;
-    }
-    rects
+/// The thumbnails' columns in a row ending at `right`: the map's, then the IDE's.
+fn thumb_columns(right: f32) -> (f32, f32) {
+    let ide = right - 12.0 - 72.0 - 10.0 - THUMB.x;
+    (ide - 8.0 - THUMB.x, ide)
 }
 
-/// One row; returns its response and the theme segment clicked, if any.
-fn item_ui(ui: &mut Ui, pal: &Pal, item: &Item, highlighted: bool, enter_cap: bool) -> (Response, Option<usize>) {
+/// A map in miniature, in `theme`'s colours: the sidebar with its rows, the tab strip with the
+/// open tab's accent, and cards on the paper (one outlined in the accent).
+fn map_thumb(ui: &Ui, rect: Rect, theme: Theme) {
+    let c = theme.colors();
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(3), c.canvas);
+    let side = Rect::from_min_max(rect.min, pos2(rect.min.x + 13.0, rect.max.y));
+    p.rect_filled(side, CornerRadius { nw: 3, sw: 3, ne: 0, se: 0 }, c.panel);
+    for (i, ink) in [c.map_ink, c.faint, c.faint, c.faint].into_iter().enumerate() {
+        let y = side.min.y + 7.0 + i as f32 * 3.5;
+        let w = if i == 0 { 8.0 } else { 6.0 };
+        p.line_segment([pos2(side.min.x + 2.5, y), pos2(side.min.x + 2.5 + w, y)], Stroke::new(1.2, ink));
+    }
+    let tabs = Rect::from_min_max(pos2(side.max.x, rect.min.y), pos2(rect.max.x, rect.min.y + 6.0));
+    p.rect_filled(tabs, CornerRadius { ne: 3, ..CornerRadius::ZERO }, c.tab_row);
+    let tab = Rect::from_min_size(pos2(tabs.min.x + 3.0, tabs.min.y), vec2(12.0, tabs.height()));
+    p.rect_filled(tab, CornerRadius::ZERO, c.panel);
+    p.line_segment([pos2(tab.min.x, tab.min.y + 1.0), pos2(tab.max.x, tab.min.y + 1.0)], Stroke::new(1.0, c.accent));
+    let card = |r: Rect, stroke: Color32| {
+        p.rect_filled(r, CornerRadius::same(1), c.panel);
+        p.rect_stroke(r, CornerRadius::same(1), Stroke::new(0.7, stroke), StrokeKind::Inside);
+    };
+    card(Rect::from_min_size(pos2(side.max.x + 5.0, tabs.max.y + 4.0), vec2(14.0, 9.0)), c.border);
+    card(Rect::from_min_size(pos2(side.max.x + 23.0, tabs.max.y + 4.0), vec2(15.0, 9.0)), c.border);
+    card(Rect::from_min_size(pos2(side.max.x + 5.0, tabs.max.y + 17.0), vec2(14.0, 8.0)), c.accent);
+    p.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, c.border), StrokeKind::Inside);
+}
+
+/// The design editor in miniature, in `theme`'s tokens: the toolbar, the layers panel, the canvas
+/// with an artboard, and the properties panel.
+fn ide_thumb(ui: &Ui, rect: Rect, theme: Theme) {
+    let t = theme.tokens();
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(3), t.canvas);
+    let bar = Rect::from_min_max(rect.min, pos2(rect.max.x, rect.min.y + 5.0));
+    p.rect_filled(bar, CornerRadius { nw: 3, ne: 3, ..CornerRadius::ZERO }, t.panel);
+    p.line_segment([pos2(bar.center().x - 5.0, bar.min.y + 1.5), pos2(bar.center().x + 5.0, bar.min.y + 1.5)], Stroke::new(1.2, t.accent));
+    let left = Rect::from_min_max(pos2(rect.min.x, bar.max.y), pos2(rect.min.x + 10.0, rect.max.y));
+    let right = Rect::from_min_max(pos2(rect.max.x - 10.0, bar.max.y), rect.max);
+    for panel in [left, right] {
+        p.rect_filled(panel, CornerRadius::ZERO, t.panel);
+        for i in 0..4 {
+            let y = panel.min.y + 4.0 + i as f32 * 3.5;
+            p.line_segment([pos2(panel.min.x + 2.0, y), pos2(panel.max.x - 3.0, y)], Stroke::new(1.0, t.text_tertiary));
+        }
+    }
+    let board = Rect::from_min_max(pos2(left.max.x + 6.0, bar.max.y + 7.0), pos2(right.min.x - 6.0, rect.max.y - 7.0));
+    p.rect_filled(board, CornerRadius::ZERO, t.panel);
+    p.rect_stroke(board, CornerRadius::ZERO, Stroke::new(1.0, t.accent), StrokeKind::Inside);
+    p.rect_stroke(rect, CornerRadius::same(3), Stroke::new(1.0, t.border), StrokeKind::Inside);
+}
+
+/// One row; returns its response.
+fn item_ui(ui: &mut Ui, pal: &Pal, item: &Item, highlighted: bool, enter_cap: bool) -> Response {
     if item.gap {
         ui.add_space(4.0);
     }
@@ -1059,7 +1285,6 @@ fn item_ui(ui: &mut Ui, pal: &Pal, item: &Item, highlighted: bool, enter_cap: bo
     }
     let cy = pill.center().y;
     let mut left_of = pill.max.x;
-    let mut segment = None;
     match &item.right {
         Right::None if highlighted && enabled && enter_cap => left_of = keycap(ui, pal, "↵", pill.max.x - 12.0, cy),
         Right::None => {}
@@ -1109,18 +1334,30 @@ fn item_ui(ui: &mut Ui, pal: &Pal, item: &Item, highlighted: bool, enter_cap: bo
             left_of = pill.max.x - 16.0 - g.size().x;
             ui.painter().galley(pos2(left_of, cy - g.size().y / 2.0), g, pal.muted);
         }
-        Right::Theme(chosen) => {
-            let rects = segments(ui, pal, *chosen, pill.max.x - 14.0, cy);
-            left_of = rects.first().map_or(left_of, |r| r.min.x);
-            if resp.clicked() {
-                segment = resp.interact_pointer_pos().and_then(|p| rects.iter().position(|r| r.contains(p)));
+        Right::Colour { theme, current } => {
+            let (map_x, ide_x) = thumb_columns(pill.max.x);
+            map_thumb(ui, Rect::from_min_size(pos2(map_x, cy - THUMB.y / 2.0), THUMB), *theme);
+            ide_thumb(ui, Rect::from_min_size(pos2(ide_x, cy - THUMB.y / 2.0), THUMB), *theme);
+            let zone = Rect::from_min_max(pos2(ide_x + THUMB.x + 10.0, pill.min.y), pos2(pill.max.x - 12.0, pill.max.y));
+            if *current {
+                crate::workspaces::check_mark(ui, pos2(zone.center().x, cy), pal.teal);
+            } else if highlighted {
+                ui.painter().text(pos2(zone.center().x, cy), Align2::CENTER_CENTER, "↵ apply", FontId::monospace(9.5), pal.teal);
             }
+            left_of = map_x;
         }
     }
     let x = pill.min.x + 12.0;
     let room = (left_of - 12.0 - x).max(20.0);
     let ink = if enabled { pal.text } else { pal.faint };
     let label = crate::widgets::elide_font(ui, &item.label, room, regular(13.0));
+    if let (Right::Colour { .. }, Some(sub)) = (&item.right, &item.sub) {
+        // A theme: its name over its note, centred on the thumbnails.
+        ui.painter().text(pos2(x, cy - 2.0), Align2::LEFT_BOTTOM, label, regular(14.0), ink);
+        let sub = crate::widgets::elide_font(ui, sub, room, FontId::monospace(9.5));
+        ui.painter().text(pos2(x, cy + 4.0), Align2::LEFT_TOP, sub, FontId::monospace(9.5), pal.muted);
+        return resp;
+    }
     match &item.sub {
         Some(sub) => {
             ui.painter().text(pos2(x, pill.min.y + 5.0), Align2::LEFT_TOP, label, regular(13.0), ink);
@@ -1132,7 +1369,7 @@ fn item_ui(ui: &mut Ui, pal: &Pal, item: &Item, highlighted: bool, enter_cap: bo
             ui.painter().text(pos2(x, cy), Align2::LEFT_CENTER, label, regular(13.0), ink);
         }
     }
-    (resp, segment)
+    resp
 }
 
 /// The field's prompt: a small chevron centred on `c` (drawn: the face's › sits on the baseline).
@@ -1185,13 +1422,14 @@ fn rule(ui: &mut Ui, pal: &Pal) {
 struct Chosen {
     pick: Pick,
     new_tab: bool,
-    /// The theme segment clicked.
-    segment: Option<usize>,
 }
 
 /// Draw the box and handle its keys and clicks. Escape and a click outside close it.
 pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
-    let Some(mut text) = app.ui.palette.clone() else { return };
+    let Some(mut text) = app.ui.palette.clone() else {
+        app.ui.theme_preview = None;
+        return;
+    };
     let pal = Pal::of(&Tokens::get(ctx));
     let (step, new_tab, enter, escape) = ctx.input_mut(|i| {
         let step = i.count_and_consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) as i64
@@ -1227,6 +1465,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
         state.store(ctx, search_id);
     }
     let mut chosen: Option<Chosen> = None;
+    let mut preview: Option<Theme> = None;
     let mut changed = false;
     let mut view = view(app, &text);
     let area = egui::Area::new(Id::new("palette"))
@@ -1289,7 +1528,14 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
                     if (enter || new_tab)
                         && let Some(pick) = flat.get(hi).and_then(|item| item.pick.clone())
                     {
-                        chosen = Some(Chosen { pick, new_tab, segment: None });
+                        chosen = Some(Chosen { pick, new_tab });
+                    }
+                    // ↑↓ in the themes previews the highlighted one live.
+                    if app.ui.palette_box.scope == Scope::Theme {
+                        preview = match flat.get(hi).map(|item| &item.right) {
+                            Some(Right::Colour { theme, .. }) => Some(*theme),
+                            _ => None,
+                        };
                     }
                     rule(ui, &pal);
                     let max_h = (screen.height() - header - TOP - SEARCH_H - FOOTER_H - 48.0).clamp(ROW_H * 3.0, 420.0);
@@ -1297,25 +1543,32 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
                         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                         let mut index = 0;
                         for (n, section) in view.sections.iter().enumerate() {
+                            if section.rule {
+                                ui.add_space(8.0);
+                                rule(ui, &pal);
+                            }
                             match &section.title {
                                 Some(title) => {
                                     ui.add_space(if n == 0 { 12.0 } else { 8.0 });
                                     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 12.0), Sense::hover());
-                                    ui.painter().text(
-                                        pos2(r.min.x + 16.0, r.center().y),
-                                        Align2::LEFT_CENTER,
-                                        title.to_uppercase(),
-                                        FontId::monospace(9.0),
-                                        pal.faint,
-                                    );
+                                    let eyebrow = |x: f32, text: &str| {
+                                        ui.painter().text(pos2(x, r.center().y), Align2::LEFT_CENTER, text, FontId::monospace(9.0), pal.faint)
+                                    };
+                                    eyebrow(r.min.x + 16.0, &title.to_uppercase());
+                                    // The themes name their thumbnails' columns.
+                                    if section.items.iter().any(|item| matches!(item.right, Right::Colour { .. })) {
+                                        let (map_x, ide_x) = thumb_columns(r.max.x - 6.0);
+                                        eyebrow(map_x, "MAP");
+                                        eyebrow(ide_x, "IDE");
+                                    }
                                     ui.add_space(6.0);
                                 }
                                 None => ui.add_space(8.0),
                             }
                             for item in &section.items {
-                                let (resp, segment) = item_ui(ui, &pal, item, index == hi, view.enter_cap);
+                                let resp = item_ui(ui, &pal, item, index == hi, view.enter_cap);
                                 if let Some(pick) = item.pick.clone().filter(|_| resp.clicked()) {
-                                    chosen = Some(Chosen { pick, new_tab: ui.input(|i| i.modifiers.command), segment });
+                                    chosen = Some(Chosen { pick, new_tab: ui.input(|i| i.modifiers.command) });
                                 }
                                 if step != 0 && index == hi {
                                     resp.scroll_to_me(None);
@@ -1343,14 +1596,11 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
     if app.ui.palette.is_some() {
         app.ui.palette = Some(text.clone());
     }
-    if let Some(Chosen { pick, new_tab, segment }) = chosen {
-        match (pick, segment) {
-            (Pick::Theme, Some(i)) => {
-                if let Some((_, command)) = THEMES.get(i) {
-                    app.run(command, json!({}));
-                }
-            }
-            (pick, _) => choose(app, ctx, pick, &text, new_tab),
-        }
+    if app.ui.theme_preview != preview {
+        app.ui.theme_preview = preview;
+        ctx.request_repaint();
+    }
+    if let Some(Chosen { pick, new_tab }) = chosen {
+        choose(app, ctx, pick, &text, new_tab);
     }
 }

@@ -10,19 +10,55 @@ use crate::theme::{regular, semibold};
 use crate::widgets;
 use crate::workspaces::Target;
 
-const PANEL: Color32 = Color32::WHITE;
-const SOFT: Color32 = Color32::from_rgb(0xF8, 0xF6, 0xF3);
-const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
-const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
-const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
-const TEAL: Color32 = Color32::from_rgb(0x2F, 0x6F, 0x6A);
-const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
-const AMBER: Color32 = Color32::from_rgb(0xA8, 0x6B, 0x12);
-const GREY: Color32 = Color32::from_rgb(0x8A, 0x85, 0x7D);
+#[allow(non_snake_case)]
+fn PANEL() -> Color32 {
+    crate::map_colors::get().panel
+}
+#[allow(non_snake_case)]
+fn SOFT() -> Color32 {
+    crate::map_colors::get().soft
+}
+#[allow(non_snake_case)]
+fn BORDER() -> Color32 {
+    crate::map_colors::get().border
+}
+#[allow(non_snake_case)]
+fn INK() -> Color32 {
+    crate::map_colors::get().ink
+}
+#[allow(non_snake_case)]
+fn MUTED() -> Color32 {
+    crate::map_colors::get().muted
+}
+#[allow(non_snake_case)]
+fn FAINT() -> Color32 {
+    crate::map_colors::get().faint
+}
+#[allow(non_snake_case)]
+fn ACCENT() -> Color32 {
+    crate::map_colors::get().accent
+}
+#[allow(non_snake_case)]
+fn TEAL() -> Color32 {
+    crate::map_colors::get().map_ink
+}
+#[allow(non_snake_case)]
+fn DANGER() -> Color32 {
+    crate::map_colors::get().danger
+}
+#[allow(non_snake_case)]
+fn AMBER() -> Color32 {
+    crate::map_colors::get().working_ink
+}
+#[allow(non_snake_case)]
+fn GREY() -> Color32 {
+    crate::map_colors::get().faint
+}
 /// The composer's selected-agent fill.
-const CHOSEN: Color32 = Color32::from_rgb(0xEA, 0xF3, 0xF0);
+#[allow(non_snake_case)]
+fn CHOSEN() -> Color32 {
+    crate::map_colors::get().selected
+}
 /// An agent card's height, as designed.
 const ROW_H: f32 = 66.0;
 
@@ -39,9 +75,9 @@ pub fn summary(targets: &[TargetInfo], error: Option<&str>) -> (String, Color32)
     let agents: Vec<&TargetInfo> = targets.iter().filter(|info| !info.new_agent).collect();
     if agents.is_empty() {
         if error.is_some() {
-            return ("agents unavailable".to_string(), DANGER);
+            return ("agents unavailable".to_string(), DANGER());
         }
-        return ("no agents".to_string(), FAINT);
+        return ("no agents".to_string(), FAINT());
     }
     let working = agents.iter().filter(|info| info.status.trim() == "working").count();
     let label = if working > 0 {
@@ -49,7 +85,7 @@ pub fn summary(targets: &[TargetInfo], error: Option<&str>) -> (String, Color32)
     } else {
         format!("{} agent{} · idle", agents.len(), plural(agents.len()))
     };
-    (label, if working > 0 { ACCENT } else { TEAL })
+    (label, if working > 0 { ACCENT() } else { TEAL() })
 }
 
 fn plural(n: usize) -> &'static str {
@@ -82,10 +118,10 @@ impl AgentState {
 
     pub fn color(self) -> Color32 {
         match self {
-            Self::Working => AMBER,
-            Self::Idle => TEAL,
-            Self::Blocked => DANGER,
-            Self::Unknown => GREY,
+            Self::Working => AMBER(),
+            Self::Idle => TEAL(),
+            Self::Blocked => DANGER(),
+            Self::Unknown => GREY(),
         }
     }
 
@@ -159,11 +195,11 @@ fn agent_row(ui: &mut egui::Ui, info: &TargetInfo, task: Option<&str>, chosen: b
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), sense);
     let hot = resp.hovered() && state.sendable();
     let (fill, stroke) = if chosen {
-        (CHOSEN, TEAL)
+        (CHOSEN(), TEAL())
     } else if hot {
-        (SOFT, BORDER)
+        (SOFT(), BORDER())
     } else {
-        (PANEL, BORDER)
+        (PANEL(), BORDER())
     };
     ui.painter().rect_filled(rect, CornerRadius::same(8), fill);
     ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
@@ -172,7 +208,7 @@ fn agent_row(ui: &mut egui::Ui, info: &TargetInfo, task: Option<&str>, chosen: b
     let room = (rect.width() - 34.0 - 16.0).max(40.0);
     let name = row_name(Some(info.label.as_str()), pane);
     let shown = widgets::elide_font(ui, &name, room, semibold(14.0));
-    ui.painter().text(egui::pos2(rect.left() + 34.0, rect.top() + 10.0), Align2::LEFT_TOP, shown, semibold(14.0), INK);
+    ui.painter().text(egui::pos2(rect.left() + 34.0, rect.top() + 10.0), Align2::LEFT_TOP, shown, semibold(14.0), INK());
     let status = status_line(kind, pane, &info.status);
     let mut line = status.clone();
     if state == AgentState::Blocked
@@ -224,18 +260,18 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let area =
         egui::Area::new(Id::new("agents_modal")).anchor(Align2::CENTER_CENTER, vec2(0.0, -24.0)).order(egui::Order::Foreground).show(ctx, |ui| {
             egui::Frame::NONE
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0, BORDER))
+                .fill(PANEL())
+                .stroke(Stroke::new(1.0, BORDER()))
                 .corner_radius(CornerRadius::same(10))
                 .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(46) })
                 .inner_margin(Margin::symmetric(20, 16))
                 .show(ui, |ui| {
                     ui.set_width(410.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("AGENTS").font(FontId::monospace(9.5)).color(ACCENT));
-                        ui.label(RichText::new(workspace).font(FontId::monospace(9.0)).color(MUTED));
+                        ui.label(RichText::new("AGENTS").font(FontId::monospace(9.5)).color(ACCENT()));
+                        ui.label(RichText::new(workspace).font(FontId::monospace(9.0)).color(MUTED()));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(egui::Button::new(RichText::new("×").size(16.0).color(MUTED)).frame(false)).clicked() {
+                            if ui.add(egui::Button::new(RichText::new("×").size(16.0).color(MUTED())).frame(false)).clicked() {
                                 close = true;
                             }
                         });
@@ -248,15 +284,15 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     } else {
                         format!("{} agent{} · all idle", agents.len(), plural(agents.len()))
                     };
-                    ui.label(RichText::new(summary).font(regular(12.0)).color(INK));
+                    ui.label(RichText::new(summary).font(regular(12.0)).color(INK()));
                     ui.add_space(10.0);
                     egui::ScrollArea::vertical().id_salt("agents_modal_scroll").max_height(400.0).auto_shrink([false, true]).show(ui, |ui| {
                         if let Some(error) = error.as_deref() {
-                            ui.label(RichText::new(error).font(regular(11.0)).color(DANGER));
+                            ui.label(RichText::new(error).font(regular(11.0)).color(DANGER()));
                             ui.add_space(8.0);
                         }
                         if agents.is_empty() && error.is_none() {
-                            ui.label(RichText::new("Start an agent from the composer's target picker.").font(regular(11.0)).color(MUTED));
+                            ui.label(RichText::new("Start an agent from the composer's target picker.").font(regular(11.0)).color(MUTED()));
                         }
                         for (info, task) in agents.iter().zip(&tasks) {
                             let chosen = selected.as_ref() == Some(&info.target);
@@ -268,11 +304,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     });
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new(RichText::new("Refresh").font(regular(11.0)).color(MUTED)).frame(false)).clicked() {
+                        if ui.add(egui::Button::new(RichText::new("Refresh").font(regular(11.0)).color(MUTED())).frame(false)).clicked() {
                             refresh = true;
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new("Click an agent to make it the prompt target.").font(FontId::monospace(8.5)).color(FAINT));
+                            ui.label(RichText::new("Click an agent to make it the prompt target.").font(FontId::monospace(8.5)).color(FAINT()));
                         });
                     });
                 });
@@ -307,10 +343,10 @@ mod tests {
         assert_eq!(AgentState::of("error"), AgentState::Blocked);
         assert_eq!(AgentState::of(""), AgentState::Unknown);
         assert_eq!(AgentState::of("unknown"), AgentState::Unknown);
-        assert_eq!(AgentState::Working.color(), Color32::from_rgb(0xA8, 0x6B, 0x12));
-        assert_eq!(AgentState::Idle.color(), Color32::from_rgb(0x2F, 0x6F, 0x6A));
-        assert_eq!(AgentState::Blocked.color(), Color32::from_rgb(0x9E, 0x3B, 0x2C));
-        assert_eq!(AgentState::Unknown.color(), Color32::from_rgb(0x8A, 0x85, 0x7D));
+        assert_eq!(AgentState::Working.color(), crate::map_colors::get().working_ink);
+        assert_eq!(AgentState::Idle.color(), TEAL());
+        assert_eq!(AgentState::Blocked.color(), DANGER());
+        assert_eq!(AgentState::Unknown.color(), GREY());
         assert!(AgentState::Working.sendable() && AgentState::Blocked.sendable() && AgentState::Idle.sendable());
         assert!(!AgentState::Unknown.sendable());
     }

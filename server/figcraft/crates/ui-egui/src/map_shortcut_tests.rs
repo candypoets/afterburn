@@ -539,3 +539,58 @@ fn command_backspace_deletes_the_selection_and_command_z_brings_it_back() {
         assert!(u.app.session.doc().unwrap().node(a).is_some());
     });
 }
+
+#[test]
+fn cmd_n_opens_new_page_and_shift_cmd_n_creates_a_workspace_without_leaving_the_map() {
+    crate::with_map_mode(|| {
+        let (mut u, _, _) = setup();
+        press(&mut u, Key::N, cmd());
+        assert!(u.app.new_page.open, "⌘N opens the New page dialog");
+        assert!(!u.app.new_workspace.open);
+        u.app.new_page.open = false;
+        u.frame(vec![]);
+
+        press(&mut u, Key::N, cmd() | Modifiers::SHIFT);
+        assert!(u.app.new_workspace.open, "⇧⌘N opens workspace creation");
+        assert!(u.app.new_workspace.new_window, "the new workspace opens in a new window tab");
+        assert!(!u.app.ui.home, "this window keeps its map");
+        assert!(!u.app.new_page.open);
+        // The modal draws over the map even with the sidebar hidden.
+        u.app.ws.pane_open = false;
+        u.frame(vec![]);
+        assert_eq!(u.ctx.memory(|m| m.top_modal_layer()).map(|layer| layer.id), Some(egui::Id::new("new_workspace_modal")), "the modal is drawn");
+        assert!(!u.app.ui.home);
+    });
+}
+
+#[test]
+fn shift_cmd_n_on_the_workspaces_screen_opens_there() {
+    crate::with_map_mode(|| {
+        let (mut u, _, _) = setup();
+        u.app.ui.home = true;
+        u.frame(vec![]);
+        press(&mut u, Key::N, cmd() | Modifiers::SHIFT);
+        assert!(u.app.new_workspace.open);
+        assert!(!u.app.new_workspace.new_window, "from the Workspaces screen the workspace opens in place");
+    });
+}
+
+#[test]
+fn the_sidebar_starts_with_the_pages_and_has_no_switcher_or_footer() {
+    crate::with_map_mode(|| {
+        let (mut u, _, _) = setup();
+        u.app.ws.pane_open = true;
+        u.frame(vec![]);
+        u.frame(vec![]);
+        assert!(u.ctx.read_response(egui::Id::new("page_tree_new_page")).is_some(), "the page tree is drawn");
+        assert!(u.ctx.read_response(egui::Id::new("workspace_switcher_head")).is_none(), "no workspace switcher");
+        for i in 0..2 {
+            assert!(u.ctx.read_response(egui::Id::new(("sidebar_footer", i))).is_none(), "no Settings or Add machine footer");
+        }
+        // Their actions stay in the palette and the menus.
+        for id in ["map.switchWorkspace", "map.preferences"] {
+            assert!(crate::map_action_catalog::find(id).is_some_and(|a| crate::map_action_catalog::enabled(&u.app, a)), "{id}");
+        }
+        assert!(crate::native_menu::enabled(&u.app, crate::native_menu::ADD_MACHINE));
+    });
+}

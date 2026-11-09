@@ -5,11 +5,26 @@ use egui::{Align2, Color32, CornerRadius, FontId, Id, Margin, RichText, Stroke, 
 use crate::FigApp;
 use crate::theme::{regular, semibold};
 
-const PANEL: Color32 = Color32::WHITE;
-const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
-const TEXT: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const DANGER: Color32 = Color32::from_rgb(0x9E, 0x3B, 0x2C);
+#[allow(non_snake_case)]
+fn PANEL() -> Color32 {
+    crate::map_colors::get().panel
+}
+#[allow(non_snake_case)]
+fn BORDER() -> Color32 {
+    crate::map_colors::get().border
+}
+#[allow(non_snake_case)]
+fn TEXT() -> Color32 {
+    crate::map_colors::get().ink
+}
+#[allow(non_snake_case)]
+fn MUTED() -> Color32 {
+    crate::map_colors::get().muted
+}
+#[allow(non_snake_case)]
+fn DANGER() -> Color32 {
+    crate::map_colors::get().danger
+}
 
 /// Draw the confirmation when a page deletion is pending.
 pub fn show(app: &mut FigApp, ctx: &egui::Context) {
@@ -19,30 +34,30 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     let mut delete = false;
     egui::Area::new(Id::new("page_delete_modal")).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0)).order(egui::Order::Foreground).show(ctx, |ui| {
         egui::Frame::NONE
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0, BORDER))
+            .fill(PANEL())
+            .stroke(Stroke::new(1.0, BORDER()))
             .corner_radius(CornerRadius::same(10))
             .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(46) })
             .inner_margin(Margin::symmetric(20, 16))
             .show(ui, |ui| {
                 ui.set_width(380.0);
-                ui.label(RichText::new("DELETE PAGE").font(FontId::monospace(9.5)).color(DANGER));
+                ui.label(RichText::new("DELETE PAGE").font(FontId::monospace(9.5)).color(DANGER()));
                 ui.add_space(8.0);
-                ui.label(RichText::new(format!("Delete “{name}”?")).font(semibold(17.0)).color(TEXT));
+                ui.label(RichText::new(format!("Delete “{name}”?")).font(semibold(17.0)).color(TEXT()));
                 ui.add_space(5.0);
                 ui.label(
                     RichText::new("Its cards, comments and subpages are removed from the live map. This cannot be undone from the app.")
                         .font(regular(11.5))
-                        .color(MUTED),
+                        .color(MUTED()),
                 );
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new(RichText::new("Cancel").font(regular(11.5)).color(MUTED)).frame(false)).clicked() {
+                    if ui.add(egui::Button::new(RichText::new("Cancel").font(regular(11.5)).color(MUTED())).frame(false)).clicked() {
                         cancel = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let button = egui::Button::new(RichText::new("Delete page").font(semibold(11.5)).color(Color32::WHITE))
-                            .fill(DANGER)
+                            .fill(DANGER())
                             .corner_radius(CornerRadius::same(6))
                             .min_size(vec2(110.0, 32.0));
                         if ui.add(button).clicked() {

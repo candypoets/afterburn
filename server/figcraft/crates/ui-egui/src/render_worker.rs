@@ -37,6 +37,9 @@ pub struct Job {
     pub solo: Option<NodeId>,
     /// Soft-proof sRGB: stripe the colours sRGB can't show.
     pub proof: bool,
+    /// The paper drawn instead of the page's own background (the map's colour theme; see
+    /// `canvas::map_paper`).
+    pub background: Option<figcraft_color::Color>,
     /// The document's [`figcraft_engine::DocState::uid`]: images of other files are never shown.
     pub uid: u64,
     /// A coarse preview may come first when the zoom changes (not in pixel preview, whose pixels
@@ -95,7 +98,7 @@ fn run(job: &Job, view: &View, retained: &mut Retained, coarse: bool) -> Option<
         skip: job.skip.clone(),
         solo: job.solo,
         lod: true,
-        ..Default::default()
+        background: job.background,
     };
     let (view, pix, work) = retained.render(&job.doc, job.page, view, &opts)?;
     let mut image = screen_image(pix, job.doc.color_profile);

@@ -292,7 +292,10 @@ fn cmd_comma_settings_flip_with_enter() {
         let view = crate::map_palette::view(&u.app, "");
         let titles: Vec<_> = view.sections.iter().map(|s| s.title.clone().unwrap_or_default()).collect();
         assert_eq!(titles, ["MAP", "APP"]);
-        assert_eq!(labels(&u), ["Comments", "Collaborator cursors", "Workspace pane", "Theme", "Reduce motion", "Your name in comments", "Language"]);
+        assert_eq!(
+            labels(&u),
+            ["Comments", "Collaborator cursors", "Workspace pane", "Colour theme", "Reduce motion", "Your name in comments", "Language"]
+        );
         assert_eq!(view.count, "7 settings");
 
         let comments = u.app.session.ds().unwrap().view.comments;
@@ -315,9 +318,14 @@ fn cmd_comma_settings_flip_with_enter() {
             press(&mut u, Key::Backspace, Modifiers::NONE);
         }
         type_text(&mut u, "theme");
-        assert_eq!(crate::map_palette::view(&u.app, "theme").items().next().unwrap().right, Right::Theme(0));
+        let current = crate::map_palette::current_theme(&u.app).name().to_string();
+        assert_eq!(crate::map_palette::view(&u.app, "theme").items().next().unwrap().right, Right::Value { text: current, more: true });
+        // Colour theme ›: the themes' list, in the box; ⌫ comes back with the filter.
         press(&mut u, Key::Enter, Modifiers::NONE);
-        assert!(u.app.session.prefs.theme.eq_ignore_ascii_case("Light"), "↵ steps to the next theme: {}", u.app.session.prefs.theme);
+        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Theme));
+        press(&mut u, Key::Backspace, Modifiers::NONE);
+        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Settings));
+        assert_eq!(u.app.ui.palette.as_deref(), Some("theme"));
 
         // Your name: the field holds it, ↵ saves it and goes back to the settings.
         for _ in 0..5 {
@@ -378,5 +386,144 @@ fn the_status_bars_agent_count_opens_the_agents() {
         press(&mut u, Key::Enter, Modifiers::NONE);
         assert!(u.app.ui.palette.is_none());
         assert_eq!(u.app.compose.target.as_ref(), Some(&u.app.compose.targets[1].target));
+    });
+}
+
+use crate::map_colors::Theme;
+
+/// The themes' list, opened from the actions by typing "theme" and choosing Colour theme….
+fn open_theme_list(u: &mut Ui) {
+    press(u, Key::P, cmd() | Modifiers::SHIFT);
+    type_text(u, "theme");
+    press(u, Key::Enter, Modifiers::NONE);
+    assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Theme));
+}
+
+#[test]
+fn typing_theme_lists_the_appearance_actions_then_settings() {
+    crate::with_map_mode(|| {
+        let (mut u, _) = setup();
+        press(&mut u, Key::P, cmd() | Modifiers::SHIFT);
+        type_text(&mut u, "theme");
+        let view = crate::map_palette::view(&u.app, ">theme");
+        assert_eq!(view.sections[0].title.as_deref(), Some("Appearance"));
+        assert_eq!(labels(&u), ["Colour theme…", "Next colour theme", "Follow system appearance", "Settings"]);
+        let rows: Vec<_> = view.items().map(|item| item.right.clone()).collect();
+        assert_eq!(rows[0], Right::Tag { text: "Afterburn".into(), ink: crate::map_palette::Ink::Teal, check: false, more: true });
+        assert!(matches!(rows[2], Right::Toggle(_)));
+        assert_eq!(rows[3], Right::Value { text: String::new(), more: true });
+        // Next colour theme flips and the box stays.
+        press(&mut u, Key::ArrowDown, Modifiers::NONE);
+        press(&mut u, Key::Enter, Modifiers::NONE);
+        assert_eq!(u.app.session.prefs.color_theme, "afterburn");
+        assert_eq!(crate::map_palette::current_theme(&u.app), Theme::AfterburnNight);
+        assert!(u.app.ui.palette.is_some());
+    });
+}
+
+#[test]
+fn the_theme_list_previews_applies_and_escapes() {
+    crate::with_map_mode(|| {
+        let (mut u, _) = setup();
+        u.app.run("view.themeLight", json!({}));
+        u.app.run("view.colorTheme", json!({"theme": "afterburn"}));
+        u.frame(vec![]);
+        open_theme_list(&mut u);
+        let view = crate::map_palette::view(&u.app, "");
+        assert_eq!(view.chip.as_deref(), Some("Colour theme"));
+        assert_eq!(view.placeholder, "Filter themes…");
+        assert_eq!(labels(&u), ["Afterburn", "Afterburn Night", "Classic", "Classic Dark", "Follow the system"]);
+        assert_eq!(view.count, "4 themes");
+        assert_eq!(view.hints, "↑↓ preview   ↵ apply   ⌫ back   esc keep Afterburn");
+        let current: Vec<_> = view.items().map(|item| matches!(item.right, Right::Colour { current: true, .. })).collect();
+        assert_eq!(current, [true, false, false, false, false], "the current theme wears the check");
+        assert_eq!(view.items().nth(1).unwrap().sub.as_deref(), Some("Dark"));
+
+        // ↓ previews Afterburn Night live; the next frame draws with it.
+        press(&mut u, Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(u.app.ui.theme_preview, Some(Theme::AfterburnNight));
+        u.frame(vec![]);
+        assert_eq!(crate::map_colors::theme(), Theme::AfterburnNight);
+        assert_eq!(u.app.session.prefs.theme, "light", "a preview changes no preference");
+
+        // Escape keeps the current theme.
+        press(&mut u, Key::Escape, Modifiers::NONE);
+        assert!(u.app.ui.palette.is_none());
+        assert_eq!(u.app.ui.theme_preview, None);
+        u.frame(vec![]);
+        assert_eq!(crate::map_colors::theme(), Theme::Afterburn);
+
+        // ⌫ goes back to the actions and drops the preview too.
+        open_theme_list(&mut u);
+        press(&mut u, Key::ArrowDown, Modifiers::NONE);
+        assert!(u.app.ui.theme_preview.is_some());
+        press(&mut u, Key::Backspace, Modifiers::NONE);
+        assert!(crate::map_palette::listing_actions(&u.app));
+        assert_eq!(u.app.ui.theme_preview, None);
+        press(&mut u, Key::Escape, Modifiers::NONE);
+
+        // ↵ applies Classic Dark: the family and the lightness.
+        open_theme_list(&mut u);
+        for _ in 0..3 {
+            press(&mut u, Key::ArrowDown, Modifiers::NONE);
+        }
+        assert_eq!(u.app.ui.theme_preview, Some(Theme::ClassicDark));
+        press(&mut u, Key::Enter, Modifiers::NONE);
+        assert!(u.app.ui.palette.is_none());
+        assert_eq!(u.app.ui.theme_preview, None);
+        assert_eq!((u.app.session.prefs.color_theme.as_str(), u.app.session.prefs.theme.as_str()), ("classic", "dark"));
+        u.frame(vec![]);
+        assert_eq!(crate::map_colors::theme(), Theme::ClassicDark);
+    });
+}
+
+#[test]
+fn follow_the_system_keeps_the_family_and_its_lightness_rule() {
+    crate::with_map_mode(|| {
+        let (mut u, _) = setup();
+        u.app.run("view.themeLight", json!({}));
+        u.frame(vec![]);
+        open_theme_list(&mut u);
+        // The toggle row under the themes: on, then back to the lightness shown now.
+        for _ in 0..4 {
+            press(&mut u, Key::ArrowDown, Modifiers::NONE);
+        }
+        assert_eq!(u.app.ui.theme_preview, None, "the toggle previews nothing");
+        let follow = crate::map_palette::view(&u.app, "").items().last().cloned().unwrap();
+        assert_eq!(follow.sub.as_deref(), Some("Afterburn by day · Afterburn Night by night"));
+        assert_eq!(follow.right, Right::Toggle(false));
+        press(&mut u, Key::Enter, Modifiers::NONE);
+        assert_eq!(u.app.session.prefs.theme, "system");
+        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Theme), "the box stays open");
+        // The test screen has no system theme: it reads as light.
+        u.frame(vec![]);
+        assert!(!u.app.ui.dark);
+        // Following the system, a theme as light as the system now keeps following it.
+        press(&mut u, Key::ArrowUp, Modifiers::NONE);
+        press(&mut u, Key::ArrowUp, Modifiers::NONE);
+        assert_eq!(u.app.ui.theme_preview, Some(Theme::Classic));
+        press(&mut u, Key::Enter, Modifiers::NONE);
+        assert_eq!((u.app.session.prefs.color_theme.as_str(), u.app.session.prefs.theme.as_str()), ("classic", "system"));
+        // A theme of the other lightness turns following off.
+        crate::map_palette::apply_theme(&mut u.app, Theme::AfterburnNight);
+        assert_eq!((u.app.session.prefs.color_theme.as_str(), u.app.session.prefs.theme.as_str()), ("afterburn", "dark"));
+        // Turning it off keeps what the window shows.
+        crate::map_palette::follow_system(&mut u.app);
+        assert_eq!(u.app.session.prefs.theme, "system");
+        u.frame(vec![]);
+        crate::map_palette::follow_system(&mut u.app);
+        assert_eq!(u.app.session.prefs.theme, "light");
+    });
+}
+
+#[test]
+fn settings_colour_theme_opens_the_same_list() {
+    crate::with_map_mode(|| {
+        let (mut u, _) = setup();
+        press(&mut u, Key::Comma, cmd());
+        type_text(&mut u, "colour");
+        press(&mut u, Key::Enter, Modifiers::NONE);
+        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Theme));
+        assert_eq!(u.app.ui.palette_hi, 0, "the current theme (Afterburn) is highlighted");
     });
 }

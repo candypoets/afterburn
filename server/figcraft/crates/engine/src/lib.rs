@@ -616,6 +616,9 @@ pub struct Prefs {
     pub show_dimensions: bool,
     /// "system" by default; an explicit "light" or "dark" choice stays saved.
     pub theme: String,
+    /// The colour theme's family, lit by [`theme`](Self::theme): "afterburn" (the default:
+    /// Afterburn, and Afterburn Night when dark) or "classic" (Classic, Classic Dark).
+    pub color_theme: String,
     /// The widths of the main window's left and right panels (the interface keeps them within its
     /// limits; other windows have their own while they are open).
     pub panel_widths: (f32, f32),
@@ -704,6 +707,7 @@ impl Default for Prefs {
             number_keys_opacity: true,
             show_dimensions: true,
             theme: "system".into(),
+            color_theme: "afterburn".into(),
             panel_widths: (240.0, 240.0),
             pages_height: None,
             language: "system".into(),

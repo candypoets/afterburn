@@ -21,12 +21,30 @@ use crate::workspaces;
 /// The node metadata key that points a component at its detail page.
 pub const DETAIL_PAGE_KEY: &str = "mindmap.detail_page";
 
-const PANEL: Color32 = Color32::WHITE;
-const BORDER: Color32 = Color32::from_rgb(0xE3, 0xE2, 0xDF);
-const INK: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
-const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6C, 0x68);
-const FAINT: Color32 = Color32::from_rgb(0x9A, 0x97, 0x91);
-const ACCENT: Color32 = Color32::from_rgb(0xB5, 0x45, 0x2F);
+#[allow(non_snake_case)]
+fn PANEL() -> Color32 {
+    crate::map_colors::get().panel
+}
+#[allow(non_snake_case)]
+fn BORDER() -> Color32 {
+    crate::map_colors::get().border
+}
+#[allow(non_snake_case)]
+fn INK() -> Color32 {
+    crate::map_colors::get().ink
+}
+#[allow(non_snake_case)]
+fn MUTED() -> Color32 {
+    crate::map_colors::get().muted
+}
+#[allow(non_snake_case)]
+fn FAINT() -> Color32 {
+    crate::map_colors::get().faint
+}
+#[allow(non_snake_case)]
+fn ACCENT() -> Color32 {
+    crate::map_colors::get().accent
+}
 
 /// The component a new page is generated from.
 #[derive(Clone, Debug)]
@@ -122,17 +140,17 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
 
     egui::Area::new(Id::new("new_page_modal")).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0)).order(egui::Order::Foreground).show(ctx, |ui| {
         egui::Frame::NONE
-            .fill(PANEL)
-            .stroke(Stroke::new(1.0, BORDER))
+            .fill(PANEL())
+            .stroke(Stroke::new(1.0, BORDER()))
             .corner_radius(CornerRadius::same(10))
             .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: Color32::from_black_alpha(46) })
             .inner_margin(Margin::symmetric(20, 16))
             .show(ui, |ui| {
                 ui.set_width(420.0);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("NEW PAGE").font(egui::FontId::monospace(9.5)).color(ACCENT));
+                    ui.label(RichText::new("NEW PAGE").font(egui::FontId::monospace(9.5)).color(ACCENT()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new(RichText::new("×").size(16.0).color(MUTED)).frame(false)).clicked() {
+                        if ui.add(egui::Button::new(RichText::new("×").size(16.0).color(MUTED())).frame(false)).clicked() {
                             close = true;
                         }
                     });
@@ -142,11 +160,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     ui.label(
                         RichText::new(format!("From component · {} · {}", source.node_name, source.page_name))
                             .font(egui::FontId::monospace(8.8))
-                            .color(ACCENT),
+                            .color(ACCENT()),
                     );
                 }
                 ui.add_space(10.0);
-                ui.label(RichText::new("Name").font(semibold(11.0)).color(INK));
+                ui.label(RichText::new("Name").font(semibold(11.0)).color(INK()));
                 ui.add_space(4.0);
                 let name = ui.add_enabled(
                     !created && !busy,
@@ -157,7 +175,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     app.new_page.focus = false;
                 }
                 ui.add_space(12.0);
-                ui.label(RichText::new("First prompt").font(semibold(11.0)).color(INK));
+                ui.label(RichText::new("First prompt").font(semibold(11.0)).color(INK()));
                 ui.add_space(4.0);
                 ui.add(
                     egui::TextEdit::multiline(&mut app.new_page.prompt)
@@ -167,15 +185,15 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                         .hint_text("What should this page become?"),
                 );
                 ui.add_space(12.0);
-                ui.label(RichText::new("Agent").font(semibold(11.0)).color(INK));
+                ui.label(RichText::new("Agent").font(semibold(11.0)).color(INK()));
                 ui.add_space(4.0);
                 if targets.is_empty() {
-                    ui.label(RichText::new("No agent list yet; choose one in the composer.").font(regular(11.0)).color(MUTED));
+                    ui.label(RichText::new("No agent list yet; choose one in the composer.").font(regular(11.0)).color(MUTED()));
                 } else {
                     let current =
                         selected.as_ref().map(|target| kind_label(target.kind()).to_string()).unwrap_or_else(|| "Choose an agent".to_string());
                     egui::ComboBox::from_id_salt("new_page_agent")
-                        .selected_text(RichText::new(current).font(regular(12.0)).color(INK))
+                        .selected_text(RichText::new(current).font(regular(12.0)).color(INK()))
                         .width(260.0)
                         .show_ui(ui, |ui| {
                             for info in &targets {
@@ -194,7 +212,7 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                 }
                 if let Some(error) = app.new_page.error.clone() {
                     ui.add_space(10.0);
-                    ui.label(RichText::new(error).font(regular(11.0)).color(ACCENT));
+                    ui.label(RichText::new(error).font(regular(11.0)).color(ACCENT()));
                 }
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
@@ -213,18 +231,18 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                         "Create and prompt"
                     };
                     let button = egui::Button::new(RichText::new(label).font(semibold(11.5)).color(Color32::WHITE))
-                        .fill(if can_create { ACCENT } else { Color32::from_rgb(0xC9, 0xB7, 0xB2) })
+                        .fill(if can_create { ACCENT() } else { Color32::from_rgb(0xC9, 0xB7, 0xB2) })
                         .corner_radius(CornerRadius::same(6))
                         .min_size(vec2(150.0, 34.0));
                     if ui.add_enabled(can_create, button).clicked() {
                         create = true;
                     }
                     ui.add_space(8.0);
-                    if ui.add_enabled(!busy, egui::Button::new(RichText::new("Cancel").font(regular(11.5)).color(MUTED)).frame(false)).clicked() {
+                    if ui.add_enabled(!busy, egui::Button::new(RichText::new("Cancel").font(regular(11.5)).color(MUTED())).frame(false)).clicked() {
                         close = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("The page is blank until the agent draws.").font(egui::FontId::monospace(8.5)).color(FAINT));
+                        ui.label(RichText::new("The page is blank until the agent draws.").font(egui::FontId::monospace(8.5)).color(FAINT()));
                     });
                 });
             });
