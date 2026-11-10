@@ -192,6 +192,8 @@ pub mod variable_ui;
 pub mod variables_panel;
 pub mod vector_panel;
 pub mod versions;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod video;
 pub mod widgets;
 pub mod window_tabs;
 pub mod windows;
@@ -360,6 +362,8 @@ mod variables_rename_tests;
 mod vector_panel_tests;
 #[cfg(test)]
 mod vector_tail_ui_tests;
+#[cfg(test)]
+mod video_tests;
 #[cfg(test)]
 mod web_clipboard_tests;
 #[cfg(test)]
@@ -741,6 +745,9 @@ pub struct UiState {
     pub batch_rename: Option<dialogs::BatchRenameUi>,
     pub left_collapsed: bool,
     pub comments: comments::CommentUi,
+    /// The clips playing on the map canvas.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub videos: video::Videos,
     pub versions: versions::VersionUi,
     /// The branch review dialog, while open.
     pub branch_review: Option<branch_ui::ReviewView>,
@@ -870,6 +877,8 @@ impl Default for UiState {
             batch_rename: None,
             left_collapsed: false,
             comments: comments::CommentUi::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            videos: video::Videos::default(),
             versions: versions::VersionUi::default(),
             branch_review: None,
             dev: dev_mode::DevUi::default(),

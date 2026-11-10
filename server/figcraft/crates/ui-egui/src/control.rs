@@ -289,6 +289,27 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
             Ok(v)
         }
         "ui.pointer" => pointer(app, p),
+        // A clip on the map canvas: `{id, action?: toggle|pause|seek, time? (ms)}`; replies with
+        // where the clip is. Without an action it only reports.
+        #[cfg(not(target_arch = "wasm32"))]
+        "ui.video" => {
+            let id = p.get("id").and_then(figcraft_engine::params::id_of).ok_or("`id` required")?;
+            let (_, clip, _) =
+                crate::video::cards(app).into_iter().find(|(card, _, _)| *card == id).ok_or("no video card with that id on this page")?;
+            match p.get("action").and_then(Value::as_str) {
+                Some("toggle") => crate::video::toggle(app, ctx, id, &clip),
+                Some("pause") => app.ui.videos.pause(id),
+                Some("seek") => app.ui.videos.seek(id, p.get("time").and_then(Value::as_u64).ok_or("`time` (ms) required")?),
+                Some(other) => return Err(format!("action: toggle|pause|seek, not {other}")),
+                None => {}
+            }
+            Ok(match app.ui.videos.snapshot(id) {
+                Some(s) => {
+                    json!({"status": format!("{:?}", s.status), "playing": s.playing, "positionMs": s.position_ms, "hasFrame": s.has_frame, "durationMs": clip.duration_ms})
+                }
+                None => json!({"status": "Idle", "playing": false, "positionMs": 0, "hasFrame": false, "durationMs": clip.duration_ms}),
+            })
+        }
         "ui.key" => {
             let key = p.get("key").and_then(Value::as_str).ok_or("`key` required")?;
             let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };

@@ -309,6 +309,30 @@ impl NodeDocuments {
         Ok((result, outgoing))
     }
 
+    /// A node-authored edit: `edit` runs engine commands on an isolated copy of the latest
+    /// authority, and the resulting property diff is one batch, as in [`Self::execute`]. The
+    /// commands are the node's own, so they skip the RPC allowlist (`media.add` places an image).
+    pub fn edit(
+        &mut self,
+        session: &str,
+        edit: impl FnOnce(&mut figcraft_engine::Session) -> Result<Value>,
+    ) -> Result<(Value, Vec<Outgoing>)> {
+        let mut s = self.get(session)?.clone();
+        let author = s.internal_peer()?;
+        let mut doc = s.server.document().clone();
+        doc.set_client_id(author);
+        let mut engine = figcraft_engine::Session::with_document(doc);
+        let result = edit(&mut engine)?;
+        let changes =
+            figcraft_collab::diff(s.server.replica(), engine.doc().map_err(collab_error)?)
+                .map_err(collab_error)?
+                .changes;
+        let outgoing = s.submit(author, changes)?;
+        s.server.leave(author);
+        self.commit(s)?;
+        Ok((result, outgoing))
+    }
+
     /// Trusted full-document import. Retains IDs, session identity, peers and ordering; clients
     /// receive a normal Changes batch. Do not expose this as a client-authored Changes bypass.
     pub fn replace(&mut self, session: &str, document: Document) -> Result<Vec<Outgoing>> {

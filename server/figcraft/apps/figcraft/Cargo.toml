@@ -36,6 +36,8 @@ windows = { version = "0.62", default-features = false, features = ["UI_ViewMana
 # EffectCraft and PhotoCraft) registers the handler behind a safe API (Objective-C interop needs
 # unsafe, which the workspace forbids). Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "macos")'.dependencies]
+# Video clips on the canvas play with their sound.
+figcraft-ui-egui = { workspace = true, features = ["video-audio"] }
 fmv-macos-events = "=0.1.0"
 # The map client's window gets an empty unified toolbar, which puts the traffic lights where native
 # apps have them. Only safe AppKit calls are used (no `unsafe`); eframe already links these crates.

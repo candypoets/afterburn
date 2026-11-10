@@ -285,6 +285,11 @@ pub fn show(app: &mut FigApp, ui: &mut Ui, worker: &mut Worker) {
         let image_rect = presented_image_rect(tl, v, zoom, ppp, pixel_preview);
         painter.image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+    // Clips playing on the map: their frames go over the page, under every other overlay.
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::map_mode() {
+        crate::video::canvas(app, ui, rect);
+    }
     app.session.tool.labels = overlays(app, &painter, &t);
     detail_badges(app, ui);
     if !crate::map_mode() {

@@ -18,7 +18,7 @@ afterburn-node mcp --path /absolute/worktree
 ```
 
 Tools: `inspect_document`, `get_node`, `create_node`, `set_properties`, `run_command`,
-`list_commands`, `screenshot`, `node_request`. Discover command parameters with `list_commands`.
+`list_commands`, `screenshot`, `add_video`, `node_request`. Discover command parameters with `list_commands`.
 `run_command` applies a FigCraft command through the authoritative session and broadcasts the
 changes. Use `command.batch` for selection-dependent steps. Inspect before and after editing, and
 look at your work with `screenshot` (a PNG of layers or a page; it writes nothing).
@@ -46,6 +46,17 @@ live content, then address the request there. A page-scoped job covers that page
 other pages are out of scope. Preserve card names and page IDs unless the task requires a
 change. Use existing components and layout conventions. Do not rebuild the whole map for a
 local edit.
+
+## Video
+
+`add_video {source, parent, x, y, width?, name?}` (node method `media.add`) puts a clip on the
+canvas. `source` is the clip's absolute path on the node's machine; `parent` is the page or card
+id. The node copies the clip to `.afterburn/media/<hash>.mp4` and adds a card filled with its
+first frame; the app plays it in place (play button, pause, seek). The app decodes Constrained
+Baseline H.264 in MP4; any other clip is converted with ffmpeg when the node's machine has it,
+else refused. Screenshots and exports show the first frame only. Move or resize the card as any
+layer; keep its `afterburn.video` plugin data. Commit the clip's file with the map, or other
+machines' checkouts get a card whose clip is missing.
 
 ## Page modes
 

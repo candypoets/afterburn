@@ -13,6 +13,7 @@ mod node_context;
 mod node_documents;
 mod node_git;
 mod node_herdr;
+mod node_media;
 mod node_migration;
 mod workspace;
 
@@ -71,7 +72,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         "help" | "--help" | "-h" => {
-            println!("afterburn-node serve [--bind 127.0.0.1:47822]\nafterburn-node request '<JSON>' [--address HOST:PORT]\nafterburn-node mcp [--path WORKTREE] [--address HOST:PORT]\n\nOne node per machine; remote clients use one SSH tunnel to its loopback socket.\nRequest methods: hello, host.status, host.ensure, workspaces, workspace.create, workspace.focus, open, init, send, diff, sync, sync_status, sync.prepare, sync.finish, session.inspect, session.command, session.save, merge.plan, merge.apply.\nHerdr installation requires host.ensure with install_herdr:true. Designs live in .afterburn/map.figcraft; no owner link or server key is needed.");
+            println!("afterburn-node serve [--bind 127.0.0.1:47822]\nafterburn-node request '<JSON>' [--address HOST:PORT]\nafterburn-node mcp [--path WORKTREE] [--address HOST:PORT]\n\nOne node per machine; remote clients use one SSH tunnel to its loopback socket.\nRequest methods: hello, host.status, host.ensure, workspaces, workspace.create, workspace.focus, open, init, send, diff, sync, sync_status, sync.prepare, sync.finish, session.inspect, session.command, session.save, media.add, media.read, merge.plan, merge.apply.\nHerdr installation requires host.ensure with install_herdr:true. Designs live in .afterburn/map.figcraft; no owner link or server key is needed.");
             Ok(())
         }
         command => Err(Error::new(format!("unknown command {command:?}"))),
@@ -179,6 +180,7 @@ fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
                 {"name":"screenshot","description":"PNG of layers or a page of the live design, to check what you drew; nothing is written","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":{"type":"integer"}},"page":{"type":"integer"},"scale":{"type":"number"}}}},
                 {"name":"run_command","description":"Execute a FigCraft command in the live worktree session","inputSchema":{"type":"object","properties":{"command":{"type":"string"},"params":{"type":"object"}},"required":["command"]}},
                 {"name":"list_commands","description":"Discover FigCraft commands and parameter schemas","inputSchema":{"type":"object","properties":{"filter":{"type":"string"}}}},
+                {"name":"add_video","description":"Put a video clip on the canvas (media.add): source is the clip's absolute path on the node's machine; parent is the page or card id; x, y are relative to it. The card shows the first frame; the app plays the clip in place. Screenshots show the first frame only","inputSchema":{"type":"object","properties":{"source":{"type":"string"},"parent":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number"},"name":{"type":"string"}},"required":["source","parent"]}},
                 {"name":"node_request","description":"Call node diff, sync.prepare, sync.finish, merge or other worktree APIs","inputSchema":{"type":"object","properties":{"request":{"type":"object"}},"required":["request"]}}
             ]}),
             "tools/call" => {
@@ -218,6 +220,14 @@ fn mcp_proxy(address: &str, path: Option<&str>) -> Result<()> {
                     }
                     "screenshot" => {
                         json!({"method":"session.render","ids":args["ids"],"page":args["page"],"scale":args["scale"]})
+                    }
+                    "add_video" => {
+                        let mut request = args.clone();
+                        if !request.is_object() {
+                            request = json!({});
+                        }
+                        request["method"] = json!("media.add");
+                        request
                     }
                     "node_request" => args["request"].clone(),
                     _ => json!({"method":"unknown"}),

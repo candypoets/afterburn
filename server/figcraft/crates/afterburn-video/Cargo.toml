@@ -1,0 +1,19 @@
+[package]
+name = "afterburn-video"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Video clips on the Afterburn canvas: MP4 demux and H.264 decode for the node (poster, checks) and the app (playback)"
+
+[dependencies]
+# MP4 container (pure Rust, MIT).
+mp4 = "0.14"
+# H.264 decode: Cisco's OpenH264 (BSD-2-Clause), built from source by the crate.
+openh264 = "0.9"
+image = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

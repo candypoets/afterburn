@@ -466,6 +466,24 @@ impl Node {
                 self.deliver(&session, outgoing);
                 Ok(json!({"result":result}))
             }
+            // A video on the canvas: the clip goes to the worktree's media directory, its card
+            // (the first frame, tagged with the clip) to the live design.
+            "media.add" => {
+                let session = self.session(req)?;
+                crate::node_media::parent(req)?;
+                let worktree = lock(&self.docs)?.metadata(&session)?.worktree;
+                // Decoding (and converting) the clip takes a while: do it before taking the lock.
+                let stored = crate::node_media::store(&worktree, Path::new(required(req, "source")?))?;
+                let (result, outgoing) = lock(&self.docs)?
+                    .edit(&session, |engine| crate::node_media::place(engine, &stored, req))?;
+                self.deliver(&session, outgoing);
+                Ok(result)
+            }
+            "media.read" => {
+                let session = self.session(req)?;
+                let worktree = lock(&self.docs)?.metadata(&session)?.worktree;
+                crate::node_media::read(&worktree, req)
+            }
             "session.import" => {
                 let session = self.session(req)?;
                 let path = Path::new(required(req, "source")?);

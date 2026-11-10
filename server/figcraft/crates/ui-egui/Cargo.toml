@@ -30,6 +30,15 @@ image = { workspace = true }
 egui_extras = { workspace = true }
 web-time = "1.1.0"
 
+[features]
+# The sound of video clips on the canvas (rodio: CoreAudio on macOS; ALSA headers on Linux). The
+# desktop app turns it on for macOS; without it clips play silently.
+video-audio = ["dep:rodio"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+afterburn-video = { workspace = true }
+rodio = { version = "0.21", optional = true, default-features = false, features = ["playback", "symphonia-aac", "symphonia-isomp4"] }
+
 [build-dependencies]
 serde_json = { workspace = true }
 toml = "1"
