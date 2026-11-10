@@ -521,7 +521,13 @@ pub fn canvas(app: &mut FigApp, ui: &mut Ui, clip_rect: Rect) {
         }
         let player = app.ui.videos.players.get(&id);
         if let Some(texture) = player.and_then(|p| p.texture.as_ref()) {
-            painter.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), white);
+            // The frame covers the card as its poster does: cropped about the middle, never
+            // stretched, when the card is not the clip's shape (a film card as long as its cut).
+            let [tw, th] = texture.size();
+            let (frame, card) = (tw as f32 / (th as f32).max(1.0), rect.width() / rect.height().max(1.0));
+            let (u, v) = if card > frame { (1.0, frame / card) } else { (card / frame, 1.0) };
+            let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(u, v));
+            painter.image(texture.id(), rect, uv, white);
         }
         let scrub = player.and_then(|p| p.scrub);
         let (status, playing, position) = state.unwrap_or((Status::Ready, false, 0));

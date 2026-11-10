@@ -167,6 +167,7 @@ fn an_edit_renders_draws_and_redraws_in_place() {
         item(&doc, "shot one").unwrap(),
         item(&doc, "shot two").unwrap(),
     );
+    let first_one_width = doc.node(one).unwrap().width;
     assert_eq!(
         doc.node(two).unwrap().transform.translation().x,
         LANE_X + 1.5 * PPS
@@ -185,7 +186,38 @@ fn an_edit_renders_draws_and_redraws_in_place() {
     let doc = engine.doc().unwrap().clone();
     assert_eq!(item(&doc, "shot one"), Some(one), "a shot keeps its layer");
     assert_eq!(item(&doc, "shot two"), None, "a cut shot's layer goes");
-    assert_eq!(doc.node(one).unwrap().width, 3.0 * PPS - 1.0);
+    assert_eq!(doc.node(one).unwrap().width, 3.0 * PPS - 4.0);
+    assert_eq!(
+        first_one_width,
+        1.5 * PPS - 4.0,
+        "a card ends where the shot fading in begins"
+    );
+    // The cut's film card is as long as the cut and sits under its writer card; the voice
+    // line is drawn as its waveform, a bar per slice.
+    let film = doc.node(item(&doc, "cut one").unwrap()).unwrap();
+    assert_eq!(film.width, 3.0 * PPS - 4.0);
+    assert_eq!(
+        film.transform.translation().x,
+        doc.node(one).unwrap().transform.translation().x
+    );
+    let voice = doc.node(item(&doc, "voice hello").unwrap()).unwrap();
+    let bars = voice
+        .children
+        .iter()
+        .filter(|id| {
+            doc.node(**id)
+                .unwrap()
+                .plugin_data
+                .get(ITEM_KEY)
+                .is_some_and(|key| key.starts_with("voice bar hello "))
+        })
+        .count();
+    assert_eq!(bars, rebuilt.waves[0].len());
+    assert!(
+        bars >= 5 && rebuilt.waves[0].iter().any(|level| *level > 0.5),
+        "{:?}",
+        rebuilt.waves[0]
+    );
     // A shot is a frame holding its words: the map selects it as one card.
     let shot = doc.node(one).unwrap();
     assert!(matches!(shot.kind, figcraft_doc::NodeKind::Frame));

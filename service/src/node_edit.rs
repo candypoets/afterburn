@@ -39,15 +39,13 @@ const MAX_CLIPS: usize = 200;
 const MAX_SECONDS: f64 = 600.0;
 /// Canvas units per second of the timeline picture.
 const PPS: f64 = 40.0;
-const LANE_X: f64 = 120.0;
-/// A cut's card on the canvas: its clip's size, and the space between cards.
-const CUT_W: f64 = 208.0;
-const CUT_H: f64 = 117.0;
-const CUT_GAP: f64 = 12.0;
-const SHOT_COLORS: [&str; 6] = [
-    "#3E4A57", "#557060", "#7A4A3C", "#4C5480", "#8A6A2C", "#5C5C5C",
-];
-
+const LANE_X: f64 = 228.0;
+/// A cut's film card in the Cutter lane.
+const FILM_H: f64 = 122.0;
+/// One bar of the voice's waveform, and the room before the next.
+const BAR_W: f64 = 3.0;
+const BAR_STEP: f64 = 6.0;
+const WAVE_H: f64 = 36.0;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Edit {
@@ -633,6 +631,44 @@ pub struct Built {
     pub take: Stored,
     pub probe: Probe,
     pub cuts: Vec<Stored>,
+    /// The loudness of each voice segment over time, 0 to 1: one value per bar of its waveform.
+    pub waves: Vec<Vec<f64>>,
+}
+
+/// How loud `path` is over time: `bars` values from 0 to 1, the peak of each slice. A file ffmpeg
+/// cannot read gives a flat line: the picture is a convenience, never a gate.
+fn peaks(path: &Path, bars: usize) -> Vec<f64> {
+    let samples: Vec<i16> = Command::new("ffmpeg")
+        .args(["-nostdin", "-loglevel", "error", "-i"])
+        .arg(path)
+        .args(["-ac", "1", "-ar", "4000", "-f", "s16le", "-"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map(|output| {
+            output
+                .stdout
+                .chunks_exact(2)
+                .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+                .collect()
+        })
+        .unwrap_or_default();
+    if samples.is_empty() || bars == 0 {
+        return vec![0.0; bars];
+    }
+    let per_bar = samples.len().div_ceil(bars).max(1);
+    let mut values: Vec<f64> = samples
+        .chunks(per_bar)
+        .map(|slice| {
+            slice
+                .iter()
+                .map(|sample| f64::from(sample.unsigned_abs()))
+                .fold(0.0, f64::max)
+        })
+        .collect();
+    values.resize(bars, 0.0);
+    let top = values.iter().copied().fold(1.0, f64::max);
+    values.iter().map(|value| value / top).collect()
 }
 
 /// One cut on its own: the source from `in` to `out`, small and silent, in the format the app
@@ -696,7 +732,8 @@ pub fn build(worktree: &Path, raw: &Value) -> Result<Built> {
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch)?;
     let take = scratch.join("take.mp4");
-    let built: Result<(Stored, Probe, Vec<Stored>)> = (|| {
+    type Rendered = (Stored, Probe, Vec<Stored>, Vec<Vec<f64>>);
+    let built: Result<Rendered> = (|| {
         render(&plan, &scratch, &take)?;
         let probe = probe(&take)?;
         check_render(&plan, &probe).map_err(refused)?;
@@ -708,10 +745,20 @@ pub fn build(worktree: &Path, raw: &Value) -> Result<Built> {
             render_cut(&plan, index, &file)?;
             cuts.push(crate::node_media::store(worktree, &file)?);
         }
-        Ok((stored, probe, cuts))
+        let waves = plan
+            .voice
+            .iter()
+            .map(|(path, length)| {
+                peaks(
+                    path,
+                    ((length * PPS / BAR_STEP).floor() as usize).clamp(1, 4000),
+                )
+            })
+            .collect();
+        Ok((stored, probe, cuts, waves))
     })();
     let _ = std::fs::remove_dir_all(&scratch);
-    let (stored, probe, cuts) = built?;
+    let (stored, probe, cuts, waves) = built?;
     // Only an edit that passed every gate becomes the file.
     let file = dir.join(format!("{}.json", plan.edit.name));
     let partial = dir.join(format!(".{}.json.part", plan.edit.name));
@@ -725,6 +772,7 @@ pub fn build(worktree: &Path, raw: &Value) -> Result<Built> {
         take: stored,
         probe,
         cuts,
+        waves,
     })
 }
 
@@ -762,19 +810,8 @@ struct Old {
 
 struct Draw<'a> {
     engine: &'a mut figcraft_engine::Session,
-    root: u64,
     /// The layers of the last apply, by what they draw.
     old: BTreeMap<String, Old>,
-}
-
-/// A box of the timeline: a frame, so the map selects it as one card, with its words inside.
-struct Block<'a> {
-    key: &'a str,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    fill: &'a str,
 }
 
 impl Draw<'_> {
@@ -885,30 +922,6 @@ impl Draw<'_> {
             }),
         )
     }
-
-    fn rect(&mut self, key: &str, x: f64, y: f64, w: f64, h: f64, fill: &str) -> Result<u64> {
-        self.item(
-            self.root,
-            key,
-            "rectangle",
-            x,
-            y,
-            Some((w, h)),
-            json!({"fill": fill, "cornerRadius": 4.0}),
-        )
-    }
-
-    fn block(&mut self, block: &Block<'_>) -> Result<u64> {
-        self.item(
-            self.root,
-            block.key,
-            "frame",
-            block.x,
-            block.y,
-            Some((block.w, block.h)),
-            json!({"fill": block.fill, "cornerRadius": 4.0, "clip": true}),
-        )
-    }
 }
 
 const WORDS_SIZE: f64 = 9.0;
@@ -940,10 +953,8 @@ fn words_height(text: &str, width: f64) -> f64 {
 pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) -> Result<Value> {
     let (plan, stored, probe) = (&built.plan, &built.take, &built.probe);
     let edit = &plan.edit;
-    let cuts_in_row = edit.clips.len().clamp(1, 8) as f64;
-    let width = (LANE_X + plan.total * PPS + 32.0)
-        .max(64.0 + cuts_in_row * (CUT_W + CUT_GAP) - CUT_GAP)
-        .max(720.0);
+    let lane_w = plan.total * PPS;
+    let width = (LANE_X + lane_w + 40.0).max(760.0);
     let take_w = 480.0f64;
     let take_h = (take_w * f64::from(edit.height) / f64::from(edit.width.max(1))).round();
     // Lanes are as tall as their tallest block: all the words of a voice line or caption show.
@@ -952,29 +963,35 @@ pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) 
         .iter()
         .map(|segment| segment.text.as_deref().unwrap_or(&segment.id))
         .collect();
-    let voice_h = voice_words
-        .iter()
-        .enumerate()
-        .map(|(index, words)| {
-            words_height(
-                words,
-                plan.voice.get(index).map_or(0.0, |v| v.1) * PPS - 1.0,
-            )
-        })
-        .fold(28.0, f64::max);
+    let voice_h = WAVE_H
+        + voice_words
+            .iter()
+            .enumerate()
+            .map(|(index, words)| {
+                words_height(
+                    words,
+                    plan.voice.get(index).map_or(0.0, |v| v.1) * PPS - 1.0,
+                )
+            })
+            .fold(20.0, f64::max);
     let caption_h = edit
         .captions
         .iter()
         .map(|caption| words_height(&caption.text, (caption.until - caption.at) * PPS - 1.0))
-        .fold(28.0, f64::max);
-    let heights = [44.0, voice_h, caption_h, 28.0];
-    // The cuts, side by side under the take: eight to a row.
-    let cuts_y = 84.0 + take_h + 52.0;
-    let cut_rows = edit.clips.len().div_ceil(8).max(1) as f64;
-    let lanes_y = cuts_y + cut_rows * (CUT_H + 44.0 + CUT_GAP) + 28.0;
-    let lane = |index: usize| lanes_y + heights.iter().take(index).map(|h| h + 10.0).sum::<f64>();
-    let ruler = lane(4);
-    let height = ruler + 64.0;
+        .fold(24.0, f64::max);
+    // Writer, Cutter, Voice, Captioner, Composer: each lane and the room its blocks need.
+    let lanes = [
+        ("Writer", "#C09A4B", 34.0),
+        ("Cutter", "#1A1A1A", FILM_H),
+        ("Voice", "#507A62", voice_h),
+        ("Captioner", "#6E6C68", caption_h),
+        ("Composer", "#7B6BB0", 30.0),
+    ];
+    let lanes_y = 96.0;
+    let lane = |index: usize| lanes_y + lanes.iter().take(index).map(|l| l.2 + 20.0).sum::<f64>();
+    let ruler = lane(lanes.len()) - 4.0;
+    let take_y = ruler + 76.0;
+    let height = take_y + take_h + 56.0;
     let existing = frame_of(engine.doc().map_err(engine_error)?, &edit.name);
     let root = match existing {
         Some(id) => {
@@ -1016,6 +1033,7 @@ pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) 
             let kind = match node.kind {
                 figcraft_doc::NodeKind::Frame => "frame",
                 figcraft_doc::NodeKind::Rectangle => "rectangle",
+                figcraft_doc::NodeKind::Ellipse { .. } => "ellipse",
                 _ if node.kind.text().is_some() => "text",
                 _ => "other",
             };
@@ -1029,7 +1047,7 @@ pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) 
             ))
         })
         .collect();
-    let mut draw = Draw { engine, root, old };
+    let mut draw = Draw { engine, old };
     let (ink, grey, red) = ("#1A1A1A", "#6E6C68", "#B5452F");
     draw.text(
         root,
@@ -1058,15 +1076,326 @@ pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) 
         ink,
         false,
     )?;
-    // The take: the render, playable in place. Same layer every apply; its picture and clip change.
+    // The lanes: a pill names who owns each (a dot and the role), and a soft band holds its blocks.
+    // The bands go under everything else, whenever they were made.
+    let mut back = Vec::new();
+    for (index, (name, dot, tall)) in lanes.iter().enumerate() {
+        let y = lane(index);
+        let mid = y + tall / 2.0;
+        draw.item(
+            root,
+            &format!("lane pill {name}"),
+            "rectangle",
+            32.0,
+            mid - 17.0,
+            Some((178.0, 34.0)),
+            json!({"fill": "#FFFFFF", "stroke": "#E3E2DF", "strokeWeight": 1, "cornerRadius": 17.0}),
+        )?;
+        draw.item(
+            root,
+            &format!("lane dot {name}"),
+            "ellipse",
+            46.0,
+            mid - 4.0,
+            Some((8.0, 8.0)),
+            json!({"fill": dot}),
+        )?;
+        draw.text(
+            root,
+            &format!("lane {name}"),
+            62.0,
+            mid - 8.0,
+            name,
+            13.0,
+            ink,
+            false,
+        )?;
+        let band = draw.item(
+            root,
+            &format!("lane bg {name}"),
+            "rectangle",
+            LANE_X - 8.0,
+            y - 8.0,
+            Some((lane_w + 16.0, tall + 16.0)),
+            json!({"fill": "#F7F6F3", "cornerRadius": 8.0}),
+        )?;
+        back.push(band);
+    }
+    // A card runs from its shot's start to the next one's: where two shots crossfade, the
+    // earlier card ends where the later one begins, so cards sit side by side with a gap.
+    let shown = |index: usize| {
+        let start = plan.starts.get(index).copied().unwrap_or(0.0);
+        plan.starts.get(index + 1).copied().unwrap_or(plan.total) - start
+    };
+    // Writer: what each shot says, as a card as long as the shot.
+    for (index, cut) in edit.clips.iter().enumerate() {
+        let x = LANE_X + plan.starts.get(index).copied().unwrap_or(0.0) * PPS;
+        let w = shown(index) * PPS - 4.0;
+        let card = draw.item(
+            root,
+            &format!("shot {}", cut.id),
+            "frame",
+            x,
+            lane(0),
+            Some((w, 34.0)),
+            json!({"fill": "#FBF5E9", "stroke": "#E8D9BB", "strokeWeight": 1, "cornerRadius": 4.0, "clip": true}),
+        )?;
+        draw.text(
+            card,
+            &format!("shot title {}", cut.id),
+            9.0,
+            9.0,
+            cut.title.as_deref().unwrap_or(&cut.id),
+            12.0,
+            "#8A6A2C",
+            false,
+        )?;
+    }
+    // Cutter: each cut as a film card as long as the cut. Its clip plays in place; the card is a
+    // frame, so the map selects it whole and a comment lands on the cut.
+    let mut cut_clips = Vec::new();
+    for (index, cut) in edit.clips.iter().enumerate() {
+        let x = LANE_X + plan.starts.get(index).copied().unwrap_or(0.0) * PPS;
+        let w = shown(index) * PPS - 4.0;
+        let card = draw.item(
+            root,
+            &format!("cut {}", cut.id),
+            "frame",
+            x,
+            lane(1),
+            Some((w, FILM_H)),
+            json!({"fill": "#1F2421", "cornerRadius": 6.0, "clip": true}),
+        )?;
+        let clip = draw.item(
+            card,
+            &format!("cut clip {}", cut.id),
+            "rectangle",
+            0.0,
+            0.0,
+            Some((w, FILM_H)),
+            json!({"fill": "#101010", "cornerRadius": 0.0}),
+        )?;
+        cut_clips.push(clip);
+        // The film strip: a dark edge with sprocket holes above, the cut's number and length below.
+        draw.item(
+            card,
+            &format!("cut edge top {}", cut.id),
+            "rectangle",
+            0.0,
+            0.0,
+            Some((w, 16.0)),
+            json!({"fill": "#1A1A1AB8", "cornerRadius": 0.0}),
+        )?;
+        draw.item(
+            card,
+            &format!("cut edge foot {}", cut.id),
+            "rectangle",
+            0.0,
+            FILM_H - 26.0,
+            Some((w, 26.0)),
+            json!({"fill": "#1A1A1AB8", "cornerRadius": 0.0}),
+        )?;
+        let holes = ((w - 12.0) / 22.0).floor().max(1.0) as usize;
+        for hole in 0..holes {
+            draw.item(
+                card,
+                &format!("cut hole {} {hole}", cut.id),
+                "rectangle",
+                10.0 + hole as f64 * 22.0,
+                6.0,
+                Some((12.0, 4.0)),
+                json!({"fill": "#FFFFFF59", "cornerRadius": 1.5}),
+            )?;
+        }
+        draw.text(
+            card,
+            &format!("cut number {}", cut.id),
+            10.0,
+            FILM_H - 19.0,
+            &format!("{:02}", index + 1),
+            10.0,
+            "#FFFFFFD9",
+            true,
+        )?;
+        draw.text(
+            card,
+            &format!("cut length {}", cut.id),
+            w - 40.0,
+            FILM_H - 19.0,
+            &format!("{:.1}s", cut.out - cut.start),
+            10.0,
+            "#FFFFFFD9",
+            true,
+        )?;
+    }
+    // Voice: each line as its waveform over its words; a dashed rest where nobody speaks.
+    let rests = draw.item(
+        root,
+        "voice rest",
+        "frame",
+        LANE_X,
+        lane(2) + WAVE_H / 2.0 - 1.0,
+        Some((lane_w, 2.0)),
+        json!({"fills": [], "clip": true}),
+    )?;
+    back.push(rests);
+    for dash in 0..(lane_w / 9.0).ceil() as usize {
+        draw.item(
+            rests,
+            &format!("voice rest {dash}"),
+            "rectangle",
+            dash as f64 * 9.0,
+            0.25,
+            Some((4.0, 1.5)),
+            json!({"fill": "#8FB59E", "cornerRadius": 0.0}),
+        )?;
+    }
+    for (index, segment) in edit.voice.iter().enumerate() {
+        let length = plan.voice.get(index).map_or(0.0, |v| v.1);
+        let (x, w) = (LANE_X + segment.at * PPS, length * PPS - 1.0);
+        let block = draw.item(
+            root,
+            &format!("voice {}", segment.id),
+            "frame",
+            x,
+            lane(2),
+            Some((w, voice_h)),
+            json!({"fill": "#F7F6F3", "cornerRadius": 4.0, "clip": true}),
+        )?;
+        let wave = built.waves.get(index).map(Vec::as_slice).unwrap_or(&[]);
+        for (bar, level) in wave.iter().enumerate() {
+            let tall = (level * (WAVE_H - 4.0)).max(3.0);
+            draw.item(
+                block,
+                &format!("voice bar {} {bar}", segment.id),
+                "rectangle",
+                bar as f64 * BAR_STEP + 1.5,
+                (WAVE_H - tall) / 2.0,
+                Some((BAR_W, tall)),
+                json!({"fill": "#8FB59E", "cornerRadius": 1.5}),
+            )?;
+        }
+        let words = voice_words.get(index).copied().unwrap_or("");
+        draw.wrapped(
+            block,
+            &format!("voice text {}", segment.id),
+            2.0,
+            WAVE_H + 4.0,
+            w - 4.0,
+            words,
+            "#33513F",
+        )?;
+    }
+    // Captioner: each caption as a grey block with all of its words.
+    for (index, caption) in edit.captions.iter().enumerate() {
+        let (x, w) = (
+            LANE_X + caption.at * PPS,
+            (caption.until - caption.at) * PPS - 1.0,
+        );
+        let block = draw.item(
+            root,
+            &format!("caption {index}"),
+            "frame",
+            x,
+            lane(3),
+            Some((w, caption_h)),
+            json!({"fill": "#E3E2DF", "cornerRadius": 6.0, "clip": true}),
+        )?;
+        draw.wrapped(
+            block,
+            &format!("caption text {index}"),
+            6.0,
+            6.0,
+            w - 12.0,
+            &caption.text,
+            ink,
+        )?;
+    }
+    // Composer: the music under the whole edit.
+    if let Some(bed) = &edit.music {
+        let block = draw.item(
+            root,
+            "music",
+            "frame",
+            LANE_X,
+            lane(4),
+            Some((lane_w, 30.0)),
+            json!({"fill": "#F7F6F3", "cornerRadius": 8.0, "clip": true}),
+        )?;
+        draw.item(
+            block,
+            "music glow",
+            "rectangle",
+            0.0,
+            2.0,
+            Some((lane_w, 14.0)),
+            json!({"fill": "#B9B0D666", "cornerRadius": 7.0}),
+        )?;
+        draw.item(
+            block,
+            "music bar",
+            "rectangle",
+            0.0,
+            5.0,
+            Some((lane_w, 8.0)),
+            json!({"fill": "#9D8FC7", "cornerRadius": 4.0}),
+        )?;
+        draw.text(
+            block,
+            "music text",
+            2.0,
+            19.0,
+            &format!("{} · {:.0} dB", bed.source, bed.gain_db),
+            8.0,
+            grey,
+            true,
+        )?;
+    }
+    // The ruler: a tick a second, a longer one and its time every five.
+    for second in 0..=plan.total.floor() as u64 {
+        let x = LANE_X + second as f64 * PPS;
+        let major = second.is_multiple_of(5);
+        draw.item(
+            root,
+            &format!("tick {second}"),
+            "rectangle",
+            x,
+            ruler,
+            Some((1.0, if major { 12.0 } else { 6.0 })),
+            json!({"fill": "#B9B7B2", "cornerRadius": 0.0}),
+        )?;
+        if major {
+            draw.text(
+                root,
+                &format!("tick text {second}"),
+                x - 6.0,
+                ruler + 20.0,
+                &format!("{second}s"),
+                9.0,
+                grey,
+                true,
+            )?;
+        }
+    }
+    // The take: the whole edit rendered, playable in place. Same layer every apply.
+    draw.text(
+        root,
+        "take label",
+        32.0,
+        take_y - 24.0,
+        "THE TAKE · THE WHOLE EDIT, RENDERED",
+        10.0,
+        grey,
+        true,
+    )?;
     let take = draw.item(
         root,
         "take",
         "rectangle",
         32.0,
-        84.0,
+        take_y,
         Some((take_w, take_h)),
-        json!({"fill": "#101010", "cornerRadius": 0.0}),
+        json!({"fill": "#101010", "cornerRadius": 6.0}),
     )?;
     let numbers = format!(
         "length    {:.2}s\nloudness  {}\nsilence   {:.1}s\nblack     {:.1}s",
@@ -1081,8 +1410,8 @@ pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) 
         root,
         "probe label",
         32.0 + take_w + 24.0,
-        84.0,
-        "THE RENDER, MEASURED",
+        take_y,
+        "MEASURED",
         10.0,
         grey,
         true,
@@ -1091,248 +1420,27 @@ pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) 
         root,
         "probe",
         32.0 + take_w + 24.0,
-        104.0,
+        take_y + 20.0,
         &numbers,
         11.0,
         "#507A62",
         true,
     )?;
-    // Each cut as its own card: its clip (playable, showing its first frame) over its name and
-    // what it takes from its source. The card is a frame, so the map selects it whole.
-    draw.text(
-        root,
-        "cuts label",
-        32.0,
-        cuts_y - 22.0,
-        "THE CUTS · EACH PLAYS ON ITS OWN",
-        10.0,
-        grey,
-        true,
-    )?;
-    let mut cut_clips = Vec::new();
-    for (index, cut) in edit.clips.iter().enumerate() {
-        let (column, row) = ((index % 8) as f64, (index / 8) as f64);
-        let key = format!("cut {}", cut.id);
-        let card = draw.item(
-            root,
-            &key,
-            "frame",
-            32.0 + column * (CUT_W + CUT_GAP),
-            cuts_y + row * (CUT_H + 44.0 + CUT_GAP),
-            Some((CUT_W, CUT_H + 44.0)),
-            json!({"fill": "#FFFFFF", "stroke": "#E3E2DF", "strokeWeight": 1, "cornerRadius": 6.0, "clip": true}),
-        )?;
-        let clip = draw.item(
-            card,
-            &format!("cut clip {}", cut.id),
-            "rectangle",
-            0.0,
-            0.0,
-            Some((CUT_W, CUT_H)),
-            json!({"fill": "#101010", "cornerRadius": 0.0}),
-        )?;
-        cut_clips.push(clip);
-        draw.text(
-            card,
-            &format!("cut title {}", cut.id),
-            8.0,
-            CUT_H + 7.0,
-            &format!(
-                "{:02}  {}",
-                index + 1,
-                cut.title.as_deref().unwrap_or(&cut.id)
-            ),
-            11.0,
-            ink,
-            false,
-        )?;
-        let source = cut.source.rsplit('/').next().unwrap_or(&cut.source);
-        draw.text(
-            card,
-            &format!("cut range {}", cut.id),
-            8.0,
-            CUT_H + 25.0,
-            &format!(
-                "{:.1}s · {:.1}–{:.1} of {source}",
-                cut.out - cut.start,
-                cut.start,
-                cut.out
-            ),
-            9.0,
-            grey,
-            true,
-        )?;
-    }
-    // The lanes.
-    for (index, label) in ["SHOTS", "VOICE", "CAPTIONS", "MUSIC"].iter().enumerate() {
-        let tall = heights.get(index).copied().unwrap_or(28.0);
-        draw.text(
-            root,
-            &format!("lane {label}"),
-            32.0,
-            lane(index) + tall / 2.0 - 6.0,
-            label,
-            10.0,
-            grey,
-            true,
-        )?;
-        draw.rect(
-            &format!("lane bg {label}"),
-            LANE_X,
-            lane(index) - 4.0,
-            plan.total * PPS,
-            tall + 8.0,
-            "#F4F3F0",
-        )?;
-    }
-    for (index, cut) in edit.clips.iter().enumerate() {
-        let x = LANE_X + plan.starts.get(index).copied().unwrap_or(0.0) * PPS;
-        let w = (cut.out - cut.start) * PPS - 1.0;
-        let color = SHOT_COLORS
-            .get(index % SHOT_COLORS.len())
-            .copied()
-            .unwrap_or("#5C5C5C");
-        let key = format!("shot {}", cut.id);
-        let shot = draw.block(&Block {
-            key: &key,
-            x,
-            y: lane(0),
-            w,
-            h: 44.0,
-            fill: color,
-        })?;
-        draw.text(
-            shot,
-            &format!("shot title {}", cut.id),
-            6.0,
-            6.0,
-            cut.title.as_deref().unwrap_or(&cut.id),
-            11.0,
-            "#FFFFFF",
-            false,
-        )?;
-        draw.text(
-            shot,
-            &format!("shot length {}", cut.id),
-            6.0,
-            25.0,
-            &format!(
-                "{:.1}s · {:.1}–{:.1}",
-                cut.out - cut.start,
-                cut.start,
-                cut.out
-            ),
-            9.0,
-            "#FFFFFFB0",
-            true,
-        )?;
-    }
-    for (index, segment) in edit.voice.iter().enumerate() {
-        let length = plan.voice.get(index).map_or(0.0, |v| v.1);
-        let (x, w) = (LANE_X + segment.at * PPS, length * PPS - 1.0);
-        let key = format!("voice {}", segment.id);
-        let block = draw.block(&Block {
-            key: &key,
-            x,
-            y: lane(1),
-            w,
-            h: voice_h,
-            fill: "#CBDCD1",
-        })?;
-        let words = voice_words.get(index).copied().unwrap_or("");
-        draw.wrapped(
-            block,
-            &format!("voice text {}", segment.id),
-            5.0,
-            5.0,
-            w - 10.0,
-            words,
-            "#33513F",
-        )?;
-    }
-    for (index, caption) in edit.captions.iter().enumerate() {
-        let (x, w) = (
-            LANE_X + caption.at * PPS,
-            (caption.until - caption.at) * PPS - 1.0,
-        );
-        let key = format!("caption {index}");
-        let block = draw.block(&Block {
-            key: &key,
-            x,
-            y: lane(2),
-            w,
-            h: caption_h,
-            fill: "#E3E2DF",
-        })?;
-        draw.wrapped(
-            block,
-            &format!("caption text {index}"),
-            5.0,
-            5.0,
-            w - 10.0,
-            &caption.text,
-            ink,
-        )?;
-    }
-    if let Some(bed) = &edit.music {
-        let block = draw.block(&Block {
-            key: "music",
-            x: LANE_X,
-            y: lane(3),
-            w: plan.total * PPS,
-            h: 28.0,
-            fill: "#B9B0D6",
-        })?;
-        draw.text(
-            block,
-            "music text",
-            8.0,
-            8.0,
-            &format!("{} · {:.0} dB", bed.source, bed.gain_db),
-            9.0,
-            "#2F2850",
-            true,
-        )?;
-    }
-    let step = if plan.total > 120.0 {
-        30
-    } else if plan.total > 40.0 {
-        10
-    } else {
-        5
-    };
-    for second in (0..=plan.total.floor() as u64).step_by(step) {
-        let x = LANE_X + second as f64 * PPS;
-        draw.item(
-            root,
-            &format!("tick {second}"),
-            "rectangle",
-            x,
-            ruler,
-            Some((1.0, 6.0)),
-            json!({"fill": "#B9B7B2", "cornerRadius": 0.0}),
-        )?;
-        draw.text(
-            root,
-            &format!("tick text {second}"),
-            x - 4.0,
-            ruler + 9.0,
-            &format!("{second}s"),
-            9.0,
-            grey,
-            true,
-        )?;
-    }
     draw.text(
         root,
         "foot",
         32.0,
-        ruler + 34.0,
+        take_y + take_h + 22.0,
         "Generated by edit.apply from the file above. These layers are locked: change the cut list.",
         10.0,
         grey,
         true,
     )?;
+    for (index, id) in back.iter().enumerate() {
+        draw.engine
+            .execute("node.reorder", &json!({"id": id, "index": index}))
+            .map_err(engine_error)?;
+    }
     // What the last apply drew and this one does not goes away (children leave with their box).
     let gone: BTreeSet<u64> = draw.old.values().map(|old| old.id).collect();
     let tops: Vec<u64> = draw
@@ -1346,20 +1454,12 @@ pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) 
             .execute("edit.delete", &json!({"ids": tops}))
             .map_err(engine_error)?;
     }
-    // The take's picture and clip: set on the document, the layer stays.
+    // The take's and the cuts' pictures and clips: set on the document, the layers stay.
     let doc = engine.doc_mut().map_err(engine_error)?;
-    let (hash, _, _) = figcraft_format::add_image(doc, stored.poster_jpeg.clone())
-        .map_err(|e| Error::new(e.to_string()))?;
-    let tag = serde_json::to_string(&stored.clip)?;
-    let node = doc
-        .get_mut(NodeId(take))
-        .map_err(|e| Error::new(e.to_string()))?;
-    node.fills = vec![Paint::image(hash, ImageScaleMode::Fill)];
-    node.plugin_data.insert(VIDEO_KEY.to_string(), tag);
-    for (layer, cut) in cut_clips.iter().zip(&built.cuts) {
-        let (hash, _, _) = figcraft_format::add_image(doc, cut.poster_jpeg.clone())
+    for (layer, clip) in std::iter::once((&take, stored)).chain(cut_clips.iter().zip(&built.cuts)) {
+        let (hash, _, _) = figcraft_format::add_image(doc, clip.poster_jpeg.clone())
             .map_err(|e| Error::new(e.to_string()))?;
-        let tag = serde_json::to_string(&cut.clip)?;
+        let tag = serde_json::to_string(&clip.clip)?;
         let node = doc
             .get_mut(NodeId(*layer))
             .map_err(|e| Error::new(e.to_string()))?;
