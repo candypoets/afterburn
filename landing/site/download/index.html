@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Afterburn — Get it. Burn it.</title>
+<meta name="description" content="Download Afterburn for macOS, Windows and Linux. The app ships with its node: install, open a repo, burn.">
+<meta name="theme-color" content="#FFF4E6">
+<meta property="og:title" content="Afterburn — Get it. Burn it.">
+<meta property="og:description" content="The app ships with its node. Install, open a repo, burn.">
+<meta property="og:image" content="https://afterburn.nuts.cash/assets/poster.jpg">
+<meta property="og:url" content="https://afterburn.nuts.cash/download/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
+<link rel="icon" type="image/png" sizes="64x64" href="/assets/favicon-64.png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="preload" href="/fonts/jetbrains-mono-extrabolditalic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/download.css">
+</head>
+<body>
+<main class="download">
+  <nav class="nav">
+    <a class="brand" href="/" aria-label="Afterburn home">
+      <span class="icon" aria-hidden="true"><span>A</span></span>
+      <span class="wordmark">AFTERBURN</span>
+    </a>
+    <a class="back" href="/">← BACK HOME</a>
+  </nav>
+
+  <h1 class="headline">
+    <span class="cut design">GET IT.</span>
+    <span class="cut burn">BURN IT.</span>
+  </h1>
+
+  <p class="sub">The app ships with its node.<span class="only-wide"> Install, open a repo, burn.</span></p>
+
+  <section class="cards" aria-label="Download Afterburn">
+    <article class="card mac">
+      <span class="badge"><span class="only-wide">FOR THIS MAC</span><span class="only-narrow">DESKTOP APP</span></span>
+      <span class="disc mac" aria-hidden="true"></span>
+      <h2 class="os">macOS</h2>
+      <p class="detail">Apple silicon + Intel · .dmg</p>
+      <a class="btn dl" href="/download/afterburn-macos.dmg" download>DOWNLOAD .DMG</a>
+      <p class="foot"><a href="/download/release-notes.html">RELEASE NOTES</a> · <a href="/download/SHA256SUMS">SHA-256</a></p>
+    </article>
+
+    <article class="card">
+      <span class="disc" aria-hidden="true"></span>
+      <h2 class="os">Windows</h2>
+      <p class="detail"><span class="only-wide">Windows 10 + 11 · x64 · .msi</span><span class="only-narrow">10 + 11 · x64 · .msi</span></p>
+      <a class="btn dl outline" href="/download/afterburn-windows-x64.msi" download>
+        <span class="only-wide">DOWNLOAD .MSI</span><span class="only-narrow">GET .MSI</span>
+      </a>
+      <p class="foot"><a href="/download/afterburn-windows-arm64.zip">ARM64 .ZIP</a> · <a href="/download/SHA256SUMS">SHA-256</a></p>
+    </article>
+
+    <article class="card">
+      <span class="disc" aria-hidden="true"></span>
+      <h2 class="os">Linux</h2>
+      <p class="detail"><span class="only-wide">x64 · .AppImage</span><span class="only-narrow">x64 · .AppImage · .deb</span></p>
+      <a class="btn dl outline" href="/download/afterburn-linux-x86_64.AppImage" download>
+        <span class="only-wide">DOWNLOAD .APPIMAGE</span><span class="only-narrow">GET .APPIMAGE</span>
+      </a>
+      <p class="foot"><a href="/download/afterburn-linux-amd64.deb">.DEB</a> · <a href="/download/afterburn-linux-arm64.tar.gz">.TAR.GZ · ARM64</a> · <a href="/download/SHA256SUMS">SHA-256</a></p>
+    </article>
+  </section>
+
+  <section class="strip" aria-label="The node on its own">
+    <div class="strip-text">
+      <p class="eyebrow"><span class="only-wide">ONLY THE NODE</span><span class="only-narrow">ONLY THE NODE · FOR THE REPO'S MACHINE</span></p>
+      <p class="strip-title">for the machine that holds the repo</p>
+    </div>
+    <div class="cmd">
+      <code id="node-command"><span class="prompt" aria-hidden="true">$</span> curl -fsSL afterburn.nuts.cash/node.sh | sh</code>
+      <button class="copy" type="button" data-copy="curl -fsSL afterburn.nuts.cash/node.sh | sh" aria-describedby="node-command">COPY</button>
+    </div>
+  </section>
+
+  <nav class="links" aria-label="Release documents">
+    <a href="/download/releases/">ALL RELEASES</a>
+    <a href="/download/SHA256SUMS">CHECKSUMS</a>
+    <a href="/download/release-notes.html">RELEASE NOTES</a>
+  </nav>
+
+  <div class="stripes" aria-hidden="true"></div>
+</main>
+<script src="/download.js" defer></script>
+</body>
+</html>

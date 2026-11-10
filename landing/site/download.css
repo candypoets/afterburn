@@ -1,0 +1,365 @@
+/* Afterburn download: the Landing page's download section (design: desktop 1440, mobile 390). */
+
+.download {
+  position: relative;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 26px 64px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  min-height: 100svh;
+}
+
+.back {
+  font: 700 13px/1 var(--mono);
+  letter-spacing: 0.04em;
+}
+.back:hover { color: var(--ember); }
+
+.download .headline { margin-top: 26px; }
+
+/* styles.css hides .sub for the mobile hero; the download page shows it at every width. */
+.download .sub {
+  display: block;
+  margin: 16px 0 0;
+  max-width: none;
+  text-align: center;
+  font: 500 15px/1.35 var(--mono);
+}
+
+/* Cards */
+.cards {
+  width: 100%;
+  max-width: 1184px;
+  margin-top: 38px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 28px;
+}
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+  padding: 24px 24px 15px;
+  border: 1px solid #e9dcc9;
+  border-radius: 16px;
+  background: #fff;
+  color: var(--ink);
+}
+.card.mac {
+  border: 0;
+  background: var(--ink);
+  color: var(--cream);
+  box-shadow: 0 18px 40px rgba(11, 11, 13, 0.25);
+}
+
+.badge {
+  align-self: flex-start;
+  display: inline-grid;
+  place-items: center;
+  height: 24px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: var(--sun);
+  color: var(--ink);
+  font: 700 11px/1 var(--mono);
+  letter-spacing: 0.06em;
+}
+
+.os {
+  margin: 22px 0 0;
+  font: italic 800 44px/1.3 var(--mono);
+  letter-spacing: -0.06em;
+}
+.card:not(.mac) .os { margin-top: 46px; }
+.card.mac .os { margin-top: 22px; }
+
+.detail {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font: 500 13px/1.3 var(--mono);
+}
+.card.mac .detail { color: rgba(255, 244, 230, 0.7); }
+
+.btn.dl {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 52px;
+  margin-top: auto;
+  border-radius: 26px;
+  font: italic 800 16px/1 var(--mono);
+}
+.btn.dl.outline {
+  border: 1px solid var(--ink);
+  background: none;
+  color: var(--ink);
+}
+.btn.dl.outline:hover { background: var(--ink); color: var(--cream); }
+
+.foot {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font: 700 11px/1.35 var(--mono);
+  letter-spacing: 0.06em;
+}
+.card.mac .foot { color: rgba(255, 244, 230, 0.5); }
+.foot a:hover, .links a:hover, .back:hover { color: var(--ember); }
+.card.mac .foot a:hover { color: var(--cream); }
+
+/* The disc: the burn in miniature, one per card. */
+.disc {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  width: 96px;
+  height: 96px;
+  border: 1px solid #e9dcc9;
+  border-radius: 50%;
+  background: #f4eadb;
+}
+.disc::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  border: 1px solid #e9dcc9;
+  border-radius: 50%;
+  background: #fff;
+}
+.disc.mac {
+  border: 0;
+  background: linear-gradient(140deg, var(--sun), var(--ember) 45%, var(--flare));
+}
+.disc.mac::before {
+  content: "";
+  position: absolute;
+  inset: 28px;
+  border-radius: 50%;
+  background: var(--cream);
+}
+.disc.mac::after {
+  border: 0;
+  background: var(--ink);
+}
+
+/* The node on its own */
+.strip {
+  width: 100%;
+  max-width: 1184px;
+  min-height: 80px;
+  margin-top: 28px;
+  padding: 16px 24px 16px 28px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  border: 1px solid #e9dcc9;
+  border-radius: 16px;
+  background: #fff;
+}
+.strip-text { flex: 1; min-width: 0; }
+.eyebrow {
+  margin: 0;
+  color: var(--ember);
+  font: 700 11px/1.36 var(--mono);
+  letter-spacing: 0.08em;
+}
+.strip-title {
+  margin: 2px 0 0;
+  font: italic 800 19px/1.3 var(--mono);
+  letter-spacing: -0.04em;
+}
+.cmd { display: flex; gap: 12px; }
+.cmd code {
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 20px;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--cream);
+  font: 500 14px/1 var(--mono);
+  white-space: nowrap;
+}
+.cmd .prompt { margin-right: 6px; color: rgba(255, 244, 230, 0.5); }
+.copy {
+  width: 72px;
+  height: 48px;
+  flex: none;
+  border: 1px solid var(--ink);
+  border-radius: 10px;
+  background: none;
+  color: var(--ink);
+  font: 700 12px/1 var(--mono);
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.copy:hover, .copy[data-done="true"] { background: var(--ink); color: var(--cream); }
+
+/* Release links */
+.links {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin: 20px 0 15px;
+  color: var(--muted);
+  font: 700 11px/1.35 var(--mono);
+  letter-spacing: 0.08em;
+}
+.links a + a::before { content: "·"; margin-right: 10px; }
+.links a:hover { color: var(--ink); }
+
+/* The band: stripes get thinner toward the bottom, on ink. (Not .band: styles.css's hero band
+   is pinned to the video, so it would drag this one out of the flow.) */
+.stripes {
+  width: 100vw;
+  height: 180px;
+  margin-top: auto;
+  margin-left: calc(50% - 50vw);
+  background: linear-gradient(
+    var(--sun) 0 30%,
+    var(--ink) 30% 32.78%,
+    var(--ember) 32.78% 55%,
+    var(--ink) 55% 59.44%,
+    var(--flare) 59.44% 75.56%,
+    var(--ink) 75.56% 81.67%,
+    var(--deep) 81.67% 92.78%,
+    var(--ink) 92.78%
+  );
+}
+
+.only-narrow { display: none; }
+
+.copy:focus-visible, .btn.dl:focus-visible, .foot a:focus-visible, .links a:focus-visible,
+.back:focus-visible, .brand:focus-visible {
+  outline: 3px solid var(--deep);
+  outline-offset: 3px;
+}
+
+/* Between the two designed widths: keep the three cards, shrink the type. */
+@media (max-width: 1100px) {
+  .download { padding-left: 32px; padding-right: 32px; }
+  .download .headline { font-size: 7.6vw; line-height: 1.31; }
+  .cmd code { font-size: 13px; padding: 0 14px; }
+  /* Cards keep three columns, but the disc would sit on the OS name: drop it and shrink type. */
+  .cards { gap: 16px; }
+  .card { min-height: 0; padding: 20px; }
+  .disc { display: none; }
+  .card .os { font-size: clamp(24px, 3.4vw, 40px); }
+  .card:not(.mac) .os { margin-top: 40px; }
+  .card .detail { font-size: 12px; }
+  .card .btn.dl { height: 46px; font-size: 13px; }
+  .card .foot { font-size: 10px; }
+}
+
+/* Mobile (the 390 design) */
+@media (max-width: 700px) {
+  .download { padding: 22px 20px 0; }
+  .download .headline {
+    margin-top: 38px;
+    margin-bottom: -12px;
+    font-size: min(56px, 14.4vw);
+    line-height: 1.32;
+  }
+  .back { display: none; }
+  /* The headline's -12px bottom margin collapses with this one: 24 - 12 = 12px of air. */
+  .download .sub {
+    margin-top: 24px;
+    font: 500 14px/1.35 var(--mono);
+  }
+  .back { font-size: 11px; }
+  .only-wide { display: none; }
+  .only-narrow { display: inline; }
+
+  .cards {
+    margin-top: 24px;
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+  }
+  /* Airier under the product card than between the two rows. */
+  .card.mac { margin-bottom: 6px; }
+
+  /* The Mac card keeps the card: it is the product. */
+  .card.mac {
+    min-height: 236px;
+    padding: 20px 20px 13px;
+  }
+  .card.mac .badge { height: 24px; }
+  .card.mac .os { font-size: 36px; margin-top: 14px; }
+  .card.mac .detail { font-size: 12px; }
+  .card.mac .btn.dl { margin-top: auto; }
+  .card.mac .foot { font-size: 10px; }
+  .card.mac .disc { display: block; width: 76px; height: 76px; top: 18px; right: 20px; }
+  .card.mac .disc::before { inset: 22px; }
+  .card.mac .disc::after { width: 12px; height: 12px; }
+
+  /* Windows and Linux are rows: name and detail left, the button right. */
+  .card:not(.mac) {
+    min-height: 64px;
+    padding: 0 16px 0 18px;
+    border-radius: 14px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    align-content: center;
+    column-gap: 12px;
+  }
+  .card:not(.mac) .badge,
+  .card:not(.mac) .disc,
+  .card:not(.mac) .foot { display: none; }
+  .card:not(.mac) .os {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.3;
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .card:not(.mac) .detail {
+    margin: 2px 0 0;
+    font-size: 11px;
+    white-space: nowrap;
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .card:not(.mac) .btn.dl {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    width: 118px;
+    height: 36px;
+    margin: 0;
+    border-radius: 18px;
+    font-size: 12px;
+  }
+
+  .strip {
+    min-height: 0;
+    margin-top: 16px;
+    padding: 0;
+    display: block;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .strip-title { display: none; }
+  .eyebrow { font-size: 10px; letter-spacing: 0.06em; }
+  .cmd { margin-top: 6px; }
+  .cmd code {
+    width: 100%;
+    height: 42px;
+    padding: 0 12px;
+    font-size: 12px;
+    border-radius: 10px;
+  }
+  .copy { display: none; }
+
+  .links { display: none; }
+  .stripes { height: 80px; }
+}
