@@ -188,11 +188,12 @@ impl Herdr {
         Ok(parsed.panes)
     }
 
-    /// Create a background tab in `workspace_id` at `cwd`, and resolve its first pane.
-    pub fn create_tab(&self, workspace_id: &str, cwd: &str) -> Result<CreatedTab> {
+    /// Create a background tab in `workspace_id` at `cwd`, labelled `label`, and resolve its
+    /// first pane.
+    pub fn create_tab(&self, workspace_id: &str, cwd: &str, label: &str) -> Result<CreatedTab> {
         let value = self.call(
             "tab.create",
-            json!({"workspace_id": workspace_id, "cwd": cwd, "label": "afterburn", "focus": false}),
+            json!({"workspace_id": workspace_id, "cwd": cwd, "label": label, "focus": false}),
             QUICK,
         )?;
 
@@ -222,13 +223,20 @@ impl Herdr {
         Ok(CreatedTab { tab_id, pane_id })
     }
 
-    /// Start a supported agent in a pane that is at a shell prompt.
-    pub fn start_agent(&self, name: &str, kind: &str, pane_id: &str) -> Result<()> {
-        self.call(
-            "agent.start",
-            json!({"name": name, "kind": kind, "pane_id": pane_id}),
-            START,
-        )?;
+    /// Start a supported agent in a pane that is at a shell prompt, with `args` passed to the
+    /// agent's CLI (`--model opus`).
+    pub fn start_agent(&self, name: &str, kind: &str, pane_id: &str, args: &[String]) -> Result<()> {
+        let mut params = json!({"name": name, "kind": kind, "pane_id": pane_id});
+        if !args.is_empty() {
+            params["args"] = json!(args);
+        }
+        self.call("agent.start", params, START)?;
+        Ok(())
+    }
+
+    /// Bring the agent in `pane_id` to the front in the human's Herdr.
+    pub fn focus_agent(&self, pane_id: &str) -> Result<()> {
+        self.call("agent.focus", json!({"target": pane_id}), QUICK)?;
         Ok(())
     }
 

@@ -803,8 +803,6 @@ pub struct State {
     starting: bool,
     /// The agent menu is open.
     pub(crate) menu_open: bool,
-    /// The agent menu's search and arrow cursor.
-    menu: crate::agent_menu::MenuState,
     /// Sync every page instead of the current page and its subpages.
     all_pages: bool,
     /// The page the diff was read for (`None` when it covers every page).
@@ -1936,31 +1934,19 @@ fn file_row(ui: &mut Ui, file: &FileDelta) {
     ui.label(egui::RichText::new(format!("{path}{stats}")).font(regular(10.0)).color(c().ink));
 }
 
-/// The agent button and its menu, shared with the composer; the pick, if any.
-fn agent_button(ui: &mut Ui, state: &mut State, compose: &crate::compose::State) -> Option<Target> {
+/// The agent button, shared with the composer: it opens the Agents modal, where the pick is made
+/// (the composer's chosen agent is the Sync pane's).
+fn agent_button(ui: &mut Ui, state: &mut State, compose: &mut crate::compose::State) -> Option<Target> {
     let label = agent_menu::button_label(&compose.targets, compose.target.as_ref(), "Choose an agent");
     // Full width in the footer, as the design draws it.
     let width = ui.available_width();
     let response =
         agent_menu::button(ui, Id::new("sync_agent_button"), &compose.targets, compose.target.as_ref(), &label, vec2(width, 28.0), state.menu_open);
     if response.clicked() {
-        state.menu_open = !state.menu_open;
-        if state.menu_open {
-            state.menu.opened();
-        }
+        // The same Agents modal as the composer's button: one agent, chosen the same way.
+        compose.open_menu();
     }
-    let options =
-        agent_menu::Options { loading: compose.loading_targets(), error: compose.targets_error.as_deref(), ..agent_menu::Options::default() };
-    agent_menu::popup(
-        ui,
-        Id::new("sync_targets"),
-        &response,
-        &mut state.menu_open,
-        &mut state.menu,
-        &compose.targets,
-        compose.target.as_ref(),
-        options,
-    )
+    None
 }
 
 /// One scope choice in the widget's header.

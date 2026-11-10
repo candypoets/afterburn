@@ -239,6 +239,48 @@ impl NodeHerdr {
         Ok(agent::ensure_with_prompt(&herdr, workspace, target, text))
     }
 
+    /// One step of creating an agent from the Agents modal, so the app can show each step as it
+    /// happens: `agent.tab` opens a labelled tab, `agent.start` starts the CLI (with a model)
+    /// without prompting it, `agent.ready` waits until it is idle, `agent.screen` reads its last
+    /// lines to explain a failure, and `agent.focus` brings its pane to the front.
+    pub fn agent_step(&self, method: &str, workspace: &WorkspaceView, request: &Value) -> Result<Value> {
+        let herdr = self.herdr()?;
+        if method == "agent.tab" {
+            let created = agent::create_agent_tab(&herdr, workspace, request["label"].as_str().unwrap_or(""))?;
+            return Ok(json!({"pane": created.pane_id, "tab": created.tab_id}));
+        }
+        let checked = json!({"workspace": workspace.id, "pane": request["pane"]});
+        let pane = self.checked_pane(&checked)?.to_string();
+        match method {
+            "agent.start" => {
+                let kind = request["kind"].as_str().map(str::trim).unwrap_or("");
+                let _guard = self
+                    .prompts
+                    .lock()
+                    .map_err(|_| Error::new("Herdr prompt lock poisoned"))?;
+                let started = agent::start_new_agent(
+                    &herdr,
+                    &pane,
+                    kind,
+                    request["label"].as_str().unwrap_or(""),
+                    request["model"].as_str(),
+                )?;
+                Ok(json!({"pane": pane, "name": started.name, "trusted": started.trusted}))
+            }
+            "agent.ready" => {
+                let seconds = request["timeout_secs"].as_u64().unwrap_or(60).clamp(5, 300);
+                let status = agent::wait_until_ready(&herdr, &pane, Duration::from_secs(seconds))?;
+                Ok(json!({"pane": pane, "status": status}))
+            }
+            "agent.screen" => Ok(json!({"pane": pane, "lines": agent::last_lines(&herdr, &pane, 6)})),
+            "agent.focus" => {
+                herdr.focus_agent(&pane)?;
+                Ok(json!({"pane": pane}))
+            }
+            other => Err(Error::new(format!("unknown agent step {other:?}"))),
+        }
+    }
+
     /// A new Herdr workspace at an existing folder, in the background (the human's focus stays).
     pub fn create_workspace(&self, cwd: &str, label: Option<&str>) -> Result<Value> {
         let cwd = cwd.trim();

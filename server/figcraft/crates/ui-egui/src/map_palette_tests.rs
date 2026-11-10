@@ -368,7 +368,12 @@ fn the_status_bars_agent_count_opens_the_agents() {
         u.frame(vec![]);
         // The summary sits at the bar's right end.
         click(&mut u, egui::pos2(1440.0 - 40.0, 900.0 - 12.0));
-        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Agents), "the click that opened it does not close it");
+        // The count opens the Agents modal (the agent picker page's One agents modal) and the
+        // click that opened it does not close it; the palette's Agents scope lists the same agents.
+        assert!(u.app.agents_modal.open, "the click that opened it does not close it");
+        u.app.agents_modal.open = false;
+        crate::map_palette::open(&mut u.app, Scope::Agents);
+        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Agents));
         let view = crate::map_palette::view(&u.app, "");
         assert_eq!(view.chip.as_deref(), Some("Agents"));
         let rows: Vec<_> = view.items().map(|item| (item.label.as_str(), item.right.clone())).collect();

@@ -191,6 +191,11 @@ fn handle_connection(stream: TcpStream, id: u64, node: &Arc<Node>) -> Result<()>
                     | "worktree.create"
                     | "pane.rename"
                     | "pane.close"
+                    | "agent.tab"
+                    | "agent.start"
+                    | "agent.ready"
+                    | "agent.screen"
+                    | "agent.focus"
             )
         );
         if slow {
@@ -208,7 +213,19 @@ impl Node {
     fn dispatch(&self, connection: u64, request: Value) {
         let slow = matches!(
             request["method"].as_str(),
-            Some("init" | "send" | "sync" | "host.ensure" | "workspaces" | "worktree.create")
+            Some(
+                "init"
+                    | "send"
+                    | "sync"
+                    | "host.ensure"
+                    | "workspaces"
+                    | "worktree.create"
+                    | "agent.tab"
+                    | "agent.start"
+                    | "agent.ready"
+                    | "agent.screen"
+                    | "agent.focus"
+            )
         );
         let _order = if slow {
             None
@@ -608,6 +625,13 @@ impl Node {
             )?})),
             "workspace.focus" => self.herdr.focus_workspace(required(req, "workspace")?),
             "pane.rename" => self.herdr.rename_pane(req),
+            // Creating an agent from the Agents modal, one step per request (node_herdr.rs).
+            "agent.tab" | "agent.start" | "agent.ready" | "agent.screen" | "agent.focus" => {
+                let workspace = self.herdr.find_workspace(required(req, "workspace")?)?;
+                let session = self.session(req)?;
+                self.validate_workspace(&workspace, &session)?;
+                self.herdr.agent_step(required(req, "method")?, &workspace, req)
+            }
             "pane.close" => self.herdr.close_pane(req),
             "worktree.create" => self
                 .herdr

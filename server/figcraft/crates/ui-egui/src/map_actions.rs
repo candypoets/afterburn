@@ -198,6 +198,7 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
     } else if app.ui.context_menu.take().is_some()
         || std::mem::take(&mut app.ui.main_menu)
         || app.compose.confirm.take().is_some()
+        || close_agents(app)
         || std::mem::take(&mut app.compose.menu_open)
         || std::mem::take(&mut app.sync.menu_open)
         || crate::map_navigation::close_search(ctx)
@@ -229,7 +230,7 @@ pub fn begin(app: &mut FigApp, ctx: &Context, typing: bool) {
     } else if app.page_delete.take().is_some()
         // Esc in the tree's name field keeps the old name.
         || app.page_tree.renaming.take().is_some()
-        || std::mem::take(&mut app.agents_modal.open)
+        || close_agents(app)
         || std::mem::take(&mut app.page_tree.open)
         || app.ui.key_box.take().is_some()
     {
@@ -295,4 +296,14 @@ pub fn handle(app: &mut FigApp, ctx: &Context, typing: bool) {
             _ => {}
         }
     }
+}
+
+/// Esc closes the Agents modal; the composer and the Sync pane stop treating it as their menu.
+fn close_agents(app: &mut FigApp) -> bool {
+    let was = std::mem::take(&mut app.agents_modal.open);
+    if was {
+        app.compose.menu_open = false;
+        app.sync.menu_open = false;
+    }
+    was
 }

@@ -2569,7 +2569,7 @@ mod detail_tests {
             Some(Target::Existing { pane: "w:p1".into(), kind: "kimi".into(), status: "idle".into() }),
             "a busy agent is never the default"
         );
-        assert_eq!(agent_menu::button_label(&targets, first.as_ref(), "Choose an agent"), "Pane 1 · Kimi · p1 · idle");
+        assert_eq!(agent_menu::button_label(&targets, first.as_ref(), "Choose an agent"), "Pane 1 · p1 · idle", "the mark says the kind");
         assert_eq!(action_label(MapState::Empty, &w, None), "Init map", "the agent is on its own button");
     }
 

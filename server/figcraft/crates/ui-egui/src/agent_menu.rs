@@ -131,7 +131,7 @@ pub(crate) fn button_label(targets: &[TargetInfo], target: Option<&Target>, fall
         Some(target) => {
             let line = target.line();
             match targets.iter().find(|info| info.target.line() == line) {
-                Some(info) => recipient(info, false),
+                Some(info) => identity(info),
                 None => "Agent gone · choose again".to_string(),
             }
         }
@@ -139,9 +139,9 @@ pub(crate) fn button_label(targets: &[TargetInfo], target: Option<&Target>, fall
     }
 }
 
-/// The button's width for its label, within `min..=max`.
+/// The button's width for its label, within `min..=max`, with room for the kind's mark.
 pub(crate) fn button_width(ui: &Ui, label: &str, min: f32, max: f32) -> f32 {
-    (text_width(ui, label, regular(11.0)) + 46.0).clamp(min, max.max(min))
+    (text_width(ui, label, regular(11.0)) + 66.0).clamp(min, max.max(min))
 }
 
 /// The agent button. Its colour is the chosen pane's readiness: green when idle, amber when
@@ -167,8 +167,11 @@ pub(crate) fn button(ui: &mut Ui, id: Id, targets: &[TargetInfo], target: Option
     let fill = if enabled && (resp.hovered() || open) { fill.lerp_to_gamma(SOFT(), 0.35) } else { fill };
     ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
     ui.painter().rect_stroke(rect, CornerRadius::same(6), Stroke::new(1.0, stroke), StrokeKind::Inside);
-    let shown = widgets::elide_font(ui, label, (rect.width() - 40.0).max(24.0), regular(11.0));
-    ui.painter().text(pos2(rect.min.x + 12.0, rect.center().y), Align2::LEFT_CENTER, &shown, regular(11.0), ink);
+    // The mark says the kind, so the label leaves it out (`identity`).
+    let marked = target.is_some_and(|target| paint_mark(ui.painter(), pos2(rect.min.x + 18.0, rect.center().y), 14.0, target.kind()));
+    let text_x = if marked { rect.min.x + 31.0 } else { rect.min.x + 12.0 };
+    let shown = widgets::elide_font(ui, label, (rect.max.x - 28.0 - text_x).max(24.0), regular(11.0));
+    ui.painter().text(pos2(text_x, rect.center().y), Align2::LEFT_CENTER, &shown, regular(11.0), ink);
     // A drawn chevron, so no font has to have the glyph.
     let c = pos2(rect.max.x - 14.0, rect.center().y);
     let chevron = Stroke::new(1.2, ink);
@@ -347,19 +350,21 @@ pub(crate) fn body(
 /// agent Init can't take is drawn faint and takes no click.
 fn agent_row(ui: &mut Ui, info: &TargetInfo, selected: bool, cursor: bool, enabled: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW_H), if enabled { Sense::click() } else { Sense::hover() });
-    let meta = match &info.target {
-        Target::Existing { pane, kind, .. } => format!("{} · {} · {}", kind_title(kind), pane_short(pane), status_text(&info.status)),
-        Target::New { kind } => kind_label(kind).to_string(),
-    };
+    let meta = row_meta(info);
     a11y::button(&resp, &format!("{} · {meta}", info.label));
     let hot = enabled && (resp.hovered() || cursor);
     if selected || hot {
         ui.painter().rect_filled(rect.shrink2(vec2(2.0, 0.0)), CornerRadius::same(5), if selected { CHOSEN_FILL() } else { SOFT() });
     }
     let dot = pos2(rect.min.x + 12.0, rect.center().y);
-    ui.painter().circle_filled(dot, 3.0, status_color(&info.status));
+    if paint_mark(ui.painter(), dot, 14.0, info.target.kind()) {
+        // The status rides on the mark.
+        paint_status_on_mark(ui.painter(), dot, 14.0, status_color(&info.status));
+    } else {
+        ui.painter().circle_filled(dot, 3.0, status_color(&info.status));
+    }
     if info.focused {
-        ui.painter().circle_stroke(dot, 5.0, Stroke::new(1.0, MAP_INK()));
+        ui.painter().circle_stroke(dot, 9.0, Stroke::new(1.0, MAP_INK()));
     }
     let (ink, meta_ink) = if enabled { (INK(), MUTED()) } else { (FAINT(), FAINT()) };
     let meta_x = rect.min.x + 132.0;
@@ -371,9 +376,10 @@ fn agent_row(ui: &mut Ui, info: &TargetInfo, selected: bool, cursor: bool, enabl
 }
 
 /// A CLI to start as a new agent: a small pill under the list.
-fn cli_chip(ui: &mut Ui, kind: &str, selected: bool) -> bool {
+pub(crate) fn cli_chip(ui: &mut Ui, kind: &str, selected: bool) -> bool {
     let label = kind_label(kind);
-    let width = (text_width(ui, label, regular(10.5)) + 24.0).max(58.0);
+    let marked = has_mark(kind);
+    let width = (text_width(ui, label, regular(10.5)) + if marked { 40.0 } else { 24.0 }).max(58.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click());
     a11y::button(&resp, &format!("Start a new {}", label));
     let hot = resp.hovered();
@@ -387,7 +393,12 @@ fn cli_chip(ui: &mut Ui, kind: &str, selected: bool) -> bool {
     ui.painter().rect_filled(rect, CornerRadius::same(11), fill);
     let border = if selected || hot { ACCENT() } else { BORDER() };
     ui.painter().rect_stroke(rect, CornerRadius::same(11), Stroke::new(1.0, border), StrokeKind::Inside);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, regular(10.5), if selected || hot { ACCENT() } else { INK() });
+    let ink = if selected || hot { ACCENT() } else { INK() };
+    if paint_mark(ui.painter(), pos2(rect.min.x + 15.0, rect.center().y), 12.0, kind) {
+        ui.painter().text(pos2(rect.min.x + 26.0, rect.center().y), Align2::LEFT_CENTER, label, regular(10.5), ink);
+    } else {
+        ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, regular(10.5), ink);
+    }
     resp.clicked()
 }
 
@@ -430,6 +441,14 @@ pub(crate) fn targets_of(agents: Vec<AgentDetail>, clis: &[String]) -> Vec<Targe
 /// What the human calls a pane: Herdr's agent name, else its tab's name, else `Pane N`. Never the
 /// terminal title: that is the session's task, not the pane's name.
 pub(crate) fn agent_label(name: Option<&str>, tab: Option<&str>, pane: &str) -> String {
+    // An agent created in the Agents modal is named after its tab (`Agent picker` →
+    // `agent-picker`): the tab keeps the words the human typed.
+    if let (Some(name), Some(tab)) = (name, tab)
+        && !tab.trim().is_empty()
+        && herdr_name(tab) == name.trim().trim_end_matches(|c: char| c.is_ascii_digit()).trim_end_matches('-')
+    {
+        return tab.split_whitespace().collect::<Vec<_>>().join(" ");
+    }
     [name, tab]
         .into_iter()
         .flatten()
@@ -510,6 +529,139 @@ pub(crate) fn pane_number(pane: &str) -> &str {
 
 fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
     ui.painter().layout_no_wrap(text.to_string(), font, Color32::WHITE).size().x
+}
+
+/// The button's and the menu's identity for an agent: `Backend · p1 · idle` when its kind has a
+/// mark (the mark says the kind), `Research · Gemini · p7 · idle` otherwise; the model it was
+/// created with comes after the name (`Agent picker · Opus · p4 · idle`).
+pub(crate) fn identity(info: &TargetInfo) -> String {
+    match &info.target {
+        Target::New { kind } => format!("New {} agent", kind_label(kind)),
+        Target::Existing { .. } => format!("{} · {}", info.label, row_meta(info)),
+    }
+}
+
+/// What follows the name: `Opus · p4 · idle`, with the kind first when it has no mark.
+pub(crate) fn row_meta(info: &TargetInfo) -> String {
+    match &info.target {
+        Target::Existing { pane, kind, .. } => {
+            let mut parts = Vec::new();
+            if !has_mark(kind) {
+                parts.push(kind_title(kind));
+            }
+            if let Some(model) = model_of(pane) {
+                parts.push(model);
+            }
+            parts.push(pane_short(pane).to_string());
+            parts.push(status_text(&info.status));
+            parts.join(" · ")
+        }
+        Target::New { kind } => kind_label(kind).to_string(),
+    }
+}
+
+/// The models agents were created with in the Agents modal, by pane: Herdr does not report a
+/// model, so the app remembers what it asked for.
+fn models() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static MODELS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    MODELS.get_or_init(Default::default)
+}
+
+/// Remember that the agent in `pane` runs `model` (its label, `Opus`).
+pub(crate) fn remember_model(pane: &str, model: &str) {
+    if let Ok(mut models) = models().lock() {
+        models.insert(pane.trim().to_string(), model.to_string());
+    }
+}
+
+/// The model the agent in `pane` was created with, when the app created it.
+pub(crate) fn model_of(pane: &str) -> Option<String> {
+    models().lock().ok()?.get(pane.trim()).cloned()
+}
+
+/// Herdr's name for a human name (`Agent picker` → `agent-picker`), as the node makes it.
+pub(crate) fn herdr_name(label: &str) -> String {
+    let mut slug = String::new();
+    for c in label.trim().chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug: String = slug.trim_end_matches('-').chars().take(28).collect();
+    let slug = slug.trim_end_matches('-').to_string();
+    if slug.starts_with(|c: char| c.is_ascii_lowercase()) { slug } else { format!("a-{slug}").trim_end_matches('-').chars().take(28).collect() }
+}
+
+/// The marks the app draws, one per kind it knows: stand-ins drawn from primitives, so no CLI's
+/// own artwork ships in the app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mark {
+    Claude,
+    Codex,
+    Kimi,
+    DeepSeek,
+}
+
+fn mark_of(kind: &str) -> Option<Mark> {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "claude" => Some(Mark::Claude),
+        "codex" => Some(Mark::Codex),
+        "kimi" => Some(Mark::Kimi),
+        "deepseek" | "dsh" | "dsh-tui" => Some(Mark::DeepSeek),
+        _ => None,
+    }
+}
+
+/// Whether `kind` has a mark; a kind without one keeps its name.
+pub(crate) fn has_mark(kind: &str) -> bool {
+    mark_of(kind).is_some()
+}
+
+/// Draw `kind`'s mark centred on `center`, `size` points square. False (nothing drawn) for a kind
+/// without a mark.
+pub(crate) fn paint_mark(painter: &egui::Painter, center: egui::Pos2, size: f32, kind: &str) -> bool {
+    let Some(mark) = mark_of(kind) else { return false };
+    let r = size / 2.0;
+    let square = egui::Rect::from_center_size(center, vec2(size, size));
+    let round = CornerRadius::same((size * 0.28).round() as u8);
+    match mark {
+        Mark::Claude => {
+            let ink = Color32::from_rgb(0xD9, 0x77, 0x57);
+            for k in 0..5 {
+                let angle = std::f32::consts::PI * k as f32 / 5.0;
+                let d = vec2(angle.cos(), angle.sin()) * r * 0.95;
+                painter.line_segment([center - d, center + d], Stroke::new(size * 0.16, ink));
+            }
+            painter.circle_filled(center, r * 0.32, ink);
+        }
+        Mark::Codex => {
+            painter.rect_filled(square, round, Color32::WHITE);
+            painter.rect_stroke(square, round, Stroke::new(1.0, Color32::from_rgb(0x1A, 0x1A, 0x1A)), StrokeKind::Inside);
+            painter.circle_stroke(center, r * 0.45, Stroke::new((size * 0.11).max(1.0), Color32::from_rgb(0x1A, 0x1A, 0x1A)));
+        }
+        Mark::Kimi => {
+            painter.rect_filled(square, round, Color32::from_rgb(0x1A, 0x1A, 0x1A));
+            painter.text(center, Align2::CENTER_CENTER, "K", regular(size * 0.62), Color32::WHITE);
+        }
+        Mark::DeepSeek => {
+            let blue = Color32::from_rgb(0x4D, 0x6B, 0xFE);
+            painter.rect_filled(square, round, blue);
+            let eye = egui::Rect::from_center_size(center, vec2(size * 0.56, size * 0.4));
+            painter.rect_filled(eye, CornerRadius::same((size * 0.2).round() as u8), Color32::WHITE);
+            painter.circle_filled(center + vec2(size * 0.08, 0.0), size * 0.08, blue);
+        }
+    }
+    true
+}
+
+/// The status dot riding on a mark's lower-right corner, ringed in the panel so it reads on any
+/// mark.
+pub(crate) fn paint_status_on_mark(painter: &egui::Painter, center: egui::Pos2, size: f32, ink: Color32) {
+    let at = center + vec2(size * 0.42, size * 0.42);
+    painter.circle_filled(at, size * 0.24, PANEL());
+    painter.circle_filled(at, size * 0.16, ink);
 }
 
 #[cfg(test)]
@@ -605,7 +757,7 @@ mod tests {
     fn init_shows_busy_agents_disabled_in_the_same_menu() {
         let mut init = menu(true);
         let (_, shapes) = init.frame(vec![]);
-        for line in ["Find an agent…", "AGENTS IN THIS WORKSPACE · 3", "Backend", "Codex · p1 · working", "START A NEW AGENT", "codex"] {
+        for line in ["Find an agent…", "AGENTS IN THIS WORKSPACE · 3", "Backend", "p1 · working", "START A NEW AGENT", "codex"] {
             assert!(has_text(&shapes, line), "missing {line:?}");
         }
         assert_eq!(init.click_row("Backend"), None, "a working agent can't be picked for Init");
@@ -626,11 +778,30 @@ mod tests {
     fn the_button_names_the_chosen_agent() {
         let targets = menu(false).targets;
         let first_map = targets[2].target.clone();
-        assert_eq!(button_label(&targets, Some(&first_map), "Choose an agent"), "First map · Kimi · p3 · idle");
+        assert_eq!(button_label(&targets, Some(&first_map), "Choose an agent"), "First map · p3 · idle", "the mark says the kind");
         assert_eq!(button_label(&targets, Some(&Target::New { kind: "claude".into() }), ""), "New claude agent");
         let gone = Target::Existing { pane: "w1:p9".into(), kind: "codex".into(), status: "idle".into() };
         assert_eq!(button_label(&targets, Some(&gone), ""), "Agent gone · choose again");
         assert_eq!(button_label(&targets, None, "Choose an agent"), "Choose an agent");
         assert!(is_busy("working") && is_busy("blocked") && !is_busy("idle") && !is_busy("done"));
+    }
+
+    #[test]
+    fn a_kind_without_a_mark_keeps_its_name_and_a_created_agent_shows_its_model() {
+        let gemini = agent("w9:p7", "gemini", "idle", "Research");
+        assert_eq!(identity(&gemini), "Research · Gemini · p7 · idle");
+        let claude = agent("w9:p4", "claude", "idle", "Agent picker");
+        assert_eq!(identity(&claude), "Agent picker · p4 · idle");
+        remember_model("w9:p4", "Opus");
+        assert_eq!(identity(&claude), "Agent picker · Opus · p4 · idle");
+        assert!(has_mark("claude") && has_mark("codex") && has_mark("kimi") && has_mark("deepseek") && !has_mark("aider"));
+    }
+
+    #[test]
+    fn a_created_agent_is_called_what_the_human_typed() {
+        assert_eq!(herdr_name("Agent picker"), "agent-picker");
+        assert_eq!(agent_label(Some("agent-picker"), Some("Agent picker"), "w1:p8"), "Agent picker");
+        assert_eq!(agent_label(Some("agent-picker-2"), Some("Agent picker"), "w1:p9"), "Agent picker");
+        assert_eq!(agent_label(Some("backend"), Some("Tests"), "w1:p2"), "backend", "an unrelated tab does not rename the agent");
     }
 }

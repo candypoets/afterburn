@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::error::{Error, Result};
-use crate::herdr::{Agent, Herdr};
+use crate::herdr::{Agent, CreatedTab, Herdr};
 use crate::workspace::WorkspaceView;
 
 /// Agent CLIs detected in this order when a workspace has none.
@@ -376,9 +376,9 @@ fn ensure_inner(
                     "agent CLI {kind:?} is not installed on PATH"
                 )));
             }
-            let created = herdr.create_tab(&workspace.id, path)?;
+            let created = herdr.create_tab(&workspace.id, path, "afterburn")?;
             let name = unique_agent_name(&all_agents, "afterburn")?;
-            if let Err(error) = herdr.start_agent(&name, &kind, &created.pane_id) {
+            if let Err(error) = herdr.start_agent(&name, &kind, &created.pane_id, &[]) {
                 // A first run in a folder asks the agent to trust it; the agent is alive but
                 // blocked, so `agent start` reports it as not ready. Accept the default and
                 // carry on.
@@ -415,18 +415,54 @@ fn pick_agent<'a>(agents: &[&'a Agent]) -> Option<&'a Agent> {
         .or_else(|| agents.iter().copied().find(|agent| agent.pane_id.is_some()))
 }
 
+/// What a first-run folder-trust prompt on screen asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Trust {
+    /// No trust prompt.
+    None,
+    /// The highlighted choice trusts the folder: Enter.
+    Enter,
+    /// Claude Code's prompt, highlighting the safe `No, exit` first: Down to `Yes, I trust this
+    /// folder`, then Enter (only once the screen shows `Yes` highlighted).
+    DownThenEnter,
+}
+
+fn trust_prompt(screen: &str) -> Trust {
+    if screen.contains("Yes, I trust this folder") {
+        return if screen.contains("❯ Yes, I trust this folder") {
+            Trust::Enter
+        } else {
+            Trust::DownThenEnter
+        };
+    }
+    if screen.contains("Trust this folder")
+        || screen.contains("enter continue")
+        || screen.contains("Trust and continue")
+    {
+        return Trust::Enter;
+    }
+    Trust::None
+}
+
 /// Accept a first-run folder-trust prompt, if one is on screen.
 ///
-/// Codex (and similar CLIs) block on "Trust this folder?" in a new checkout. Herdr reports the
-/// agent as blocked, and a prompt is rejected. The default choice is "Trust and continue", so
-/// Enter moves it on; we wait briefly for the screen to settle before prompting.
+/// Codex (and similar CLIs) block on "Trust this folder?" in a new checkout, with "Trust and
+/// continue" highlighted: Enter moves it on. Claude Code highlights "No, exit" first, so the
+/// cursor moves to "Yes, I trust this folder" and Enter is pressed only once the screen shows it
+/// there. Herdr reports the agent as blocked meanwhile; we wait briefly for the screen to settle.
 fn accept_trust(herdr: &Herdr, pane: &str) -> Result<bool> {
     let screen = herdr.read_screen(pane).unwrap_or_default();
-    let trust = screen.contains("Trust this folder")
-        || screen.contains("enter continue")
-        || screen.contains("Trust and continue");
-    if !trust {
-        return Ok(false);
+    match trust_prompt(&screen) {
+        Trust::None => return Ok(false),
+        Trust::Enter => {}
+        Trust::DownThenEnter => {
+            herdr.send_keys(pane, &["down"])?;
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let moved = herdr.read_screen(pane).unwrap_or_default();
+            if trust_prompt(&moved) != Trust::Enter {
+                return Ok(false);
+            }
+        }
     }
     herdr.send_keys(pane, &["enter"])?;
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -549,6 +585,154 @@ fn unique_agent_name(agents: &[Agent], base: &str) -> Result<String> {
     )))
 }
 
+/// Herdr's name for an agent the human named `label` (`Agent picker` → `agent-picker`): Herdr
+/// names match `[a-z][a-z0-9_-]{0,31}`, so the human's words live on the tab and this slug on
+/// the agent. Room is kept for a `-NN` suffix when the name is taken.
+pub fn agent_slug(label: &str) -> String {
+    let mut slug = String::new();
+    for c in label.trim().chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let mut slug: String = slug.trim_end_matches('-').chars().take(28).collect();
+    slug = slug.trim_end_matches('-').to_string();
+    if !slug.starts_with(|c: char| c.is_ascii_lowercase()) {
+        slug = format!("a-{slug}")
+            .trim_end_matches('-')
+            .chars()
+            .take(28)
+            .collect();
+    }
+    slug
+}
+
+/// The CLI arguments for a chosen model (`--model opus`); none for the CLI's own default. A
+/// model is a plain token: anything else is refused rather than passed to a shell.
+pub fn model_args(model: Option<&str>) -> Result<Vec<String>> {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    if model.len() > 64
+        || !model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']'))
+    {
+        return Err(Error::new(format!(
+            "model {model:?} is not a plain model name"
+        )));
+    }
+    Ok(vec!["--model".to_string(), model.to_string()])
+}
+
+/// A new background tab for an agent the human is creating, labelled with its name.
+pub fn create_agent_tab(
+    herdr: &Herdr,
+    workspace: &WorkspaceView,
+    label: &str,
+) -> Result<CreatedTab> {
+    let path = workspace.path.as_deref().ok_or_else(|| {
+        Error::new(format!(
+            "workspace {} has no checkout path; refusing to start an agent",
+            workspace.id
+        ))
+    })?;
+    let label = label.trim();
+    let label = if label.is_empty() { "afterburn" } else { label };
+    herdr.create_tab(&workspace.id, path, label)
+}
+
+/// What starting an agent did: Herdr's name for it, and whether a folder-trust prompt was
+/// accepted on the way.
+#[derive(Debug, Clone, Serialize)]
+pub struct Started {
+    pub name: String,
+    pub trusted: bool,
+}
+
+/// Start `kind` in `pane` without prompting it: the agent the human created in the Agents
+/// modal. A first run in a folder asks the CLI to trust it; that prompt is accepted once.
+pub fn start_new_agent(
+    herdr: &Herdr,
+    pane: &str,
+    kind: &str,
+    label: &str,
+    model: Option<&str>,
+) -> Result<Started> {
+    validate_kind(kind)?;
+    if find_in_path(kind).is_none() {
+        return Err(Error::new(format!(
+            "agent CLI {kind:?} is not installed on PATH"
+        )));
+    }
+    let args = model_args(model)?;
+    let agents = herdr.agents()?;
+    let name = unique_agent_name(&agents, &agent_slug(label))?;
+    match herdr.start_agent(&name, kind, pane, &args) {
+        Ok(()) => Ok(Started {
+            name,
+            trusted: false,
+        }),
+        Err(error) => {
+            if accept_trust(herdr, pane)? {
+                Ok(Started {
+                    name,
+                    trusted: true,
+                })
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Wait until the agent in `pane` is idle (or done), accepting a late folder-trust prompt once.
+/// Returns the status it settled on; a blocked or missing agent past `timeout` is an error that
+/// says what Herdr last reported.
+pub fn wait_until_ready(herdr: &Herdr, pane: &str, timeout: std::time::Duration) -> Result<String> {
+    let start = std::time::Instant::now();
+    let mut trust_tried = false;
+    let mut last = String::from("unknown");
+    loop {
+        let agents = herdr.agents()?;
+        let status = agents
+            .iter()
+            .find(|agent| agent.pane_id.as_deref() == Some(pane))
+            .and_then(|agent| agent.agent_status.clone());
+        if let Some(status) = status {
+            if matches!(status.as_str(), "idle" | "done") {
+                return Ok(status);
+            }
+            if status == "blocked" && !trust_tried {
+                trust_tried = true;
+                accept_trust(herdr, pane)?;
+            }
+            last = status;
+        }
+        if start.elapsed() >= timeout {
+            return Err(Error::new(format!(
+                "the agent did not become idle within {}s (last status: {last})",
+                timeout.as_secs()
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+/// The last `count` non-empty lines on the agent's screen, to explain why a start failed.
+pub fn last_lines(herdr: &Herdr, pane: &str, count: usize) -> Vec<String> {
+    let screen = herdr.read_screen(pane).unwrap_or_default();
+    let lines: Vec<String> = screen
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    lines[lines.len().saturating_sub(count)..].to_vec()
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -600,6 +784,45 @@ mod tests {
             value,
             serde_json::json!({ "state": "error", "reason": "no path" })
         );
+    }
+
+    #[test]
+    fn claudes_trust_prompt_moves_off_no_before_enter() {
+        let claude = " Security guide\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel";
+        assert_eq!(
+            trust_prompt(claude),
+            Trust::DownThenEnter,
+            "Enter here would exit"
+        );
+        let moved = "   No, exit\n ❯ Yes, I trust this folder";
+        assert_eq!(trust_prompt(moved), Trust::Enter);
+        assert_eq!(
+            trust_prompt("Trust this folder? › Trust and continue"),
+            Trust::Enter,
+            "codex"
+        );
+        assert_eq!(trust_prompt("> ready"), Trust::None);
+    }
+
+    #[test]
+    fn a_human_name_becomes_a_herdr_agent_name() {
+        assert_eq!(agent_slug("Agent picker"), "agent-picker");
+        assert_eq!(agent_slug("  UI review (v2)! "), "ui-review-v2");
+        assert_eq!(agent_slug("3D canvas"), "a-3d-canvas");
+        assert_eq!(agent_slug("Été"), "t");
+        assert_eq!(agent_slug(""), "a");
+        assert!(agent_slug(&"x".repeat(80)).len() <= 28);
+    }
+
+    #[test]
+    fn a_model_is_a_plain_cli_argument() {
+        assert_eq!(
+            model_args(Some("opus")).unwrap(),
+            vec!["--model".to_string(), "opus".to_string()]
+        );
+        assert!(model_args(None).unwrap().is_empty());
+        assert!(model_args(Some("  ")).unwrap().is_empty());
+        assert!(model_args(Some("opus; rm -rf /")).is_err());
     }
 
     #[test]

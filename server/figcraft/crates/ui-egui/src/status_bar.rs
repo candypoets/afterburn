@@ -206,7 +206,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
         }
         ui.painter().text(pos2(right - 2.0, bar.center().y + 0.5), Align2::RIGHT_CENTER, &summary, summary_font, color);
         if resp.on_hover_text("Agents").clicked() {
-            crate::map_palette::open(app, crate::map_palette::Scope::Agents);
+            crate::agents::open(app);
         }
         right = agents.min.x - 10.0;
         // The people on the map: small and quiet beside the agents.

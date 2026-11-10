@@ -213,8 +213,8 @@ pub struct State {
     targets_rx: Option<Receiver<Result<Vec<TargetInfo>, String>>>,
     /// Why the target list is empty, when the service could not answer.
     pub(crate) targets_error: Option<String>,
-    /// The agent menu's search and arrow cursor.
-    menu: agent_menu::MenuState,
+    /// The agent button (or ⌘⇧A) asked for the Agents modal; it opens on the next frame.
+    pub(crate) wants_agents: bool,
     /// The agent each page last used or picked, by page.
     page_agents: HashMap<NodeId, Target>,
     /// The agent each page was last sent a prompt to (its `target` line): while that agent is
@@ -341,11 +341,6 @@ impl State {
         self.focus_input = true;
     }
 
-    /// The agent list is being read.
-    pub(crate) fn loading_targets(&self) -> bool {
-        self.targets_rx.is_some()
-    }
-
     /// The chosen recipient as the latest agent list has it; `None` when nobody is chosen or the
     /// pane has left the list. Panes are matched by id, never by status.
     pub(crate) fn chosen(&self) -> Option<&TargetInfo> {
@@ -466,19 +461,9 @@ impl State {
         }
     }
 
-    /// Open the agent menu, where a new agent's CLI is chosen.
+    /// Open the Agents modal, where an agent is chosen or a new one is made.
     pub(crate) fn open_menu(&mut self) {
-        if !self.menu_open {
-            self.toggle_menu();
-        }
-    }
-
-    /// Open or close the agent menu; it opens on an empty search with the keyboard in it.
-    fn toggle_menu(&mut self) {
-        self.menu_open = !self.menu_open;
-        if self.menu_open {
-            self.menu.opened();
-        }
+        self.wants_agents = true;
     }
 
     /// The drafts saved together with `drafts[index]` (itself included), in order.
@@ -809,19 +794,8 @@ fn body(
             state.menu_open,
         );
         if target_response.clicked() {
-            state.toggle_menu();
-        }
-        let options = agent_menu::Options {
-            align: egui::RectAlign::TOP_END,
-            loading: state.targets_rx.is_some(),
-            error: state.targets_error.as_deref(),
-            ..agent_menu::Options::default()
-        };
-        let mut open = state.menu_open;
-        let picked = agent_menu::popup(ui, menu_id(), &target_response, &mut open, &mut state.menu, &state.targets, state.target.as_ref(), options);
-        state.menu_open = open;
-        if let Some(target) = picked {
-            state.choose(target);
+            // The agent button opens the Agents modal (the agent picker page's One agents modal).
+            state.open_menu();
         }
         ui.add_space(8.0);
         if send_button(ui, send_label, send_w, can_send) {
@@ -1729,17 +1703,6 @@ pub(crate) fn input_id() -> Id {
     Id::new("map_composer_input")
 }
 
-/// The composer's agent menu.
-fn menu_id() -> Id {
-    Id::new("map_composer_targets")
-}
-
-/// The agent menu's search field.
-#[cfg(test)]
-fn menu_search_id() -> Id {
-    agent_menu::search_id(menu_id())
-}
-
 /// The `Whole page · N comments` chip in the strip.
 fn page_summary_id() -> Id {
     Id::new("map_composer_page_summary")
@@ -2382,39 +2345,11 @@ mod tests {
         bar
     }
 
-    fn text(bar: &mut Bar, typed: &str) {
-        bar.frame(vec![Event::Text(typed.into())]);
-    }
-
     #[test]
-    fn the_agent_menu_takes_typing_arrows_enter_and_escape() {
-        let mut bar = bar_with(vec![
-            agent("w1:p1", "codex", "idle", Some("Backend")),
-            agent("w1:p2", "claude", "working", Some("Tests one")),
-            agent("w1:p3", "claude", "idle", Some("Tests two")),
-        ]);
-        bar.state.toggle_menu();
-        bar.frame(vec![]);
-        assert!(bar.state.menu_open);
-        let (_, shapes) = bar.frame(vec![]);
-        assert!(has_text(&shapes, "AGENTS IN THIS WORKSPACE · 3"));
-        assert!(has_text(&shapes, "Codex · p1 · idle"));
-        assert!(bar.ctx.memory(|m| m.has_focus(menu_search_id())), "typing goes to the search field");
-
-        text(&mut bar, "tests");
-        assert_eq!(bar.state.menu.query, "tests");
-        bar.key(Key::ArrowDown, Modifiers::NONE);
-        assert_eq!(bar.state.menu.cursor, 1);
-        bar.key(Key::Enter, Modifiers::NONE);
-        assert_eq!(pane(&bar.state.target).as_deref(), Some("pane:w1:p3"));
-        assert!(!bar.state.menu_open, "picking closes the menu");
-
-        bar.state.toggle_menu();
-        bar.frame(vec![]);
-        assert!(bar.state.menu.query.is_empty(), "the menu opens on an empty search");
-        bar.key(Key::Escape, Modifiers::NONE);
-        assert!(!bar.state.menu_open);
-        assert_eq!(pane(&bar.state.target).as_deref(), Some("pane:w1:p3"), "Esc changes nothing");
+    fn the_agent_button_opens_the_agents_modal() {
+        let mut bar = bar_with(vec![agent("w1:p1", "codex", "idle", Some("Backend"))]);
+        bar.state.open_menu();
+        assert!(bar.state.wants_agents, "the menu is the Agents modal now");
     }
 
     #[test]
@@ -2426,7 +2361,7 @@ mod tests {
 
         bar.state.target = Some(bar.state.targets[0].target.clone());
         let (_, shapes) = bar.frame(vec![]);
-        assert!(has_text(&shapes, "Backend · Codex · p1 · idle"));
+        assert!(has_text(&shapes, "Backend · p1 · idle"));
         assert!(has_text(&shapes, "Send") && !has_text(&shapes, "Review send"));
         assert!(!has_text(&shapes, NO_IDLE));
 
