@@ -1,0 +1,156 @@
+{
+  "name": "afterburn-intro",
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "target_seconds": 35.0,
+  "clips": [
+    {
+      "id": "hook",
+      "source": ".afterburn/edits/afterburn-intro/footage/hook.mp4",
+      "in": 0.6,
+      "out": 6.3,
+      "title": "This is Afterburn"
+    },
+    {
+      "id": "source",
+      "source": ".afterburn/edits/afterburn-intro/footage/source.mp4",
+      "in": 0.7,
+      "out": 5.9,
+      "title": "Cards name their source",
+      "crossfade": 0.4
+    },
+    {
+      "id": "comment",
+      "source": ".afterburn/edits/afterburn-intro/footage/comment.mp4",
+      "in": 0.8,
+      "out": 6.0,
+      "title": "Comment on a card",
+      "crossfade": 0.4
+    },
+    {
+      "id": "agents",
+      "source": ".afterburn/edits/afterburn-intro/footage/agents.mp4",
+      "in": 0.6,
+      "out": 5.4,
+      "title": "An agent picks it up",
+      "crossfade": 0.4
+    },
+    {
+      "id": "burn",
+      "source": ".afterburn/edits/afterburn-intro/footage/burn.mp4",
+      "in": 0.7,
+      "out": 5.9,
+      "title": "Burn builds it",
+      "crossfade": 0.4
+    },
+    {
+      "id": "video",
+      "source": ".afterburn/edits/afterburn-intro/footage/video.mp4",
+      "in": 0.8,
+      "out": 6.9,
+      "title": "Video on the canvas",
+      "crossfade": 0.4
+    },
+    {
+      "id": "end",
+      "source": ".afterburn/edits/afterburn-intro/footage/end.mp4",
+      "in": 0.8,
+      "out": 6.0,
+      "title": "Design it. Burn it.",
+      "crossfade": 0.4
+    }
+  ],
+  "voice": [
+    {
+      "id": "hook",
+      "source": ".afterburn/edits/afterburn-intro/voice/hook.m4a",
+      "at": 0.7,
+      "text": "This is Afterburn. Your whole codebase, drawn on one canvas."
+    },
+    {
+      "id": "source",
+      "source": ".afterburn/edits/afterburn-intro/voice/source.m4a",
+      "at": 6.0,
+      "text": "Every card explains how the code works, and names its source."
+    },
+    {
+      "id": "comment",
+      "source": ".afterburn/edits/afterburn-intro/voice/comment.m4a",
+      "at": 10.8,
+      "text": "See something to change? Comment on the card."
+    },
+    {
+      "id": "agents",
+      "source": ".afterburn/edits/afterburn-intro/voice/agents.m4a",
+      "at": 15.6,
+      "text": "An agent picks it up. One that is idle, or a new one."
+    },
+    {
+      "id": "burn",
+      "source": ".afterburn/edits/afterburn-intro/voice/burn.m4a",
+      "at": 20.0,
+      "text": "Design changes wait. Then Burn builds them, and commits."
+    },
+    {
+      "id": "video",
+      "source": ".afterburn/edits/afterburn-intro/voice/video.m4a",
+      "at": 24.8,
+      "text": "Even video plays on the canvas. This film was cut there."
+    },
+    {
+      "id": "end",
+      "source": ".afterburn/edits/afterburn-intro/voice/end.m4a",
+      "at": 30.5,
+      "text": "Afterburn. Design it. Burn it."
+    }
+  ],
+  "captions": [
+    {
+      "text": "This is Afterburn. Your whole codebase, drawn on one canvas.",
+      "at": 0.7,
+      "until": 4.99,
+      "voice": "hook"
+    },
+    {
+      "text": "Every card explains how the code works, and names its source.",
+      "at": 6.0,
+      "until": 9.97,
+      "voice": "source"
+    },
+    {
+      "text": "See something to change? Comment on the card.",
+      "at": 10.8,
+      "until": 13.71,
+      "voice": "comment"
+    },
+    {
+      "text": "An agent picks it up. One that is idle, or a new one.",
+      "at": 15.6,
+      "until": 18.93,
+      "voice": "agents"
+    },
+    {
+      "text": "Design changes wait. Then Burn builds them, and commits.",
+      "at": 20.0,
+      "until": 23.75,
+      "voice": "burn"
+    },
+    {
+      "text": "Even video plays on the canvas. This film was cut there.",
+      "at": 24.8,
+      "until": 28.47,
+      "voice": "video"
+    },
+    {
+      "text": "Afterburn. Design it. Burn it.",
+      "at": 30.5,
+      "until": 33.01,
+      "voice": "end"
+    }
+  ],
+  "music": {
+    "source": ".afterburn/edits/afterburn-intro/music/pad.m4a",
+    "gain_db": -21.0
+  }
+}
