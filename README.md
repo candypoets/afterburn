@@ -1,201 +1,132 @@
-# Afterburn
+<h1 align="center">Afterburn</h1>
 
-The current backend is an **Afterburn node on each machine**: live worktree sessions, shared Herdr
-agents, and a committed `.afterburn/map.figcraft` design. See [node operation and protocol](service/NODE.md)
-and the [agent workflow](skills/afterburn/SKILL.md). The original generator and hosted-server notes
-below describe the migration source.
+<p align="center"><strong>The canvas for coding agents.</strong><br />Point at the product. Refine the picture. Burn it into code.</p>
 
-## Map sidebars
+<p align="center">
+  <a href="#get-started">Get started</a> ·
+  <a href="#the-loop">The loop</a> ·
+  <a href="#give-your-agent-a-shared-picture">Agent tools</a> ·
+  <a href="#under-the-hood">Under the hood</a>
+</p>
 
-Pages docks on the left and Sync docks on the right. Their header controls toggle each sidebar
-independently; opening Sync does not start a job. Drag either inner divider to resize it, or
-double-click to reset its width. The app remembers each width, and the canvas and composer use
-the space between them. Closing Sync keeps its note and selected cards; its action stays at the
-bottom while the card list scrolls. The composer remains usable with Sync open.
+![Illustrated Afterburn workflow: comment on a card, refine the design with your agent, then Burn the design and code into one commit.](docs/readme/workflow.png)
 
-## One build, full or headless installation
+Software work is wider than a chat thread: plans, designs, decisions, screenshots, and several agents at once. Afterburn gives that work a place on a canvas that lives with your repository.
 
-The root Cargo workspace has two default packages: `figcraft` (desktop app) and `afterburn-node`
-(`service/`). Both use the canonical tracked tree in `server/figcraft/`, one root `Cargo.lock`,
-and root `target/`. The ignored `client-src/` checkout is historical, not a build input. Rust
-1.97.1 is selected by `rust-toolchain.toml`.
+**You comment. Your agent illustrates.** Ask about a flow, point out a bug, or explore a new screen. The agent reads the code and answers on the canvas with diagrams, designs, images, or video. Keep refining the idea there; when you're ready to implement it, **Burn** turns the waiting design into a coding task.
 
-```sh
-cargo build                          # app and node, same dependency graph
-cargo build -p afterburn-node           # headless node only, no desktop/display required
-./target/debug/afterburn-node serve --bind 127.0.0.1:47822
-```
+## The loop
 
-On macOS, `./client/build-mac.sh` builds both native binaries together, packages Afterburn.app and
-installs its node as a versioned launchd helper outside the bundle. The node keeps running when
-the app quits. `./service/build-node.sh` packages a native headless node; its portable installer
-supports Linux systemd system/user services, macOS launchd, and an explicit manual mode.
-Companion platforms are optional native builds with matching source identity and binary checksum
-sidecars. A default Mac package contains only its native node.
+1. **Init your repo.** Open a worktree, choose an agent, and press **Init**. The agent reads the code and draws the first map, with source references.
+2. **Point at something.** Select a card and leave a comment. The agent gets its identity and page scope, then reads the detail it needs.
+3. **Work on the picture.** Ask questions, explore alternatives, and zoom into subpages. Design edits stay on the canvas until you choose to build them.
+4. **Burn when ready.** Select the waiting changes to implement. The agent works from a frozen design, implements and checks the change, then commits the design and code together.
+5. **Keep going.** You can continue refining the canvas during a Burn. Those later edits wait for the next one.
 
-See [full installation and Mac deployment](client/README.md) and
-[headless installation and safe upgrades](service/NODE.md#deployment-and-migration) for commands,
-prerequisites, platform availability and lifecycle limits. Existing running nodes are replaced
-only through an explicitly approved upgrade, with prepared Sync/merge checks and a node upgrade
-lease. Ordinary reconnect never silently replaces a running node.
+Explanations and bug fixes have their own path: an explanation records the map; a fix records it with the implementation. A design proposal stays waiting. [Agent workflow →](skills/afterburn/SKILL.md)
 
-An open workspace automatically reconnects after a dropped node connection, retrying after
-1, 2, 4, 8, 16 and then 30 seconds. Click **Reconnecting…** in the bottom status bar to retry
-immediately. **Offline** opens the workspace picker when there is no resumable connection.
-The current workspace, comments and pending canvas edits stay in place; reconnecting does not
-send comments to an agent. A changed worktree branch requires choosing that workspace again,
-and an incompatible node still requires an explicit update.
+## Why a canvas?
 
-## Original feature-map generator and hosted migration source
+| | What changes |
+|---|---|
+| **Point, don't describe** | A comment belongs to an exact card. No “the third box under that arrow.” |
+| **Work asynchronously** | Leave a task with an agent, work elsewhere, and come back to the result in place. |
+| **Keep the context** | Decisions and designs have a location. The map is a versioned file in your repo. |
+| **Pages, not folders** | Organize the product by concepts and flows; open a subpage when a card needs more detail. |
+| **Switch agents** | The next agent can read the same cards, pictures, and pending changes. |
 
-A feature map of **FigCraft** — the ArtCraft, pure-Rust Figma clone — drawn in FigCraft itself,
-and the generator that keeps it true to the code.
+### Know what's real and what's next
 
-The map is published on the team server as **"FigCraft · feature map"**: `http://befree:7480` on
-the LAN, or the Tailscale address when you are away.
+**State of the art** pages describe the code as it is. **Exploration** pages hold ideas that haven't been built yet. A completed Burn moves the exploration into the state of the art.
 
-It is a visual layer between a person, an agent and the code. The person reads and points; the
-agent maintains the map and answers; the code stays the source of truth behind every card.
+That distinction lets you design ahead without presenting every idea as a shipped feature. Source references keep explanations traceable to the implementation. The map still needs review and maintenance as the code changes.
 
-## What it shows
+### Design continuously. Burn in parallel.
 
-**Features** — the whole surface, area by area. Twelve branches: Canvas and layers, Auto layout
-and constraints, Components and instances, Styles and variables, Vector and shapes, Paint,
-strokes and effects, Text, Prototyping, Handoff, Files and formats, Multiplayer and server,
-Extend and automate. Forty-five leaves say what you can do and, in a sentence, how the code
-makes it work.
+A Burn names the waiting changes and their scope. For larger work, the agent can split independent tasks across subagents, then integrate and verify the result. The shared design gives those tasks a common brief.
 
-**The detail screen** — the first "zoom in". Clicking **Components and instances** in the map
-opens *How an instance stays a copy*: five deeper claims (rebuilds, override groups, variant
-switches, slots, libraries), each with its own source. The back link returns to the map. It sits to
-the right of the map on the Features page and is a prototype link, so it also plays in presentation.
+Completion is checked against Git: the node verifies the branch and ancestry, the exact frozen design, and the job's commit trailer. An idle agent alone doesn't mark the work done. These checks verify the recorded handoff; tests and review establish whether the implementation is correct. [Completion checks →](service/src/node_git.rs#L1050)
 
-**Anatomy** — how a feature is built: a panel calls a command, the command edits the document,
-layout and text give it geometry, the renderer gives it pixels, and the file or the wire carries
-it. Plus the seam that makes the tool agent-friendly: the menu, a shortcut, the Actions palette,
-the CLI, the MCP server, the control channel and a plugin all dispatch the same command ids.
+## Give your agent a shared picture
 
-**Map mode** — a drawn proposal, not a claim about the code: the same document with the drawing
-tools gone, a selected card, a question, and the map's own change history. It is here to be
-looked at and argued with.
+Every box has an ID. Through the Afterburn **MCP server**, an agent can fetch a card and its children, look at a screenshot, inspect the map, read the pending diff, and draw its answer back into the same document.
 
-**Components** — every main: `Branch`, `Leaf`, `Stage`, `Surfaces`, `Root`, `Arrow`. Edit a main
-and every page follows.
+The prompt supplies the place and the task. The agent pulls the rest as needed.
 
-## The system design
+<details>
+<summary><strong>The tools behind the canvas</strong></summary>
 
-A second, single-page design on the same 0.7.0 server: **"Afterburn · system"**. It draws the shape we
-are building — the Mac client over Tailscale, one host service, the document plane and the
-execution plane (the private Herdr) in the same process, and what a user installs versus what they
-never see. `design/build_system.py` builds and publishes it; it can be opened on the Mac through
-the app's control channel and `ui.render`.
+| Read | Write |
+|---|---|
+| `get_node` — a card or page and its children | `create_node` — add a layer |
+| `screenshot` — see the current design | `set_properties` — update specific layers |
+| `inspect_document` — inspect the map | `run_command` — execute a document command |
+| `node_request` — inspect diffs and job state | `add_video` — place a clip on the canvas |
 
-## The client
+`list_commands` exposes the document commands and their parameters. The node owns the live design and saves `.afterburn/map.figcraft`.
 
-**Afterburn.app** is the Mac client: FigCraft's engine and canvas with the editor taken off the
-human's screen. `--map-mode` hides the layers and design panels, the toolbar, the tab bar and the
-frame labels, and adds a top bar with one tab per page and the live count. The bundle
-carries its own icon; eframe's runtime Dock-icon override is skipped in map mode so the bundle's
-icon is the one shown. Every command that edits the document is refused in map mode — select,
-navigate and comment only. The canonical app source lives in `server/figcraft/apps/figcraft` and its UI crate; the icon and
-`build-mac.sh` live in [`client/`](client/README.md). It is a UI gate, not yet a permission model: editing
-shortcuts and the writable document remain, and page navigation is done by the control channel
-until the map has in-canvas links.
-
-The installed FigCraft.app (0.5.1) stays untouched; Afterburn is a separate 0.7.0 bundle talking to
-our 0.7.0 server.
-
-## Click, then ask
-
-The part that makes this more than a document is `design/context.py`. Given a selected layer — in
-the built file or in the live hosted copy — it walks up to the component instances that carry the
-meaning and prints one JSON bundle: the page, the trail of cards from the area to the leaf, their
-text and `path:line` sources, a crop of the map around the selection, and the map's version.
+For a manually configured MCP client:
 
 ```sh
-python3 design/context.py --node 322
-python3 design/context.py --link "figcraft://join?server=…&file=…&token=…" --node 17179869441
+afterburn-node mcp --path /absolute/path/to/your/repo
 ```
 
-That bundle is what an agent needs to answer *"what does this mean, and where does it live?"*
-without the person retyping the context. Clicking a card is the fastest way to ask about it.
+Init sets up the Afterburn skill and MCP entry for installed **Claude Code** and **Codex** CLIs. Agents run in the machine's shared **Herdr** workspace; other supported runners need their own tool configuration. [Tool setup →](service/src/agent_tools.rs)
 
-## Anchors
+</details>
 
-A card's source is `(path, literal)` in [`design/map_content.py`](design/map_content.py). The
-build finds that literal in that file, requires it exactly once, and shows `path:line` on the
-card. Move or rename the line and the build stops, naming the card. The map cannot invent a
-feature, a flag or a type the code does not have.
+## Get started
 
-## Build the historical feature-map generator
+Afterburn is early software. The packaged desktop workflow is **macOS**; the headless node can run on **macOS or Linux**. Bring Git, Herdr, and an installed coding-agent CLI such as Claude Code or Codex, configured for your account.
 
-The scripts use only the Python standard library; the engine is the FigCraft CLI.
+### Build and open the Mac app
+
+From a checkout of this repository, with Rust **1.97.1**, Xcode command-line tools, and Python **3.9+** installed:
 
 ```sh
-git clone --depth 1 https://github.com/storytold/figcraft .figcraft-src
-
-python3 design/check_anchors.py       # resolve every source; print what moved
-python3 design/build_map.py --check   # the same, as the build sees it
-python3 design/build_map.py           # build/figcraft-feature-map.figcraft + shots/
-python3 design/build_map.py --publish # first publish only: creates a new server file
+./client/build-mac.sh
+open "$HOME/Applications/Afterburn.app" --args --map-mode --node 127.0.0.1:47822
 ```
 
-It uses `figcraft-cli` at `/root/figcraft-host/vendor/figcraft-cli` and, for publishing, the host
-bridge at `/root/figcraft-host/app/mcp_bridge.py` — that is where the server key lives. Override
-the paths with `FIGCRAFT_CLI`, `FIGCRAFT_BRIDGE` and `FIGCRAFT_SERVER_DATA`.
+The script builds the app and node together, installs `Afterburn.app`, and registers a separate launchd helper. The node keeps running when you quit the app.
 
-## Updating the hosted copy
+Open your repository's worktree, choose an agent, and press **Init** to draw your first map. If Herdr is missing, host setup asks before installing it. Existing nodes from a different build require an explicit upgrade.
 
-The hosted file keeps its id and its links. An update joins it, deletes its pages and imports the
-rebuilt document (`file.import` copies pages, components and interactions), so the team's copy
-becomes the new build in place:
+[Full Mac setup and upgrades →](client/README.md)
 
-```text
-join the hosted file → page.delete (old pages) → file.import build/figcraft-feature-map.figcraft
-→ page.delete (the leftover) → verify pages, components, and one prototype link
-```
+### Run a headless node
 
-Publishing (`--publish`) is only for the first copy: it creates a new server file, which is why the
-build refuses to publish when the name is already hosted.
-
-## The FigCraft checkout
-
-`.figcraft-src` is the pinned reference (0.7.0, `99e5db3`) the anchors resolve against. When the map
-work moves into FigCraft itself, edit `figcraft-work/`, a worktree of the same clone on the
-`map-mode` branch:
+Build and run on the machine that holds your repository:
 
 ```sh
-git -C .figcraft-src worktree list
-cargo build -p figcraft --manifest-path figcraft-work/Cargo.toml
+cargo build --release --locked -p afterburn-node
+./target/release/afterburn-node serve --bind 127.0.0.1:47822
 ```
 
-Both are git-ignored historical generator inputs. Application and node development now uses
-the tracked canonical tree at `server/figcraft/` and the root workspace described above.
+The listener is local to that machine. Connect the desktop app to a remote node through SSH; each worktree and branch has its own session.
 
-## Why this exists
+[Remote machines, service installation, and protocol →](service/NODE.md)
 
-A chat window is a poor interface to a large system: too little context, too much scrolling, and
-the words drift between people and agents. A maintained visual map fixes the terms and the place.
-The person commands the altitude — zoom in on this, rename that, show the failure paths — and the
-agent keeps the drawing true enough to be useful, with its history as the record.
+## Under the hood
 
-The next steps toward that editor are the ones this map already leans on: a repository/commit
-binding for the document, anchors that survive a rebuild, prototype navigation for every area, and
-a selection that always carries its context bundle.
+Afterburn is a Rust desktop app built on **FigCraft's engine and egui canvas**, backed by a node on each repository machine. Herdr runs the agents. Git stores the design alongside the code.
 
-## Layout
+| Area | Where to look |
+|---|---|
+| Desktop app and canvas | [server/figcraft/](server/figcraft/) |
+| Node, agent routing, and verified commits | [service/](service/) |
+| Mac packaging and deployment | [client/](client/) |
+| How agents work with the map | [Afterburn skill](skills/afterburn/SKILL.md) |
+| Website | [landing/](landing/) |
+| Historical feature-map generator | [design/](design/README.md) |
 
-```
-design/
-  map_content.py   the copy, and every (path, literal) anchor
-  map_kit.py       the visual kit: one ink per area, cards, the detail screen, the map-mode sketch
-  fc.py            the minimal .figcraft writer (frames, auto layout, text)
-  sources.py       anchor resolution, repo statistics, revision
-  build_map.py     assemble pages, create components, place instances, publish
-  build_system.py  build and publish the system design and its screens page
-project/README.md  how opening a folder replaces links: project service, Herdr, agents
-  context.py       the context bundle for a selected layer
-  check_anchors.py resolve and print every anchor
-```
+<details>
+<summary>Follow the implementation</summary>
 
-See [`design/README.md`](design/README.md) for the mechanics.
+- [Comment → exact card](service/src/comments.rs#L275) and [page-scoped context](service/src/node_context.rs#L1)
+- [MCP tools](service/src/node_main.rs#L185) and [agent tool setup](service/src/agent_tools.rs#L131)
+- [Pages and exploration mode](server/figcraft/crates/ui-egui/src/page_tree.rs#L1)
+- [The implementation brief and parallel work](service/src/node_brief.rs#L78)
+- [Frozen-design commit verification](service/src/node_git.rs#L1050)
+
+</details>
