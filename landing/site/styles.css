@@ -161,6 +161,7 @@ a { color: inherit; text-decoration: none; }
   position: relative;
   width: min(1080px, 100%);
   margin-top: 14px;
+  flex: 1 0 auto; /* down to the bottom of the window, so the band is too */
 }
 .band {
   position: absolute;
@@ -169,8 +170,11 @@ a { color: inherit; text-decoration: none; }
   width: 100vw;
   max-width: 1440px;
   transform: translateX(-50%);
-  top: 53.95%;
-  bottom: -20px;
+  /* 53.95% down the 1080:608 player, as a share of its width (a margin's percentages are), so the
+     band starts at the same place on the video however tall the stage grows. */
+  top: 0;
+  margin-top: 30.372%;
+  bottom: -20px; /* through the hero's bottom padding */
   background:
     linear-gradient(var(--ink), var(--ink)) bottom / 100% 7.5% no-repeat,
     linear-gradient(var(--sun) 0 30%, var(--ink) 30% 33%, var(--ember) 33% 55%,
@@ -330,8 +334,8 @@ a { color: inherit; text-decoration: none; }
   .headline .burn { margin-top: -12px; }
   .sub { display: block; }
   .cta-top { display: none; }
-  .stage { margin-top: 22px; }
-  .band { top: 40.6%; bottom: -83px; }
+  .stage { margin-top: 22px; flex: none; }
+  .band { top: 40.6%; margin-top: 0; bottom: -83px; }
   .player { border-radius: 12px; }
   .play { width: 11.26%; min-width: 39.4px; }
   .watch, .controls { display: none; }
