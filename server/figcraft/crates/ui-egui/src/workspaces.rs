@@ -367,6 +367,12 @@ pub struct State {
     pending_live: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_reopen: Option<crate::node::SessionRef>,
+    /// The workspace the last run had open, until this run's first listing arrives.
+    #[cfg(not(target_arch = "wasm32"))]
+    restore: Option<crate::node_hosts::Last>,
+    /// That workspace's id on the machine in use: opened as soon as a frame can ask for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    reopen: Option<String>,
     events_refresh: bool,
     events_at: f64,
     /// The selected workspace id (its detail shows on the right).
@@ -543,6 +549,12 @@ impl State {
         if self.selected.as_deref() != Some(workspace) {
             self.select(workspace);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Whatever is opened now is the choice: a pending reopen of the last run's is dropped.
+            self.restore = None;
+            self.reopen = None;
+        }
         self.selected = Some(workspace.to_string());
         if init {
             self.target = target.clone();
@@ -674,6 +686,20 @@ impl State {
                     self.clis = reply.clis;
                     self.agent_tools_missing = reply.agent_tools_missing;
                     self.node_version = reply.node.filter(|v| !v.trim().is_empty());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(last) = self.restore.take().filter(|last| last.address == service_addr()) {
+                        // The workspace the last run had open: found by its checkout, else its id.
+                        let row = self
+                            .rows
+                            .iter()
+                            .find(|w| !last.path.is_empty() && w.path.as_deref() == Some(last.path.as_str()))
+                            .or_else(|| self.rows.iter().find(|w| w.id == last.workspace))
+                            .filter(|w| w.map_state() != MapState::None);
+                        if let Some(id) = row.map(|w| w.id.clone()) {
+                            self.select(&id);
+                            self.reopen = Some(id);
+                        }
+                    }
                     if self.selected.is_none() {
                         self.target = None;
                         // The detail always shows a workspace: Herdr's focused one, else the first.
@@ -707,6 +733,16 @@ impl State {
                         }
                         #[cfg(target_arch = "wasm32")]
                         let _ = session;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(route) = self.join.as_deref()
+                            && let Ok(node) = crate::node::SessionRef::parse(route)
+                        {
+                            crate::node_hosts::save_last(&crate::node_hosts::Last {
+                                address: node.address,
+                                workspace: node.workspace,
+                                path: node.path,
+                            });
+                        }
                         if init {
                             // Init installed the agent tools before it started the agent.
                             self.agent_tools_missing.clear();
@@ -837,11 +873,34 @@ impl Skin {
     }
 }
 
+/// The first frame: go to the machine of the workspace the last run had open (the launch's own
+/// `--node` or `AFTERBURN_NODE` wins when it names another), and note the workspace to reopen.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_hosts(app: &mut FigApp) {
+    let given = SERVICE.get().is_some() || std::env::var("AFTERBURN_NODE").is_ok_and(|address| !address.trim().is_empty());
+    let last = crate::node_hosts::load_last().filter(|last| !given || last.address == service_addr());
+    let address = last.as_ref().map_or_else(service_addr, |last| last.address.clone());
+    app.ws.restore = last;
+    crate::node_hosts::select(&mut app.ws.hosts, crate::node_hosts::resolve(&address));
+}
+
+/// Open the workspace the last run had open, once its machine has listed it.
+#[cfg(not(target_arch = "wasm32"))]
+fn reopen_last(app: &mut FigApp, ctx: &egui::Context) {
+    if app.ws.busy.is_none()
+        && let Some(id) = app.ws.reopen.take()
+    {
+        app.ws.act(ctx, &id, false);
+    }
+}
+
 /// Draw the Workspaces screen in the window's `ui`.
 pub fn show(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     // Take in what the request threads found before drawing the rows they change.
     app.ws.poll();
+    #[cfg(not(target_arch = "wasm32"))]
+    reopen_last(app, &ctx);
     // A service reply with a link: join it as the human would have, then show the map.
     if join_ready(app) {
         return;
@@ -858,7 +917,7 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
     if !app.ws.started {
         app.ws.started = true;
         #[cfg(not(target_arch = "wasm32"))]
-        crate::node_hosts::select(&mut app.ws.hosts, crate::node_hosts::resolve(&service_addr()));
+        start_hosts(app);
         #[cfg(target_arch = "wasm32")]
         app.ws.refresh(&ctx);
     }
@@ -891,13 +950,15 @@ pub fn show(app: &mut FigApp, ui: &mut Ui) {
 pub fn pane(app: &mut FigApp, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     app.ws.poll();
+    #[cfg(not(target_arch = "wasm32"))]
+    reopen_last(app, &ctx);
     if join_ready(app) {
         return;
     }
     if !app.ws.started {
         app.ws.started = true;
         #[cfg(not(target_arch = "wasm32"))]
-        crate::node_hosts::select(&mut app.ws.hosts, crate::node_hosts::resolve(&service_addr()));
+        start_hosts(app);
         #[cfg(target_arch = "wasm32")]
         app.ws.refresh(&ctx);
     }
@@ -1069,6 +1130,7 @@ pub fn update_active(app: &mut FigApp) {
 pub fn poll_node_events(app: &mut FigApp, ctx: &egui::Context) {
     // Checkout transitions must also finish while the workspace sidebar is hidden.
     app.ws.poll();
+    reopen_last(app, ctx);
     join_ready(app);
     let selected = service_addr();
     let active = active_node(app).ok().or_else(|| app.ws.pending_route.as_deref().and_then(|route| crate::node::SessionRef::parse(route).ok()));
@@ -2608,5 +2670,46 @@ mod detail_tests {
         state.poll();
         assert_eq!(state.selected.as_deref(), Some("w2"));
         assert_eq!(state.node_version.as_deref(), Some("0.1.0"));
+    }
+
+    /// The workspace the last run had open is opened again: found by its checkout (Herdr's ids
+    /// change when it restarts), only on its own machine, only when it has a map, and only once.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_first_list_reopens_the_last_runs_workspace() {
+        let list = |state: &mut State| {
+            let (tx, rx) = mpsc::channel();
+            state.rx = Some(rx);
+            let reply = ServiceReply {
+                ok: true,
+                workspaces: Some(vec![
+                    Workspace { id: "w1".into(), focused: true, map: "map".into(), path: Some("/code/other".into()), ..Workspace::default() },
+                    Workspace { id: "w7".into(), map: "map".into(), path: Some("/code/mindmap".into()), ..Workspace::default() },
+                    Workspace { id: "w9".into(), path: Some("/code/blank".into()), ..Workspace::default() },
+                ]),
+                ..ServiceReply::default()
+            };
+            assert!(tx.send((Kind::List, Ok(reply))).is_ok());
+            state.poll();
+        };
+        let last = |workspace: &str, path: &str, address: String| crate::node_hosts::Last { address, workspace: workspace.into(), path: path.into() };
+
+        let mut state = State { restore: Some(last("w3", "/code/mindmap", service_addr())), ..State::default() };
+        list(&mut state);
+        assert_eq!(state.reopen.as_deref(), Some("w7"), "found by its checkout, under a new id");
+        assert_eq!(state.selected.as_deref(), Some("w7"));
+        // A later list does not open anything again.
+        state.reopen = None;
+        list(&mut state);
+        assert_eq!(state.reopen, None);
+
+        let mut state = State { restore: Some(last("w9", "/code/blank", service_addr())), ..State::default() };
+        list(&mut state);
+        assert_eq!(state.reopen, None, "a workspace without a map is not opened");
+        assert_eq!(state.selected.as_deref(), Some("w1"));
+
+        let mut state = State { restore: Some(last("w7", "/code/mindmap", "ssh:elsewhere".into())), ..State::default() };
+        list(&mut state);
+        assert_eq!(state.reopen, None, "another machine's listing does not open it");
     }
 }

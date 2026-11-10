@@ -404,6 +404,48 @@ fn hosts_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/afterburn/hosts.json"))
 }
 
+/// The workspace the app had open: the next launch opens it again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Last {
+    /// The machine it is on (a node address, `ssh:<target>` for an SSH machine).
+    pub address: String,
+    /// Herdr's workspace id, which a Herdr restart may change.
+    pub workspace: String,
+    /// Its checkout: what the workspace is found by first.
+    #[serde(default)]
+    pub path: String,
+}
+
+fn last_path() -> Option<PathBuf> {
+    hosts_path().map(|path| path.with_file_name("last-workspace.json"))
+}
+
+/// The workspace the last run opened, if any. Tests never read the user's file.
+pub(crate) fn load_last() -> Option<Last> {
+    if cfg!(test) {
+        return None;
+    }
+    let bytes = std::fs::read(last_path()?).ok()?;
+    let last: Last = serde_json::from_slice(bytes.get(..bytes.len().min(64 * 1024))?).ok()?;
+    (!last.address.trim().is_empty() && last.address.len() <= 300 && last.workspace.len() <= 300).then_some(last)
+}
+
+/// Keep `last` for the next launch. Best effort: a failed save only loses the convenience.
+pub(crate) fn save_last(last: &Last) {
+    if cfg!(test) {
+        return;
+    }
+    let Some(path) = last_path() else { return };
+    let Ok(bytes) = serde_json::to_vec(last) else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let temp = path.with_extension(format!("{}.tmp", std::process::id()));
+    if std::fs::write(&temp, bytes).is_ok() {
+        let _ = std::fs::rename(temp, path);
+    }
+}
+
 fn save_hosts(hosts: &[Host]) -> Result<(), String> {
     let path = hosts_path().ok_or("Home directory unavailable")?;
     if let Some(parent) = path.parent() {
