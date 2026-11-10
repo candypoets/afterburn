@@ -40,6 +40,10 @@ const MAX_SECONDS: f64 = 600.0;
 /// Canvas units per second of the timeline picture.
 const PPS: f64 = 40.0;
 const LANE_X: f64 = 120.0;
+/// A cut's card on the canvas: its clip's size, and the space between cards.
+const CUT_W: f64 = 208.0;
+const CUT_H: f64 = 117.0;
+const CUT_GAP: f64 = 12.0;
 const SHOT_COLORS: [&str; 6] = [
     "#3E4A57", "#557060", "#7A4A3C", "#4C5480", "#8A6A2C", "#5C5C5C",
 ];
@@ -622,7 +626,63 @@ pub fn check_render(plan: &Plan, probe: &Probe) -> std::result::Result<(), Vec<S
 }
 
 /// Check, render and store an edit. Nothing is written when a gate refuses it.
-pub fn build(worktree: &Path, raw: &Value) -> Result<(Plan, Stored, Probe)> {
+/// An edit that passed every gate: its plan, the rendered take and its numbers, and each cut as
+/// a clip of its own (in the order of the cut list).
+pub struct Built {
+    pub plan: Plan,
+    pub take: Stored,
+    pub probe: Probe,
+    pub cuts: Vec<Stored>,
+}
+
+/// One cut on its own: the source from `in` to `out`, small and silent, in the format the app
+/// plays. It is what the cut's card on the canvas shows.
+fn render_cut(plan: &Plan, index: usize, target: &Path) -> Result<()> {
+    let (Some(cut), Some(source)) = (plan.edit.clips.get(index), plan.clips.get(index)) else {
+        return Err(Error::new("edit.apply: a cut has no source"));
+    };
+    let output = Command::new("ffmpeg")
+        .args([
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            &format!("{:.4}", cut.start),
+        ])
+        .args(["-t", &format!("{:.4}", cut.out - cut.start), "-i"])
+        .arg(source)
+        .args([
+            "-an",
+            "-vf",
+            &format!("fps={},scale=480:-2,setsar=1,format=yuv420p", plan.edit.fps),
+        ])
+        .args([
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "baseline",
+            "-crf",
+            "27",
+            "-g",
+            &plan.edit.fps.to_string(),
+        ])
+        .args(["-movflags", "+faststart", "-f", "mp4"])
+        .arg(target)
+        .stdin(Stdio::null())
+        .output()?;
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        let said = said.lines().last().unwrap_or("no message");
+        return Err(Error::new(format!(
+            "ffmpeg could not cut {}: {said}",
+            cut.id
+        )));
+    }
+    Ok(())
+}
+
+pub fn build(worktree: &Path, raw: &Value) -> Result<Built> {
     tool("ffmpeg")?;
     tool("ffprobe")?;
     let edit: Edit = serde_json::from_value(raw.clone())
@@ -636,15 +696,22 @@ pub fn build(worktree: &Path, raw: &Value) -> Result<(Plan, Stored, Probe)> {
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch)?;
     let take = scratch.join("take.mp4");
-    let built: Result<(Stored, Probe)> = (|| {
+    let built: Result<(Stored, Probe, Vec<Stored>)> = (|| {
         render(&plan, &scratch, &take)?;
         let probe = probe(&take)?;
         check_render(&plan, &probe).map_err(refused)?;
         let stored = crate::node_media::store(worktree, &take)?;
-        Ok((stored, probe))
+        // Each cut as a clip of its own: the canvas shows them side by side.
+        let mut cuts = Vec::new();
+        for index in 0..plan.edit.clips.len() {
+            let file = scratch.join(format!("cut-{index}.mp4"));
+            render_cut(&plan, index, &file)?;
+            cuts.push(crate::node_media::store(worktree, &file)?);
+        }
+        Ok((stored, probe, cuts))
     })();
     let _ = std::fs::remove_dir_all(&scratch);
-    let (stored, probe) = built?;
+    let (stored, probe, cuts) = built?;
     // Only an edit that passed every gate becomes the file.
     let file = dir.join(format!("{}.json", plan.edit.name));
     let partial = dir.join(format!(".{}.json.part", plan.edit.name));
@@ -653,7 +720,12 @@ pub fn build(worktree: &Path, raw: &Value) -> Result<(Plan, Stored, Probe)> {
         format!("{}\n", serde_json::to_string_pretty(&plan.edit)?),
     )?;
     std::fs::rename(&partial, &file)?;
-    Ok((plan, stored, probe))
+    Ok(Built {
+        plan,
+        take: stored,
+        probe,
+        cuts,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -865,15 +937,13 @@ fn words_height(text: &str, width: f64) -> f64 {
 ///
 /// Every shot, voice segment, caption and the music is a frame of its own with its words inside,
 /// so the map selects each as one card and a comment lands on it.
-pub fn place(
-    engine: &mut figcraft_engine::Session,
-    plan: &Plan,
-    stored: &Stored,
-    probe: &Probe,
-    req: &Value,
-) -> Result<Value> {
+pub fn place(engine: &mut figcraft_engine::Session, built: &Built, req: &Value) -> Result<Value> {
+    let (plan, stored, probe) = (&built.plan, &built.take, &built.probe);
     let edit = &plan.edit;
-    let width = (LANE_X + plan.total * PPS + 32.0).max(720.0);
+    let cuts_in_row = edit.clips.len().clamp(1, 8) as f64;
+    let width = (LANE_X + plan.total * PPS + 32.0)
+        .max(64.0 + cuts_in_row * (CUT_W + CUT_GAP) - CUT_GAP)
+        .max(720.0);
     let take_w = 480.0f64;
     let take_h = (take_w * f64::from(edit.height) / f64::from(edit.width.max(1))).round();
     // Lanes are as tall as their tallest block: all the words of a voice line or caption show.
@@ -898,7 +968,10 @@ pub fn place(
         .map(|caption| words_height(&caption.text, (caption.until - caption.at) * PPS - 1.0))
         .fold(28.0, f64::max);
     let heights = [44.0, voice_h, caption_h, 28.0];
-    let lanes_y = 84.0 + take_h + 40.0;
+    // The cuts, side by side under the take: eight to a row.
+    let cuts_y = 84.0 + take_h + 52.0;
+    let cut_rows = edit.clips.len().div_ceil(8).max(1) as f64;
+    let lanes_y = cuts_y + cut_rows * (CUT_H + 44.0 + CUT_GAP) + 28.0;
     let lane = |index: usize| lanes_y + heights.iter().take(index).map(|h| h + 10.0).sum::<f64>();
     let ruler = lane(4);
     let height = ruler + 64.0;
@@ -1024,6 +1097,72 @@ pub fn place(
         "#507A62",
         true,
     )?;
+    // Each cut as its own card: its clip (playable, showing its first frame) over its name and
+    // what it takes from its source. The card is a frame, so the map selects it whole.
+    draw.text(
+        root,
+        "cuts label",
+        32.0,
+        cuts_y - 22.0,
+        "THE CUTS · EACH PLAYS ON ITS OWN",
+        10.0,
+        grey,
+        true,
+    )?;
+    let mut cut_clips = Vec::new();
+    for (index, cut) in edit.clips.iter().enumerate() {
+        let (column, row) = ((index % 8) as f64, (index / 8) as f64);
+        let key = format!("cut {}", cut.id);
+        let card = draw.item(
+            root,
+            &key,
+            "frame",
+            32.0 + column * (CUT_W + CUT_GAP),
+            cuts_y + row * (CUT_H + 44.0 + CUT_GAP),
+            Some((CUT_W, CUT_H + 44.0)),
+            json!({"fill": "#FFFFFF", "stroke": "#E3E2DF", "strokeWeight": 1, "cornerRadius": 6.0, "clip": true}),
+        )?;
+        let clip = draw.item(
+            card,
+            &format!("cut clip {}", cut.id),
+            "rectangle",
+            0.0,
+            0.0,
+            Some((CUT_W, CUT_H)),
+            json!({"fill": "#101010", "cornerRadius": 0.0}),
+        )?;
+        cut_clips.push(clip);
+        draw.text(
+            card,
+            &format!("cut title {}", cut.id),
+            8.0,
+            CUT_H + 7.0,
+            &format!(
+                "{:02}  {}",
+                index + 1,
+                cut.title.as_deref().unwrap_or(&cut.id)
+            ),
+            11.0,
+            ink,
+            false,
+        )?;
+        let source = cut.source.rsplit('/').next().unwrap_or(&cut.source);
+        draw.text(
+            card,
+            &format!("cut range {}", cut.id),
+            8.0,
+            CUT_H + 25.0,
+            &format!(
+                "{:.1}s · {:.1}–{:.1} of {source}",
+                cut.out - cut.start,
+                cut.start,
+                cut.out
+            ),
+            9.0,
+            grey,
+            true,
+        )?;
+    }
     // The lanes.
     for (index, label) in ["SHOTS", "VOICE", "CAPTIONS", "MUSIC"].iter().enumerate() {
         let tall = heights.get(index).copied().unwrap_or(28.0);
@@ -1217,41 +1356,49 @@ pub fn place(
         .map_err(|e| Error::new(e.to_string()))?;
     node.fills = vec![Paint::image(hash, ImageScaleMode::Fill)];
     node.plugin_data.insert(VIDEO_KEY.to_string(), tag);
+    for (layer, cut) in cut_clips.iter().zip(&built.cuts) {
+        let (hash, _, _) = figcraft_format::add_image(doc, cut.poster_jpeg.clone())
+            .map_err(|e| Error::new(e.to_string()))?;
+        let tag = serde_json::to_string(&cut.clip)?;
+        let node = doc
+            .get_mut(NodeId(*layer))
+            .map_err(|e| Error::new(e.to_string()))?;
+        node.fills = vec![Paint::image(hash, ImageScaleMode::Fill)];
+        node.plugin_data.insert(VIDEO_KEY.to_string(), tag);
+    }
     Ok(json!({
         "frame": root, "take": take, "video": stored.clip, "seconds": plan.total, "probe": probe,
         "file": format!("{EDITS_DIR}/{}.json", edit.name),
     }))
 }
 
-/// Renders no card names any more: takes of edits cost a file each, so only the kept one stays.
-pub fn drop_unused_takes(worktree: &Path, doc: &Document, was: Option<&str>) {
-    let Some(was) = was.filter(|name| afterburn_video::valid_file_name(name)) else {
-        return;
-    };
-    let used = doc
+/// Clips of the last apply that no card names any more go: every apply makes a take and a clip
+/// per cut, and only the ones on the canvas are kept.
+pub fn drop_unused(worktree: &Path, doc: &Document, were: &[String]) {
+    let used: BTreeSet<String> = doc
         .pages
         .iter()
         .flat_map(|page| doc.subtree(*page))
-        .any(|id| {
-            doc.node(id)
-                .and_then(|node| node.plugin_data.get(VIDEO_KEY))
-                .and_then(|tag| Clip::parse(tag))
-                .is_some_and(|clip| clip.file == was)
-        });
-    if !used {
-        let _ = std::fs::remove_file(worktree.join(afterburn_video::MEDIA_DIR).join(was));
+        .filter_map(|id| Clip::parse(doc.node(id)?.plugin_data.get(VIDEO_KEY)?))
+        .map(|clip| clip.file)
+        .collect();
+    for was in were {
+        if afterburn_video::valid_file_name(was) && !used.contains(was) {
+            let _ = std::fs::remove_file(worktree.join(afterburn_video::MEDIA_DIR).join(was));
+        }
     }
 }
 
-/// The take an edit's frame shows now.
-pub fn current_take(doc: &Document, name: &str) -> Option<String> {
-    let root = frame_of(doc, name)?;
-    doc.node(root)?.children.iter().find_map(|id| {
-        let node = doc.node(*id)?;
-        (node.plugin_data.get(ITEM_KEY).map(String::as_str) == Some("take"))
-            .then(|| Clip::parse(node.plugin_data.get(VIDEO_KEY)?))?
-            .map(|clip| clip.file)
-    })
+/// The clips an edit's frame shows now: its take and its cuts.
+pub fn current_clips(doc: &Document, name: &str) -> Vec<String> {
+    let Some(root) = frame_of(doc, name) else {
+        return Vec::new();
+    };
+    doc.subtree(root)
+        .into_iter()
+        .filter_map(|id| Clip::parse(doc.node(id)?.plugin_data.get(VIDEO_KEY)?))
+        .map(|clip| clip.file)
+        .collect()
 }
 
 /// The lock: a layer `edit.apply` generated is changed only by `edit.apply`. Returns the reason

@@ -83,7 +83,8 @@ fn the_gates_give_every_reason_at_once() {
 #[test]
 fn an_edit_renders_draws_and_redraws_in_place() {
     let dir = worktree("apply");
-    let (plan, stored, probed) = build(&dir, &cut_list()).unwrap();
+    let built = build(&dir, &cut_list()).unwrap();
+    let (plan, stored, probed) = (&built.plan, &built.take, &built.probe);
     assert!((plan.total - 3.0).abs() < 1e-9);
     assert_eq!(plan.starts, vec![0.0, 1.5]);
     assert!(
@@ -98,14 +99,12 @@ fn an_edit_renders_draws_and_redraws_in_place() {
     let mut engine = figcraft_engine::Session::new();
     let page = engine.page().unwrap().0;
     assert!(
-        place(&mut engine, &plan, &stored, &probed, &json!({})).is_err(),
+        place(&mut engine, &built, &json!({})).is_err(),
         "the first apply needs a parent"
     );
     let drawn = place(
         &mut engine,
-        &plan,
-        &stored,
-        &probed,
+        &built,
         &json!({"parent": page, "x": 40, "y": 40}),
     )
     .unwrap();
@@ -133,10 +132,37 @@ fn an_edit_renders_draws_and_redraws_in_place() {
         Clip::parse(doc.node(take).unwrap().plugin_data.get(VIDEO_KEY).unwrap()).unwrap(),
         stored.clip
     );
-    assert_eq!(
-        current_take(&doc, "demo").as_deref(),
-        Some(stored.clip.file.as_str())
+    // The take and one clip per cut, each cut's on its own card with its first frame.
+    let first_clips = current_clips(&doc, "demo");
+    assert_eq!(first_clips.len(), 3);
+    assert!(first_clips.contains(&stored.clip.file));
+    assert_eq!(built.cuts.len(), 2);
+    let cut_two = item(&doc, "cut two").unwrap();
+    let card = doc.node(cut_two).unwrap();
+    assert!(
+        matches!(card.kind, figcraft_doc::NodeKind::Frame),
+        "a cut is a card the map selects"
     );
+    let clip_layer = card
+        .children
+        .iter()
+        .copied()
+        .find(|id| doc.node(*id).unwrap().plugin_data.contains_key(VIDEO_KEY))
+        .unwrap();
+    let cut_clip = Clip::parse(
+        doc.node(clip_layer)
+            .unwrap()
+            .plugin_data
+            .get(VIDEO_KEY)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cut_clip, built.cuts[1].clip);
+    assert!(
+        (1400..=1600).contains(&cut_clip.duration_ms),
+        "the cut is its 1.5 s, not the source: {cut_clip:?}"
+    );
+    assert!(!cut_clip.audio);
     let (one, two) = (
         item(&doc, "shot one").unwrap(),
         item(&doc, "shot two").unwrap(),
@@ -149,9 +175,11 @@ fn an_edit_renders_draws_and_redraws_in_place() {
     // A re-cut: shot two goes, shot one gets shorter. Same frame, same layers, a new take.
     let mut recut = cut_list();
     recut["clips"] = json!([{"id": "one", "source": "footage/a.mp4", "in": 0.0, "out": 3.0}]);
-    let (plan2, stored2, probed2) = build(&dir, &recut).unwrap();
+    let rebuilt = build(&dir, &recut).unwrap();
+    let (plan2, stored2) = (&rebuilt.plan, &rebuilt.take);
+    let _ = plan2;
     assert_ne!(stored2.clip.file, stored.clip.file);
-    let redrawn = place(&mut engine, &plan2, &stored2, &probed2, &json!({})).unwrap();
+    let redrawn = place(&mut engine, &rebuilt, &json!({})).unwrap();
     assert_eq!(redrawn["frame"].as_u64(), Some(frame));
     assert_eq!(redrawn["take"].as_u64(), Some(take.0));
     let doc = engine.doc().unwrap().clone();
@@ -205,16 +233,19 @@ fn an_edit_renders_draws_and_redraws_in_place() {
         &json!({"type": "text", "parent": one.0})
     )
     .is_some());
-    // The first take is on no card now: its file goes.
+    // What the first apply showed and this one does not goes: its take and the cut that left.
     let media = dir.join(afterburn_video::MEDIA_DIR);
-    assert!(media.join(&stored.clip.file).is_file());
-    drop_unused_takes(&dir, &doc, Some(&stored.clip.file));
+    assert!(first_clips.iter().all(|file| media.join(file).is_file()));
+    assert_eq!(item(&doc, "cut two"), None);
+    drop_unused(&dir, &doc, &first_clips);
     assert!(!media.join(&stored.clip.file).exists());
-    assert!(media.join(&stored2.clip.file).is_file());
-    drop_unused_takes(&dir, &doc, Some(&stored2.clip.file));
+    assert!(!media.join(&built.cuts[1].clip.file).exists());
+    let now = current_clips(&doc, "demo");
+    assert_eq!(now.len(), 2);
+    drop_unused(&dir, &doc, &now);
     assert!(
-        media.join(&stored2.clip.file).is_file(),
-        "the take in use stays"
+        now.iter().all(|file| media.join(file).is_file()),
+        "clips in use stay"
     );
 
     // The lock: generated layers change only through edit.apply.

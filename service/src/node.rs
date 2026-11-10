@@ -500,14 +500,14 @@ impl Node {
                     })?;
                 }
                 // Checking and rendering take a while: do them before taking the lock.
-                let (plan, stored, probe) = crate::node_edit::build(&worktree, edit)?;
-                let was = crate::node_edit::current_take(&before, &plan.edit.name);
+                let built = crate::node_edit::build(&worktree, edit)?;
+                let were = crate::node_edit::current_clips(&before, &built.plan.edit.name);
                 let (result, outgoing) = lock(&self.docs)?.edit(&session, |engine| {
-                    crate::node_edit::place(engine, &plan, &stored, &probe, req)
+                    crate::node_edit::place(engine, &built, req)
                 })?;
                 self.deliver(&session, outgoing);
                 let after = lock(&self.docs)?.document(&session)?;
-                crate::node_edit::drop_unused_takes(&worktree, &after, was.as_deref());
+                crate::node_edit::drop_unused(&worktree, &after, &were);
                 Ok(result)
             }
             "media.frames" | "media.probe" => {
