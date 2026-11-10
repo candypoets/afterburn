@@ -38,7 +38,7 @@ pub const ITEM_KEY: &str = "afterburn.edit.item";
 const MAX_CLIPS: usize = 200;
 const MAX_SECONDS: f64 = 600.0;
 /// Canvas units per second of the timeline picture.
-const PPS: f64 = 24.0;
+const PPS: f64 = 40.0;
 const LANE_X: f64 = 120.0;
 const SHOT_COLORS: [&str; 6] = [
     "#3E4A57", "#557060", "#7A4A3C", "#4C5480", "#8A6A2C", "#5C5C5C",
@@ -681,19 +681,39 @@ pub fn has_frame(doc: &Document, name: &str) -> bool {
     frame_of(doc, name).is_some()
 }
 
+/// A layer of the last apply: where it hangs and what kind it is.
+struct Old {
+    id: u64,
+    parent: u64,
+    kind: &'static str,
+}
+
 struct Draw<'a> {
     engine: &'a mut figcraft_engine::Session,
     root: u64,
     /// The layers of the last apply, by what they draw.
-    old: BTreeMap<String, u64>,
+    old: BTreeMap<String, Old>,
+}
+
+/// A box of the timeline: a frame, so the map selects it as one card, with its words inside.
+struct Block<'a> {
+    key: &'a str,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    fill: &'a str,
 }
 
 impl Draw<'_> {
-    /// Make or update the layer that draws `key`; it keeps its id across applies.
+    /// Make or update the layer that draws `key` under `parent`; it keeps its id across applies.
+    /// A layer of another kind or under another parent (an older layout) is replaced.
+    #[allow(clippy::too_many_arguments)]
     fn item(
         &mut self,
+        parent: u64,
         key: &str,
-        kind: &str,
+        kind: &'static str,
         x: f64,
         y: f64,
         size: Option<(f64, f64)>,
@@ -703,27 +723,33 @@ impl Draw<'_> {
             props["width"] = json!(w.max(1.0));
             props["height"] = json!(h.max(1.0));
         }
-        if let Some(id) = self.old.remove(key) {
-            props["ids"] = json!([id]);
-            props["x"] = json!(x);
-            props["y"] = json!(y);
-            self.engine
-                .execute("node.set", &props)
-                .map_err(engine_error)?;
-            return Ok(id);
+        let same = self
+            .old
+            .get(key)
+            .is_some_and(|old| old.kind == kind && old.parent == parent);
+        if same {
+            if let Some(old) = self.old.remove(key) {
+                props["ids"] = json!([old.id]);
+                props["x"] = json!(x);
+                props["y"] = json!(y);
+                self.engine
+                    .execute("node.set", &props)
+                    .map_err(engine_error)?;
+                return Ok(old.id);
+            }
         }
-        let mut params = json!({"type": kind, "parent": self.root, "name": key, "x": x, "y": y, "select": false});
-        if let Some((w, h)) = size {
-            params["width"] = json!(w.max(1.0));
-            params["height"] = json!(h.max(1.0));
+        let mut params =
+            json!({"type": kind, "parent": parent, "name": key, "x": x, "y": y, "select": false});
+        for field in ["width", "height"] {
+            if let Some(value) = props.get(field).cloned() {
+                params[field] = value;
+            }
         }
         if kind == "text" {
             params["text"] = props["characters"].take();
-            if let Some(object) = props.as_object_mut() {
-                object.remove("characters");
-            }
         }
         if let Some(object) = props.as_object_mut() {
+            object.remove("characters");
             object.remove("width");
             object.remove("height");
         }
@@ -741,6 +767,7 @@ impl Draw<'_> {
     #[allow(clippy::too_many_arguments)]
     fn text(
         &mut self,
+        parent: u64,
         key: &str,
         x: f64,
         y: f64,
@@ -751,6 +778,7 @@ impl Draw<'_> {
     ) -> Result<u64> {
         let family = if mono { "JetBrains Mono" } else { "Inter" };
         self.item(
+            parent,
             key,
             "text",
             x,
@@ -760,41 +788,83 @@ impl Draw<'_> {
         )
     }
 
+    /// Words that wrap inside `width`: all of them show.
     #[allow(clippy::too_many_arguments)]
-    fn rect(
+    fn wrapped(
         &mut self,
+        parent: u64,
         key: &str,
         x: f64,
         y: f64,
-        w: f64,
-        h: f64,
-        fill: &str,
-        radius: f64,
+        width: f64,
+        text: &str,
+        color: &str,
     ) -> Result<u64> {
         self.item(
+            parent,
+            key,
+            "text",
+            x,
+            y,
+            None,
+            json!({
+                "characters": text, "fontFamily": "Inter", "fontSize": WORDS_SIZE, "fill": color,
+                "width": width.max(8.0), "textAutoResize": "height",
+            }),
+        )
+    }
+
+    fn rect(&mut self, key: &str, x: f64, y: f64, w: f64, h: f64, fill: &str) -> Result<u64> {
+        self.item(
+            self.root,
             key,
             "rectangle",
             x,
             y,
             Some((w, h)),
-            json!({"fill": fill, "cornerRadius": radius}),
+            json!({"fill": fill, "cornerRadius": 4.0}),
+        )
+    }
+
+    fn block(&mut self, block: &Block<'_>) -> Result<u64> {
+        self.item(
+            self.root,
+            block.key,
+            "frame",
+            block.x,
+            block.y,
+            Some((block.w, block.h)),
+            json!({"fill": block.fill, "cornerRadius": 4.0, "clip": true}),
         )
     }
 }
 
-fn short(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_string()
-    } else {
-        format!(
-            "{}…",
-            text.chars().take(max.saturating_sub(1)).collect::<String>()
-        )
+const WORDS_SIZE: f64 = 9.0;
+
+/// How tall `text` stands when wrapped inside `width`, with room to spare: a block must hold all
+/// of its words.
+fn words_height(text: &str, width: f64) -> f64 {
+    let per_line = ((width - 10.0) / (WORDS_SIZE * 0.6)).floor().max(1.0);
+    // Wrapping breaks at words, so lines run short of the box: count each word's own length.
+    let mut lines = 1.0f64;
+    let mut used = 0.0f64;
+    for word in text.split_whitespace() {
+        let length = word.chars().count() as f64;
+        if used > 0.0 && used + 1.0 + length > per_line {
+            lines += 1.0 + (length / per_line).floor();
+            used = length % per_line;
+        } else {
+            used += length + if used > 0.0 { 1.0 } else { 0.0 };
+        }
     }
+    lines * (WORDS_SIZE * 1.35).ceil() + 10.0
 }
 
 /// Draw the edit on the canvas: the take (playable) and the timeline picture under it. The first
 /// apply needs `parent` (a page or card id) and takes `x`, `y`; later ones redraw in place.
+///
+/// Every shot, voice segment, caption and the music is a frame of its own with its words inside,
+/// so the map selects each as one card and a comment lands on it.
 pub fn place(
     engine: &mut figcraft_engine::Session,
     plan: &Plan,
@@ -806,8 +876,32 @@ pub fn place(
     let width = (LANE_X + plan.total * PPS + 32.0).max(720.0);
     let take_w = 480.0f64;
     let take_h = (take_w * f64::from(edit.height) / f64::from(edit.width.max(1))).round();
+    // Lanes are as tall as their tallest block: all the words of a voice line or caption show.
+    let voice_words: Vec<&str> = edit
+        .voice
+        .iter()
+        .map(|segment| segment.text.as_deref().unwrap_or(&segment.id))
+        .collect();
+    let voice_h = voice_words
+        .iter()
+        .enumerate()
+        .map(|(index, words)| {
+            words_height(
+                words,
+                plan.voice.get(index).map_or(0.0, |v| v.1) * PPS - 1.0,
+            )
+        })
+        .fold(28.0, f64::max);
+    let caption_h = edit
+        .captions
+        .iter()
+        .map(|caption| words_height(&caption.text, (caption.until - caption.at) * PPS - 1.0))
+        .fold(28.0, f64::max);
+    let heights = [44.0, voice_h, caption_h, 28.0];
     let lanes_y = 84.0 + take_h + 40.0;
-    let height = lanes_y + 4.0 * 44.0 + 70.0;
+    let lane = |index: usize| lanes_y + heights.iter().take(index).map(|h| h + 10.0).sum::<f64>();
+    let ruler = lane(4);
+    let height = ruler + 64.0;
     let existing = frame_of(engine.doc().map_err(engine_error)?, &edit.name);
     let root = match existing {
         Some(id) => {
@@ -841,16 +935,31 @@ pub fn place(
         }
     };
     let doc = engine.doc().map_err(engine_error)?;
-    let old: BTreeMap<String, u64> = doc
-        .node(NodeId(root))
-        .map(|node| node.children.clone())
-        .unwrap_or_default()
+    let old: BTreeMap<String, Old> = doc
+        .subtree(NodeId(root))
         .into_iter()
-        .filter_map(|id| Some((doc.node(id)?.plugin_data.get(ITEM_KEY)?.clone(), id.0)))
+        .filter_map(|id| {
+            let node = doc.node(id)?;
+            let kind = match node.kind {
+                figcraft_doc::NodeKind::Frame => "frame",
+                figcraft_doc::NodeKind::Rectangle => "rectangle",
+                _ if node.kind.text().is_some() => "text",
+                _ => "other",
+            };
+            Some((
+                node.plugin_data.get(ITEM_KEY)?.clone(),
+                Old {
+                    id: id.0,
+                    parent: node.parent?.0,
+                    kind,
+                },
+            ))
+        })
         .collect();
     let mut draw = Draw { engine, root, old };
     let (ink, grey, red) = ("#1A1A1A", "#6E6C68", "#B5452F");
     draw.text(
+        root,
         "eyebrow",
         32.0,
         25.0,
@@ -860,6 +969,7 @@ pub fn place(
         true,
     )?;
     draw.text(
+        root,
         "title",
         32.0,
         46.0,
@@ -876,7 +986,15 @@ pub fn place(
         false,
     )?;
     // The take: the render, playable in place. Same layer every apply; its picture and clip change.
-    let take = draw.rect("take", 32.0, 84.0, take_w, take_h, "#101010", 0.0)?;
+    let take = draw.item(
+        root,
+        "take",
+        "rectangle",
+        32.0,
+        84.0,
+        Some((take_w, take_h)),
+        json!({"fill": "#101010", "cornerRadius": 0.0}),
+    )?;
     let numbers = format!(
         "length    {:.2}s\nloudness  {}\nsilence   {:.1}s\nblack     {:.1}s",
         probe.seconds,
@@ -887,6 +1005,7 @@ pub fn place(
         probe.black_seconds
     );
     draw.text(
+        root,
         "probe label",
         32.0 + take_w + 24.0,
         84.0,
@@ -896,6 +1015,7 @@ pub fn place(
         true,
     )?;
     draw.text(
+        root,
         "probe",
         32.0 + take_w + 24.0,
         104.0,
@@ -905,12 +1025,13 @@ pub fn place(
         true,
     )?;
     // The lanes.
-    let lane = |index: usize| lanes_y + index as f64 * 44.0;
     for (index, label) in ["SHOTS", "VOICE", "CAPTIONS", "MUSIC"].iter().enumerate() {
+        let tall = heights.get(index).copied().unwrap_or(28.0);
         draw.text(
+            root,
             &format!("lane {label}"),
             32.0,
-            lane(index) + 12.0,
+            lane(index) + tall / 2.0 - 6.0,
             label,
             10.0,
             grey,
@@ -919,47 +1040,49 @@ pub fn place(
         draw.rect(
             &format!("lane bg {label}"),
             LANE_X,
-            lane(index),
+            lane(index) - 4.0,
             plan.total * PPS,
-            36.0,
+            tall + 8.0,
             "#F4F3F0",
-            4.0,
         )?;
     }
     for (index, cut) in edit.clips.iter().enumerate() {
         let x = LANE_X + plan.starts.get(index).copied().unwrap_or(0.0) * PPS;
-        let w = (cut.out - cut.start) * PPS;
+        let w = (cut.out - cut.start) * PPS - 1.0;
         let color = SHOT_COLORS
             .get(index % SHOT_COLORS.len())
             .copied()
             .unwrap_or("#5C5C5C");
-        draw.rect(
-            &format!("shot {}", cut.id),
+        let key = format!("shot {}", cut.id);
+        let shot = draw.block(&Block {
+            key: &key,
             x,
-            lane(0),
-            w - 1.0,
-            36.0,
-            color,
-            4.0,
-        )?;
-        let label = short(
-            cut.title.as_deref().unwrap_or(&cut.id),
-            ((w - 8.0) / 6.0).max(2.0) as usize,
-        );
+            y: lane(0),
+            w,
+            h: 44.0,
+            fill: color,
+        })?;
         draw.text(
+            shot,
             &format!("shot title {}", cut.id),
-            x + 5.0,
-            lane(0) + 4.0,
-            &label,
-            10.0,
+            6.0,
+            6.0,
+            cut.title.as_deref().unwrap_or(&cut.id),
+            11.0,
             "#FFFFFF",
             false,
         )?;
         draw.text(
+            shot,
             &format!("shot length {}", cut.id),
-            x + 5.0,
-            lane(0) + 20.0,
-            &format!("{:.1}s", cut.out - cut.start),
+            6.0,
+            25.0,
+            &format!(
+                "{:.1}s · {:.1}–{:.1}",
+                cut.out - cut.start,
+                cut.start,
+                cut.out
+            ),
             9.0,
             "#FFFFFFB0",
             true,
@@ -967,76 +1090,71 @@ pub fn place(
     }
     for (index, segment) in edit.voice.iter().enumerate() {
         let length = plan.voice.get(index).map_or(0.0, |v| v.1);
-        let (x, w) = (LANE_X + segment.at * PPS, length * PPS);
-        draw.rect(
-            &format!("voice {}", segment.id),
+        let (x, w) = (LANE_X + segment.at * PPS, length * PPS - 1.0);
+        let key = format!("voice {}", segment.id);
+        let block = draw.block(&Block {
+            key: &key,
             x,
-            lane(1) + 4.0,
-            w - 1.0,
-            28.0,
-            "#CBDCD1",
-            4.0,
-        )?;
-        let label = short(
-            segment.text.as_deref().unwrap_or(&segment.id),
-            ((w - 8.0) / 5.6).max(2.0) as usize,
-        );
-        draw.text(
+            y: lane(1),
+            w,
+            h: voice_h,
+            fill: "#CBDCD1",
+        })?;
+        let words = voice_words.get(index).copied().unwrap_or("");
+        draw.wrapped(
+            block,
             &format!("voice text {}", segment.id),
-            x + 5.0,
-            lane(1) + 12.0,
-            &label,
-            9.0,
+            5.0,
+            5.0,
+            w - 10.0,
+            words,
             "#33513F",
-            false,
         )?;
     }
     for (index, caption) in edit.captions.iter().enumerate() {
         let (x, w) = (
             LANE_X + caption.at * PPS,
-            (caption.until - caption.at) * PPS,
+            (caption.until - caption.at) * PPS - 1.0,
         );
-        draw.rect(
-            &format!("caption {index}"),
+        let key = format!("caption {index}");
+        let block = draw.block(&Block {
+            key: &key,
             x,
-            lane(2) + 4.0,
-            w - 1.0,
-            28.0,
-            "#E3E2DF",
-            4.0,
-        )?;
-        let label = short(&caption.text, ((w - 8.0) / 5.6).max(2.0) as usize);
-        draw.text(
+            y: lane(2),
+            w,
+            h: caption_h,
+            fill: "#E3E2DF",
+        })?;
+        draw.wrapped(
+            block,
             &format!("caption text {index}"),
-            x + 5.0,
-            lane(2) + 12.0,
-            &label,
-            9.0,
+            5.0,
+            5.0,
+            w - 10.0,
+            &caption.text,
             ink,
-            false,
         )?;
     }
     if let Some(bed) = &edit.music {
-        draw.rect(
-            "music",
-            LANE_X,
-            lane(3) + 12.0,
-            plan.total * PPS,
-            12.0,
-            "#B9B0D6",
-            6.0,
-        )?;
+        let block = draw.block(&Block {
+            key: "music",
+            x: LANE_X,
+            y: lane(3),
+            w: plan.total * PPS,
+            h: 28.0,
+            fill: "#B9B0D6",
+        })?;
         draw.text(
+            block,
             "music text",
-            LANE_X + 6.0,
-            lane(3) - 1.0,
-            &format!("{} · {:.0} dB", short(&bed.source, 60), bed.gain_db),
+            8.0,
+            8.0,
+            &format!("{} · {:.0} dB", bed.source, bed.gain_db),
             9.0,
-            grey,
+            "#2F2850",
             true,
         )?;
     }
-    let ruler = lane(4) - 2.0;
     let step = if plan.total > 120.0 {
         30
     } else if plan.total > 40.0 {
@@ -1046,16 +1164,17 @@ pub fn place(
     };
     for second in (0..=plan.total.floor() as u64).step_by(step) {
         let x = LANE_X + second as f64 * PPS;
-        draw.rect(
+        draw.item(
+            root,
             &format!("tick {second}"),
+            "rectangle",
             x,
             ruler,
-            1.0,
-            6.0,
-            "#B9B7B2",
-            0.0,
+            Some((1.0, 6.0)),
+            json!({"fill": "#B9B7B2", "cornerRadius": 0.0}),
         )?;
         draw.text(
+            root,
             &format!("tick text {second}"),
             x - 4.0,
             ruler + 9.0,
@@ -1065,12 +1184,27 @@ pub fn place(
             true,
         )?;
     }
-    draw.text("foot", 32.0, ruler + 34.0, "Generated by edit.apply from the file above. These layers are locked: change the cut list.", 10.0, grey, true)?;
-    // What the last apply drew and this one does not goes away.
-    let gone: Vec<u64> = draw.old.values().copied().collect();
-    if !gone.is_empty() {
+    draw.text(
+        root,
+        "foot",
+        32.0,
+        ruler + 34.0,
+        "Generated by edit.apply from the file above. These layers are locked: change the cut list.",
+        10.0,
+        grey,
+        true,
+    )?;
+    // What the last apply drew and this one does not goes away (children leave with their box).
+    let gone: BTreeSet<u64> = draw.old.values().map(|old| old.id).collect();
+    let tops: Vec<u64> = draw
+        .old
+        .values()
+        .filter(|old| !gone.contains(&old.parent))
+        .map(|old| old.id)
+        .collect();
+    if !tops.is_empty() {
         draw.engine
-            .execute("edit.delete", &json!({"ids": gone}))
+            .execute("edit.delete", &json!({"ids": tops}))
             .map_err(engine_error)?;
     }
     // The take's picture and clip: set on the document, the layer stays.
@@ -1135,20 +1269,17 @@ pub fn locked(doc: &Document, command: &str, params: &Value) -> Option<String> {
     if command.starts_with("select.") {
         return None;
     }
-    let generated = |id: u64| {
-        let node = doc.node(NodeId(id))?;
-        let inside = node.plugin_data.contains_key(ITEM_KEY)
-            || node
-                .parent
-                .and_then(|p| doc.node(p))
-                .is_some_and(|p| p.plugin_data.contains_key(EDIT_KEY));
-        let name = node
-            .parent
-            .and_then(|p| doc.node(p))
-            .and_then(|p| p.plugin_data.get(EDIT_KEY))
-            .cloned()
-            .unwrap_or_default();
-        inside.then_some(name)
+    // The edit whose frame holds `id` (a layer at any depth inside it; not the frame itself).
+    let edit_above = |id: u64| {
+        let mut at = doc.node(NodeId(id))?.parent;
+        for _ in 0..64 {
+            let node = doc.node(at?)?;
+            if let Some(name) = node.plugin_data.get(EDIT_KEY) {
+                return Some(name.clone());
+            }
+            at = node.parent;
+        }
+        None
     };
     let mut ids: Vec<u64> = params
         .get("ids")
@@ -1156,14 +1287,19 @@ pub fn locked(doc: &Document, command: &str, params: &Value) -> Option<String> {
         .map(|ids| ids.iter().filter_map(Value::as_u64).collect())
         .unwrap_or_default();
     ids.extend(params.get("id").and_then(Value::as_u64));
-    if let Some(name) = ids.into_iter().find_map(generated) {
+    if let Some(name) = ids.into_iter().find_map(edit_above) {
         return Some(format!(
             "this layer is generated from {EDITS_DIR}/{name}.json and is locked: change the cut list and call edit.apply"
         ));
     }
     // Nothing is added by hand inside an edit's frame either.
     let parent = params.get("parent").and_then(Value::as_u64)?;
-    let name = doc.node(NodeId(parent))?.plugin_data.get(EDIT_KEY)?;
+    let name = doc
+        .node(NodeId(parent))?
+        .plugin_data
+        .get(EDIT_KEY)
+        .cloned()
+        .or_else(|| edit_above(parent))?;
     Some(format!(
         "the frame of edit {name} holds only what edit.apply draws: put your layer beside it"
     ))

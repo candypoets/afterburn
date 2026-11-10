@@ -158,6 +158,53 @@ fn an_edit_renders_draws_and_redraws_in_place() {
     assert_eq!(item(&doc, "shot one"), Some(one), "a shot keeps its layer");
     assert_eq!(item(&doc, "shot two"), None, "a cut shot's layer goes");
     assert_eq!(doc.node(one).unwrap().width, 3.0 * PPS - 1.0);
+    // A shot is a frame holding its words: the map selects it as one card.
+    let shot = doc.node(one).unwrap();
+    assert!(matches!(shot.kind, figcraft_doc::NodeKind::Frame));
+    let title = shot
+        .children
+        .iter()
+        .copied()
+        .find(|id| {
+            doc.node(*id)
+                .unwrap()
+                .plugin_data
+                .get(ITEM_KEY)
+                .map(String::as_str)
+                == Some("shot title one")
+        })
+        .unwrap();
+    assert_eq!(
+        doc.node(title).unwrap().kind.text().unwrap().characters,
+        "one"
+    );
+    // A caption shows all of its words, wrapped inside its block.
+    let caption = item(&doc, "caption 0").unwrap();
+    let words = doc.node(caption).unwrap().children[0];
+    let words = doc.node(words).unwrap();
+    assert_eq!(
+        words.kind.text().unwrap().characters,
+        "Hello: it's \"quoted\", 100%"
+    );
+    assert!(
+        words.height <= doc.node(caption).unwrap().height,
+        "the block holds its words"
+    );
+    assert!(
+        locked(
+            &doc,
+            "node.set",
+            &json!({"ids": [title.0], "characters": "x"})
+        )
+        .is_some(),
+        "nested layers are locked too"
+    );
+    assert!(locked(
+        &doc,
+        "node.create",
+        &json!({"type": "text", "parent": one.0})
+    )
+    .is_some());
     // The first take is on no card now: its file goes.
     let media = dir.join(afterburn_video::MEDIA_DIR);
     assert!(media.join(&stored.clip.file).is_file());
