@@ -294,6 +294,10 @@ impl NodeDocuments {
     ) -> Result<(Value, Vec<Outgoing>)> {
         validate_command(command, params, 0)?;
         let mut s = self.get(session)?.clone();
+        // Layers an edit generated change only through edit.apply.
+        if let Some(reason) = crate::node_edit::locked(s.server.document(), command, params) {
+            return Err(Error::new(reason));
+        }
         let author = s.internal_peer()?;
         let mut doc = s.server.document().clone();
         doc.set_client_id(author);

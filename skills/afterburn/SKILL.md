@@ -18,7 +18,7 @@ afterburn-node mcp --path /absolute/worktree
 ```
 
 Tools: `inspect_document`, `get_node`, `create_node`, `set_properties`, `run_command`,
-`list_commands`, `screenshot`, `add_video`, `node_request`. Discover command parameters with `list_commands`.
+`list_commands`, `screenshot`, `add_video`, `apply_edit`, `video_frames`, `video_probe`, `node_request`. Discover command parameters with `list_commands`.
 `run_command` applies a FigCraft command through the authoritative session and broadcasts the
 changes. Use `command.batch` for selection-dependent steps. Inspect before and after editing, and
 look at your work with `screenshot` (a PNG of layers or a page; it writes nothing).
@@ -57,6 +57,33 @@ Baseline H.264 in MP4; any other clip is converted with ffmpeg when the node's m
 else refused. Screenshots and exports show the first frame only. Move or resize the card as any
 layer; keep its `afterburn.video` plugin data. Commit the clip's file with the map, or other
 machines' checkouts get a card whose clip is missing.
+
+## Video editing
+
+An edit is a file, `.afterburn/edits/<name>.json`: a cut list. It is the only truth; the canvas
+shows it. Send the whole cut list with `apply_edit` (node method `edit.apply`):
+
+```json
+{"name": "intro", "width": 1280, "height": 720, "fps": 30, "target_seconds": 30,
+ "clips": [{"id": "hook", "source": "footage/map.mp4", "in": 2.0, "out": 7.0, "title": "Hook"},
+           {"id": "comment", "source": "footage/comment.mp4", "in": 0, "out": 6, "crossfade": 0.5}],
+ "voice": [{"id": "v1", "source": "voice/hook.wav", "at": 0.5, "text": "Your code, on one canvas."}],
+ "captions": [{"text": "Your code, on one canvas.", "at": 0.5, "until": 3.0, "voice": "v1"}],
+ "music": {"source": "music/bed.wav", "gain_db": -22}}
+```
+
+Sources are files in the worktree; times are seconds. The node checks the list (sources exist,
+cuts fit their sources, the length is `target_seconds` within one frame, a `crossfade` is the only
+overlap, voice segments do not overlap, a caption sits inside the voice it names), renders it with
+ffmpeg, measures the render and redraws the edit's frame: the playable take and a timeline
+picture. A refused edit lists every reason; fix them all and send again. Pass `parent`, `x`, `y`
+the first time only. Never move, restyle or delete the frame's layers: they are locked, and keep
+their ids from one apply to the next so comments stay on their shot. Each apply replaces the
+take's file; commit the edit file, its sources and the kept take with the map.
+
+You cannot watch or hear a clip. `video_frames {node, times}` (`media.frames`) returns a contact
+sheet of frames at those seconds; `video_probe {node}` (`media.probe`) returns length, loudness
+(LUFS), seconds of silence and of black. Check a cut with both before saying it works.
 
 ## Page modes
 

@@ -473,11 +473,55 @@ impl Node {
                 crate::node_media::parent(req)?;
                 let worktree = lock(&self.docs)?.metadata(&session)?.worktree;
                 // Decoding (and converting) the clip takes a while: do it before taking the lock.
-                let stored = crate::node_media::store(&worktree, Path::new(required(req, "source")?))?;
-                let (result, outgoing) = lock(&self.docs)?
-                    .edit(&session, |engine| crate::node_media::place(engine, &stored, req))?;
+                let stored =
+                    crate::node_media::store(&worktree, Path::new(required(req, "source")?))?;
+                let (result, outgoing) = lock(&self.docs)?.edit(&session, |engine| {
+                    crate::node_media::place(engine, &stored, req)
+                })?;
                 self.deliver(&session, outgoing);
                 Ok(result)
+            }
+            // Video editing: the cut list is checked and rendered, then the edit's frame is redrawn.
+            "edit.apply" => {
+                let session = self.session(req)?;
+                let edit = req
+                    .get("edit")
+                    .filter(|edit| edit.is_object())
+                    .ok_or_else(|| Error::new("edit.apply needs edit: the cut list"))?;
+                let (worktree, before) = {
+                    let docs = lock(&self.docs)?;
+                    (docs.metadata(&session)?.worktree, docs.document(&session)?)
+                };
+                let name = edit["name"].as_str().unwrap_or("");
+                if !crate::node_edit::has_frame(&before, name) {
+                    // Before any render: a new edit needs a place on the canvas.
+                    crate::node_media::parent(req).map_err(|_| {
+                        Error::new("edit.apply needs parent the first time: the id of the page or card to draw the edit on")
+                    })?;
+                }
+                // Checking and rendering take a while: do them before taking the lock.
+                let (plan, stored, probe) = crate::node_edit::build(&worktree, edit)?;
+                let was = crate::node_edit::current_take(&before, &plan.edit.name);
+                let (result, outgoing) = lock(&self.docs)?.edit(&session, |engine| {
+                    crate::node_edit::place(engine, &plan, &stored, &probe, req)
+                })?;
+                self.deliver(&session, outgoing);
+                let after = lock(&self.docs)?.document(&session)?;
+                crate::node_edit::drop_unused_takes(&worktree, &after, was.as_deref());
+                Ok(result)
+            }
+            "media.frames" | "media.probe" => {
+                let session = self.session(req)?;
+                let (worktree, document) = {
+                    let docs = lock(&self.docs)?;
+                    (docs.metadata(&session)?.worktree, docs.document(&session)?)
+                };
+                let path = crate::node_edit::clip_path(&worktree, &document, req)?;
+                if required(req, "method")? == "media.frames" {
+                    crate::node_edit::frames(&path, req)
+                } else {
+                    Ok(json!({"probe": crate::node_edit::probe(&path)?}))
+                }
             }
             "media.read" => {
                 let session = self.session(req)?;

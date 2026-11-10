@@ -140,6 +140,7 @@ dependencies = [
  "figcraft-engine",
  "figcraft-format",
  "figcraft-text",
+ "image",
  "serde",
  "serde_json",
  "sha2",

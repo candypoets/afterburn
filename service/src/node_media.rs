@@ -53,9 +53,24 @@ fn convert(ffmpeg: &Path, source: &Path, target: &Path) -> Result<()> {
         .args(["-nostdin", "-loglevel", "error", "-y", "-i"])
         .arg(source)
         .args([
-            "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libx264", "-profile:v", "baseline",
-            "-pix_fmt", "yuv420p", "-vf", "scale='min(1920,iw)':-2", "-c:a", "aac", "-movflags",
-            "+faststart", "-f", "mp4",
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "baseline",
+            "-pix_fmt",
+            "yuv420p",
+            "-vf",
+            "scale='min(1920,iw)':-2",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            "-f",
+            "mp4",
         ])
         .arg(target)
         .stdin(Stdio::null())
@@ -63,7 +78,9 @@ fn convert(ffmpeg: &Path, source: &Path, target: &Path) -> Result<()> {
     if !output.status.success() {
         let said = String::from_utf8_lossy(&output.stderr);
         let said = said.lines().last().unwrap_or("no message");
-        return Err(Error::new(format!("ffmpeg could not convert the clip: {said}")));
+        return Err(Error::new(format!(
+            "ffmpeg could not convert the clip: {said}"
+        )));
     }
     Ok(())
 }
@@ -79,7 +96,11 @@ fn sha256_hex(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 /// Check (and, if needed, convert) `source`, then keep it in the worktree's media directory.
@@ -180,7 +201,10 @@ pub fn place(engine: &mut figcraft_engine::Session, stored: &Stored, req: &Value
     let id = placed["id"].clone();
     let tag = serde_json::to_string(clip)?;
     engine
-        .execute("node.set", &json!({"ids": [id], "pluginData": {VIDEO_KEY: tag}}))
+        .execute(
+            "node.set",
+            &json!({"ids": [id], "pluginData": {VIDEO_KEY: tag}}),
+        )
         .map_err(engine_error)?;
     // A reply's `id` is the request's: the card is `node`.
     Ok(json!({"node": id, "video": clip, "width": width, "height": height}))
@@ -230,7 +254,8 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("afterburn-media-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("afterburn-media-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -272,9 +297,12 @@ mod tests {
         for file in ["../secret.mp4", "/etc/passwd", "secret.mp4", ""] {
             assert!(read(&worktree, &json!({"file": file})).is_err(), "{file}");
         }
-        let missing = read(&worktree, &json!({"file": "0123456789abcdef0123456789abcdef.mp4"}))
-            .unwrap_err()
-            .to_string();
+        let missing = read(
+            &worktree,
+            &json!({"file": "0123456789abcdef0123456789abcdef.mp4"}),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(missing.contains("not in .afterburn/media"), "{missing}");
         let _ = std::fs::remove_dir_all(worktree);
     }
@@ -299,7 +327,12 @@ mod tests {
         let stored = store(&worktree, &sample()).unwrap();
         let mut engine = figcraft_engine::Session::new();
         let page = engine.page().unwrap().0;
-        let placed = place(&mut engine, &stored, &json!({"parent": page, "x": 40, "y": 60, "name": "Demo"})).unwrap();
+        let placed = place(
+            &mut engine,
+            &stored,
+            &json!({"parent": page, "x": 40, "y": 60, "name": "Demo"}),
+        )
+        .unwrap();
         let id = figcraft_doc::NodeId(placed["node"].as_u64().unwrap());
         let doc = engine.doc().unwrap();
         let node = doc.node(id).unwrap();
@@ -308,7 +341,10 @@ mod tests {
         let clip = Clip::parse(node.plugin_data.get(VIDEO_KEY).unwrap()).unwrap();
         assert_eq!(clip, stored.clip);
         assert_eq!(doc.images.len(), 1, "the poster is the card's image fill");
-        assert!(place(&mut engine, &stored, &json!({"x": 0})).is_err(), "a parent is required");
+        assert!(
+            place(&mut engine, &stored, &json!({"x": 0})).is_err(),
+            "a parent is required"
+        );
         let _ = std::fs::remove_dir_all(worktree);
     }
 }
