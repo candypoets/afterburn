@@ -18,19 +18,24 @@ docker compose -f landing/compose.yaml up -d --build
     "Demo lands soon".
   - `files/download/…`: the builds the download page links to. Drop them in; no rebuild needed.
 
-    | Link                      | File                                  |
-    |---------------------------|---------------------------------------|
-    | DOWNLOAD .DMG             | `afterburn-macos.dmg`                 |
-    | DOWNLOAD .MSI             | `afterburn-windows-x64.msi`           |
-    | ARM64 .ZIP                | `afterburn-windows-arm64.zip`         |
-    | DOWNLOAD .APPIMAGE        | `afterburn-linux-x86_64.AppImage`     |
-    | .DEB                      | `afterburn-linux-amd64.deb`           |
-    | .TAR.GZ · ARM64           | `afterburn-linux-arm64.tar.gz`        |
-    | CHECKSUMS · SHA-256       | `SHA256SUMS`                          |
-    | RELEASE NOTES             | `release-notes.html`                  |
-    | ALL RELEASES              | `releases/` (older builds)            |
+    **The download page now links to GitHub Releases**, not to these files: the app builds are
+    produced by `.github/workflows/release.yml` and attached to
+    <https://github.com/candypoets/afterburn/releases>. The page uses stable asset URLs, so a new
+    release needs no site change:
 
-    A link to a file that is not there yet shows the "on their way" page (`site/soon.html`).
+    | Link                      | GitHub asset (latest release)                       |
+    |---------------------------|-----------------------------------------------------|
+    | DOWNLOAD .DMG             | `afterburn-macos-arm64.dmg`                         |
+    | INTEL .DMG                | `afterburn-macos-x64.dmg`                           |
+    | DOWNLOAD .ZIP             | `afterburn-windows-x64.zip`                         |
+    | DOWNLOAD .APPIMAGE        | `afterburn-linux-x64.AppImage`                      |
+    | .TAR.GZ                   | `afterburn-linux-x64.tar.gz`                        |
+    | CHECKSUMS · SHA-256       | `SHA256SUMS`                                        |
+    | RELEASE NOTES             | <https://github.com/candypoets/afterburn/releases/latest> |
+    | ALL RELEASES              | <https://github.com/candypoets/afterburn/releases>  |
+
+    Under `files/download/` only the headless node remains (next bullet); an asset missing from the
+    latest release is a GitHub 404, since nginx no longer fronts those files.
   - `files/download/node/`: the headless node, in the layout `service/build-node.sh` produces —
     one directory per platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) with
     `afterburn-node` and `build-info.json`, plus `install-node.sh` and `install-node.py` beside

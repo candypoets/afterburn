@@ -112,12 +112,34 @@ A checkout queues a reopen on the same node after pending workspace activity fin
 mutating requests are not retried automatically because their outcome may be unknown. Quitting
 closes pooled connections and SSH tunnels; the independently supervised node remains running.
 
+## Releases (GitHub Actions)
+
+`.github/workflows/release.yml` builds and publishes the downloadables, so the download page can
+link to stable asset URLs (`…/releases/latest/download/<asset>`) instead of files on the web host:
+
+| Asset | Built on | Notes |
+|---|---|---|
+| `afterburn-macos-arm64.dmg` / `.zip` | `macos-15` | `client/build-mac.sh` with `INSTALL_NODE=0`, ad-hoc signed |
+| `afterburn-macos-x64.dmg` / `.zip` | `macos-15-intel` | same script, Intel |
+| `afterburn-linux-x64.AppImage` / `.tar.gz` | `ubuntu-22.04` | `client/build-linux.sh`, glibc 2.35 baseline |
+| `afterburn-windows-x64.zip` | `windows-2025` | app only: the node crate is Unix-only |
+| `SHA256SUMS` | — | checksums of everything above |
+
+- A push to `main` rebuilds the rolling **nightly** release (deleted and recreated, marked latest).
+- A `v*` tag publishes that tag as its own release, with generated notes:
+  `git tag v0.1.0 && git push origin v0.1.0`.
+- **Actions → Release → Run workflow** repeats either, and takes an optional tag.
+
+Builds are unsigned: macOS bundles are ad-hoc signed but not notarized (first launch needs
+right-click → Open), and the Windows binary is not Authenticode signed. Signed builds need the
+Apple/Windows certificates wired into the workflow as secrets.
+
 ## Verification
 
 ```sh
 cargo test -p figcraft-ui-egui node --lib
 python3 -m unittest discover -s service -p 'test_install_node.py' -v
-bash -n client/build-mac.sh client/deploy-mac.sh service/build-node.sh service/install-mac-node.sh
+bash -n client/build-mac.sh client/build-linux.sh client/deploy-mac.sh service/build-node.sh service/install-mac-node.sh
 sh -n service/install-node.sh
 ```
 

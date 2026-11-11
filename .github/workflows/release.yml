@@ -1,0 +1,238 @@
+# Builds the app for macOS (arm64 + Intel), Linux (x64) and Windows (x64) and publishes the
+# artifacts as a GitHub Release, so the download page can link to stable asset URLs:
+#
+#   https://github.com/candypoets/afterburn/releases/latest/download/<asset>
+#
+# - Push to main        → rolling "nightly" release (deleted and rebuilt, stays "latest")
+# - Push a v* tag       → that tag's release, with generated notes
+# - Run manually        → same, optionally into a tag you name
+#
+# Builds are unsigned: macOS is ad-hoc signed, Windows is not Authenticode signed. The headless
+# node is Unix-only (service/ uses std::os::unix), so the Windows build ships the app alone.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (empty: rebuild the rolling nightly release)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  meta:
+    name: Resolve release
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      nightly: ${{ steps.resolve.outputs.nightly }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${INPUT_TAG:-}" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="nightly"
+          fi
+          [[ "$tag" =~ ^v?[A-Za-z0-9._-]+$ ]] || { echo "Bad release tag: $tag" >&2; exit 1; }
+          nightly=true; [[ "$tag" != nightly ]] && nightly=false
+          # The product version lives in the node crate (the app's Cargo version is upstream's).
+          version="$(awk '
+            /^\[/ { in_pkg = ($0 == "[package]") ; next }
+            in_pkg && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }
+          ' service/Cargo.toml)"
+          {
+            echo "tag=$tag"
+            echo "nightly=$nightly"
+            echo "version=$version"
+          } >>"$GITHUB_OUTPUT"
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: meta
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-${{ matrix.arch }}
+      # build-mac.sh pins the toolchain from rust-toolchain.toml and needs the Xcode CLT tools.
+      - name: Build app bundle
+        env:
+          INSTALL_NODE: "0"
+          APP: ${{ runner.temp }}/Afterburn.app
+        run: ./client/build-mac.sh
+      - name: Package .dmg and .zip
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          out="$GITHUB_WORKSPACE/out"
+          ditto -c -k --sequesterRsrc --keepParent Afterburn.app "afterburn-macos-${{ matrix.arch }}.zip"
+          hdiutil create -quiet -volname Afterburn -srcfolder Afterburn.app \
+            -ov -format UDZO "afterburn-macos-${{ matrix.arch }}.dmg"
+          hdiutil verify "afterburn-macos-${{ matrix.arch }}.dmg" >/dev/null
+          mv "afterburn-macos-${{ matrix.arch }}.zip" "afterburn-macos-${{ matrix.arch }}.dmg" "$out/"
+          ls -lh "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: Linux x64
+    needs: meta
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x64
+      - name: Build and package
+        run: ./client/build-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: |
+            dist/release/afterburn-linux-x64.AppImage
+            dist/release/afterburn-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows x64
+    needs: meta
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64
+      # The node is Unix-only, so this builds the app alone (it reaches a node over TCP).
+      - name: Build app
+        run: cargo build --locked --release -p figcraft
+      - name: Package .zip
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item target/release/figcraft.exe out/afterburn.exe
+          Compress-Archive -Path out/afterburn.exe -DestinationPath out/afterburn-windows-x64.zip
+          Remove-Item out/afterburn.exe
+          Get-ChildItem out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: out/afterburn-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish ${{ needs.meta.outputs.tag }}
+    needs: [meta, macos, linux, windows]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          ls -lh
+          sha256sum afterburn-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Write release notes
+        env:
+          NIGHTLY: ${{ needs.meta.outputs.nightly }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cat >notes.md <<EOF
+          Afterburn ${VERSION} — automated build of \`${GITHUB_SHA:0:7}\` from ${GITHUB_REF_NAME}.
+          EOF
+          if [[ "$NIGHTLY" == true ]]; then
+            cat >>notes.md <<'EOF'
+
+          This is the rolling **nightly** release: every push to `main` rebuilds these assets under
+          the same names, and versioned `v*` tags get their own release further down the list.
+
+          **Unsigned builds.** macOS bundles are ad-hoc signed, not notarized: on first launch,
+          right-click → Open (or `xattr -dr com.apple.quarantine /Applications/Afterburn.app`).
+          Windows binaries are not Authenticode signed, so SmartScreen will warn once.
+          EOF
+          fi
+          cat >>notes.md <<'EOF'
+
+          | Platform | Asset |
+          | --- | --- |
+          | macOS · Apple silicon | `afterburn-macos-arm64.dmg` |
+          | macOS · Intel | `afterburn-macos-x64.dmg` |
+          | Linux · x64 (glibc 2.35+) | `afterburn-linux-x64.AppImage`, `afterburn-linux-x64.tar.gz` |
+          | Windows · x64 | `afterburn-windows-x64.zip` |
+          | All | `SHA256SUMS` |
+
+          The Windows zip ships the app alone; the headless node (`afterburn-node`, installed on the
+          machine that holds the repo) is built for macOS and Linux only.
+          EOF
+          cat notes.md
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          NIGHTLY: ${{ needs.meta.outputs.nightly }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          # A rolling release cannot be updated in place: assets are immutable per release.
+          if gh release view "$TAG" --repo "$repo" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$repo" --cleanup-tag --yes
+          fi
+          title="Afterburn $VERSION (${TAG})"
+          if [[ "$NIGHTLY" == true ]]; then
+            title="Afterburn nightly ($(date -u +%Y-%m-%d))"
+          fi
+          gh release create "$TAG" \
+            --repo "$repo" \
+            --target "$GITHUB_SHA" \
+            --title "$title" \
+            --notes-file notes.md \
+            --latest \
+            dist/afterburn-* dist/SHA256SUMS
