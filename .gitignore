@@ -27,5 +27,8 @@ service/data/
 # Unified Cargo workspace build output
 /target/
 
+# Release packages from client/build-mac.sh and client/build-linux.sh
+/dist/
+
 # agent worktrees kept outside the repository index
 .claude/worktrees/
