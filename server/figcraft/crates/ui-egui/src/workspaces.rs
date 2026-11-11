@@ -130,6 +130,9 @@ pub struct AgentDetail {
     /// The pane's title: what the agent says it is doing.
     #[serde(default)]
     pub title: Option<String>,
+    /// The model it runs (`Opus 5.5`), when the node could tell.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// The newest commit that synced the map with the code.

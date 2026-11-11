@@ -197,6 +197,11 @@ impl NodeHerdr {
                 .collect::<std::result::Result<_, _>>()?;
             views.push(workspace_view(workspace, &agents, &panes, &clis));
         }
+        // Herdr names no model: the agents' own processes do.
+        let models = crate::node_models::by_pane();
+        for agent in views.iter_mut().flat_map(|view| &mut view.agents_detail) {
+            agent.model = models.get(&agent.pane).cloned();
+        }
         views.sort_by(|a, b| {
             a.label
                 .to_lowercase()
@@ -696,6 +701,7 @@ fn workspace_view(
 fn pane_path(panes: &[Pane]) -> Option<String> {
     panes
         .iter()
+                    model: None,
         .filter(|p| p.focused)
         .chain(panes.iter())
         .filter_map(|p| p.cwd.as_ref())

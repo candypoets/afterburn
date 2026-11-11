@@ -16,6 +16,7 @@ mod node_git;
 mod node_herdr;
 mod node_media;
 mod node_migration;
+mod node_models;
 mod workspace;
 
 use crate::error::{Error, Result};

@@ -340,6 +340,8 @@ pub(crate) enum Pick {
     Languages,
     Agent(Target),
     NewAgent,
+    /// The agent being created: its steps, or why it could not start.
+    Creation,
     ShowInHerdr,
     NewWorkspace,
     AddMachine,
@@ -360,11 +362,13 @@ pub(crate) struct Item {
     pub pick: Option<Pick>,
     /// A little space above it (the rows after a list: Search the map, New workspace…).
     pub gap: bool,
+    /// An agent's kind: its mark leads the row, with the status riding on it.
+    pub mark: Option<String>,
 }
 
 impl Item {
     fn new(label: impl Into<String>, pick: Option<Pick>) -> Item {
-        Item { label: label.into(), sub: None, sub_ink: None, right: Right::None, pick, gap: false }
+        Item { label: label.into(), sub: None, sub_ink: None, right: Right::None, pick, gap: false, mark: None }
     }
 
     fn sub(mut self, sub: Option<String>) -> Item {
@@ -379,6 +383,16 @@ impl Item {
 
     fn gap(mut self) -> Item {
         self.gap = true;
+        self
+    }
+
+    fn mark(mut self, kind: &str) -> Item {
+        self.mark = Some(kind.to_string());
+        self
+    }
+
+    fn sub_ink(mut self, ink: Ink) -> Item {
+        self.sub_ink = Some(ink);
         self
     }
 
@@ -1000,9 +1014,41 @@ fn agent_status(status: &str) -> (&'static str, Ink) {
     }
 }
 
+/// One agent's line under its name: `Opus 5.5 · pane p2 · Review the composer`. The kind leads
+/// only when it has no mark; the model follows when the node (or the app, for an agent it
+/// created) knows it; a blocked agent says what it waits for.
+pub(crate) fn agent_line(info: &crate::compose::TargetInfo, task: Option<&str>, new: bool) -> String {
+    let (kind, pane) = match &info.target {
+        Target::Existing { pane, kind, .. } => (kind.as_str(), pane.as_str()),
+        Target::New { kind } => (kind.as_str(), ""),
+    };
+    let mut line = Vec::new();
+    if !crate::agent_menu::has_mark(kind) {
+        line.push(crate::agents::kind_label(kind));
+    }
+    if let Some(model) = crate::agent_menu::model_of(pane) {
+        line.push(model);
+    }
+    let short = crate::agents::short_pane(pane);
+    if !short.is_empty() {
+        line.push(format!("pane {short}"));
+    }
+    let task = task.map(str::trim).filter(|task| !task.is_empty());
+    match (AgentState::of(&info.status), task) {
+        (AgentState::Blocked, Some(task)) => line.push(format!("Waiting: {task}")),
+        (_, Some(task)) => line.push(task.to_string()),
+        (_, None) => {}
+    }
+    if new {
+        line.push("new".to_string());
+    }
+    line.join(" · ")
+}
+
 fn agents_view(app: &FigApp, query: &str) -> View {
     let agents: Vec<crate::compose::TargetInfo> = app.compose.targets.iter().filter(|info| !info.new_agent).cloned().collect();
     let tasks = crate::agents::agent_tasks(app, &agents);
+    let new_pane = crate::agents::new_pane(app);
     let query = query.trim().to_lowercase();
     let mut items: Vec<Item> = agents
         .iter()
@@ -1013,23 +1059,22 @@ fn agents_view(app: &FigApp, query: &str) -> View {
                 Target::New { kind } => (kind.as_str(), ""),
             };
             let name = crate::agents::row_name(Some(info.label.as_str()), pane);
-            let doing = task.unwrap_or_else(|| info.status.trim().to_string());
-            let short = crate::agents::short_pane(pane);
-            let mut line = vec![crate::agents::kind_label(kind)];
-            if !short.is_empty() {
-                line.push(format!("pane {short}"));
-            }
-            if !doing.is_empty() {
-                line.push(doing);
-            }
-            let line = line.join(" · ");
-            let hit = query.is_empty() || name.to_lowercase().contains(&query) || line.to_lowercase().contains(&query);
+            let line = agent_line(info, task.as_deref(), new_pane == Some(pane));
+            // The kind is searchable even when only its mark shows.
+            let hit = query.is_empty() || name.to_lowercase().contains(&query) || format!("{kind} {line}").to_lowercase().contains(&query);
             let (text, ink) = agent_status(&info.status);
-            hit.then(|| Item::new(name, Some(Pick::Agent(info.target.clone()))).sub(Some(line)).right(Right::Status { text, ink }))
+            // An agent of unknown state is listed, but no prompt can go to it.
+            let pick = AgentState::of(&info.status).sendable().then(|| Pick::Agent(info.target.clone()));
+            hit.then(|| Item::new(name, pick).sub(Some(line)).right(Right::Status { text, ink }).mark(kind))
         })
         .collect();
     let shown = items.len();
-    if items.is_empty() {
+    // The agent being created here (or that could not start) keeps a row of its own.
+    if let Some((name, line, failed)) = crate::agents::pending(app) {
+        let (text, ink) = if failed { ("FAILED", Ink::Danger) } else { ("STARTING", Ink::Amber) };
+        items.push(Item::new(name, Some(Pick::Creation)).sub(Some(line)).sub_ink(Ink::Amber).right(Right::Status { text, ink }));
+    }
+    if shown == 0 {
         let note = match app.compose.targets_error.as_deref() {
             Some(error) => error.to_string(),
             None if !query.is_empty() => "No matching agent".to_string(),
@@ -1037,15 +1082,15 @@ fn agents_view(app: &FigApp, query: &str) -> View {
         };
         items.push(Item::new(note, None));
     }
-    items.push(Item::new("New agent…", Some(Pick::NewAgent)).right(Right::Keys(caps_of("map.newAgent"))).gap());
-    items.push(Item::new("Show in Herdr", Some(Pick::ShowInHerdr)));
+    items.push(Item::new("Show in Herdr", Some(Pick::ShowInHerdr)).gap());
+    items.push(Item::new("New agent…", Some(Pick::NewAgent)).right(Right::Keys(caps_of("map.newAgent"))));
     let workspace = crate::switcher::current_name(app);
     let title = if workspace == "this workspace" { "THIS WORKSPACE".to_string() } else { format!("THIS WORKSPACE · {}", workspace.to_uppercase()) };
     View {
         chip: Some("Agents".to_string()),
         placeholder: "Filter agents…".to_string(),
         sections: vec![Section { rule: false, title: Some(title), items }],
-        hints: "↑↓ choose   ↵ focus its pane   ⌫ back".to_string(),
+        hints: "↑↓ choose   ↵ send the prompt to it   ⌫ back".to_string(),
         count: format!("{shown} agent{}", plural(shown)),
         enter_cap: false,
     }
@@ -1161,13 +1206,20 @@ pub(crate) fn choose(app: &mut FigApp, ctx: &egui::Context, pick: Pick, text: &s
         }
         Pick::Languages => push(app, Scope::Language),
         Pick::Agent(target) => {
+            // ↵ makes it the agent prompts go to; ⌘↵ also shows its pane in Herdr.
             app.compose.choose(target);
-            show_in_herdr(app);
+            if new_tab {
+                show_in_herdr(app);
+            }
             close(app);
         }
         Pick::NewAgent => {
             close(app);
-            crate::map_actions::run(app, ctx, "map.newAgent");
+            crate::agents::new_agent(app);
+        }
+        Pick::Creation => {
+            close(app);
+            crate::agents::show_creation(app);
         }
         Pick::ShowInHerdr => {
             show_in_herdr(app);
@@ -1347,7 +1399,18 @@ fn item_ui(ui: &mut Ui, pal: &Pal, item: &Item, highlighted: bool, enter_cap: bo
             left_of = map_x;
         }
     }
-    let x = pill.min.x + 12.0;
+    let mut x = pill.min.x + 12.0;
+    // An agent leads with its kind's mark; its status rides on it. A kind without a mark keeps
+    // its name in the line below.
+    if let Some(kind) = &item.mark {
+        let at = pos2(x + 9.0, cy);
+        if crate::agent_menu::paint_mark(ui.painter(), at, 18.0, kind) {
+            if let Right::Status { ink, .. } = &item.right {
+                crate::agent_menu::paint_status_on_mark(ui.painter(), at, 18.0, ink.color(pal));
+            }
+            x += 28.0;
+        }
+    }
     let room = (left_of - 12.0 - x).max(20.0);
     let ink = if enabled { pal.text } else { pal.faint };
     let label = crate::widgets::elide_font(ui, &item.label, room, regular(13.0));

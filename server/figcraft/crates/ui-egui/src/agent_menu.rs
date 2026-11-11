@@ -411,6 +411,10 @@ pub(crate) fn targets_of(agents: Vec<AgentDetail>, clis: &[String]) -> Vec<Targe
             continue;
         }
         let label = agent_label(agent.name.as_deref(), agent.tab.as_deref(), &agent.pane);
+        // The node names the model the agent runs, when its process tells.
+        if let Some(model) = agent.model.as_deref().map(str::trim).filter(|model| !model.is_empty()) {
+            remember_model(&agent.pane, model);
+        }
         let title = agent.title.map(|title| title.trim().to_string()).filter(|title| !title.is_empty());
         targets.push(TargetInfo {
             target: Target::Existing { pane: agent.pane, kind: agent.kind, status: agent.status.clone() },
@@ -560,8 +564,8 @@ pub(crate) fn row_meta(info: &TargetInfo) -> String {
     }
 }
 
-/// The models agents were created with in the Agents modal, by pane: Herdr does not report a
-/// model, so the app remembers what it asked for.
+/// The model each agent runs, by pane: the one the node reports (`targets_of`), else the one the
+/// app asked for when it created the agent. Herdr itself reports none.
 fn models() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
     static MODELS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
     MODELS.get_or_init(Default::default)

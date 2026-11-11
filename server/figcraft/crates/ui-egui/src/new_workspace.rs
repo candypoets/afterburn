@@ -1273,6 +1273,7 @@ mod tests {
                 tab: None,
                 focused: false,
                 title: title.map(str::to_owned),
+                model: None,
             }],
             ..Workspace::default()
         }]

@@ -1,5 +1,7 @@
-//! The agent breakdown: the header count, and a modal with every agent in the workspace, drawn
-//! as the Agent status widget (page 35): one card per agent in its state's colour.
+//! The agent breakdown: the header count, and the box a new agent is made in.
+//!
+//! Agents are picked in the ⇧⌘P box's Agents list ([`crate::map_palette`]); its `New agent…`
+//! opens the form here, which then shows the start step by step and says when it fails.
 
 use std::sync::mpsc::{self, Receiver};
 #[cfg(not(target_arch = "wasm32"))]
@@ -60,32 +62,24 @@ fn AMBER() -> Color32 {
 fn GREY() -> Color32 {
     crate::map_colors::get().faint
 }
-/// The composer's selected-agent fill.
-#[allow(non_snake_case)]
-fn CHOSEN() -> Color32 {
-    crate::map_colors::get().selected
-}
-/// An agent card's height, as designed (`One agents modal` on the agent picker page).
-const ROW_H: f32 = 50.0;
 /// The modal's inner width.
 const MODAL_W: f32 = 380.0;
 /// How long each creation step may take before the modal says it failed.
 #[cfg(not(target_arch = "wasm32"))]
 const STEP_TIMEOUT: Duration = Duration::from_secs(75);
 
-/// The Agents modal: every agent in the workspace, and where a new one is made. The header's
-/// count, the composer's agent button and the Sync pane's agent button all open it.
+/// The new agent's box: its form, then its start. The agents themselves are listed, and picked,
+/// in the ⇧⌘P box (`One agents modal` on the agent picker page).
 #[derive(Default)]
 pub struct State {
     pub open: bool,
     /// The modal was just opened by a click; ignore that same click for outside-close.
     pub just_opened: bool,
     view: View,
-    /// The search text and the card the arrows are on.
-    query: String,
-    cursor: usize,
-    /// Give the search (or the name field) the keyboard on the next draw.
+    /// Give the name field the keyboard on the next draw.
     focus: bool,
+    /// The frame's time, for the Agents list's `starting · 8s`.
+    now: f64,
     /// The new agent's form, kept while the modal is open so Back and Retry keep its values.
     form: Form,
     /// The agent being created, or the last one that was: it keeps going when the modal closes.
@@ -96,7 +90,6 @@ pub struct State {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum View {
     #[default]
-    List,
     Form,
     Creating,
     Failed,
@@ -160,20 +153,6 @@ pub(crate) fn models_for(kind: &str) -> Vec<(Option<&'static str>, &'static str)
 }
 
 impl State {
-    /// Open on the list (or on the agent being created) with the keyboard in the search.
-    pub fn open_list(&mut self) {
-        self.open = true;
-        self.just_opened = true;
-        self.query.clear();
-        self.cursor = 0;
-        self.focus = true;
-        self.view = match &self.creation {
-            Some(creation) if !creation.ready && creation.error.is_some() => View::Failed,
-            Some(creation) if !creation.ready => View::Creating,
-            _ => View::List,
-        };
-    }
-
     /// Open the form for a new `kind` agent, named `name` to start with.
     fn open_form(&mut self, kind: &str, name: &str) {
         if self.form.kind != kind {
@@ -185,6 +164,13 @@ impl State {
         }
         self.view = View::Form;
         self.focus = true;
+    }
+
+    /// Show the agent being created (or why it could not start).
+    fn open_creation(&mut self) {
+        self.open = true;
+        self.just_opened = true;
+        self.view = if self.creation.as_ref().is_some_and(|c| c.error.is_some()) { View::Failed } else { View::Creating };
     }
 }
 
@@ -299,59 +285,6 @@ pub fn state_note(state: AgentState, task: Option<&str>) -> Option<String> {
     }
 }
 
-/// One agent, as the One agents modal draws it: a bordered 50 pt card with the kind's mark (the
-/// status rides on it; a kind without a mark keeps a dot and its name), the agent's name, and
-/// `p2 · working` in the state's colour. The prompt target wears the composer's selected-agent
-/// green, the arrows' card a soft fill; an agent of unknown state cannot be picked. A blocked
-/// agent says why it is waiting when its pane title tells.
-fn agent_row(ui: &mut egui::Ui, info: &TargetInfo, task: Option<&str>, chosen: bool, cursor: bool, new: bool) -> egui::Response {
-    let state = AgentState::of(&info.status);
-    let sense = if state.sendable() { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), sense);
-    let hot = (resp.hovered() || cursor) && state.sendable();
-    let (fill, stroke) = if chosen {
-        (CHOSEN(), TEAL())
-    } else if hot {
-        (SOFT(), BORDER())
-    } else {
-        (PANEL(), BORDER())
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(8), fill);
-    ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-    let tint = state.color();
-    let mark = egui::pos2(rect.left() + 21.0, rect.center().y);
-    if crate::agent_menu::paint_mark(ui.painter(), mark, 18.0, info.target.kind()) {
-        crate::agent_menu::paint_status_on_mark(ui.painter(), mark, 18.0, tint);
-    } else {
-        ui.painter().circle_filled(mark, 4.0, tint);
-    }
-    let left = rect.left() + 40.0;
-    let room = (rect.right() - left - 12.0).max(40.0);
-    let pane = match &info.target {
-        Target::Existing { pane, .. } => pane.as_str(),
-        Target::New { .. } => "",
-    };
-    let name = row_name(Some(info.label.as_str()), pane);
-    let shown = widgets::elide_font(ui, &name, room, semibold(14.0));
-    ui.painter().text(egui::pos2(left, rect.top() + 9.0), Align2::LEFT_TOP, shown, semibold(14.0), INK());
-    let mut line = crate::agent_menu::row_meta(info);
-    if new {
-        line.push_str(" · new");
-    }
-    if state == AgentState::Blocked
-        && let Some(task) = task.map(str::trim).filter(|task| !task.is_empty())
-    {
-        line = format!("{line} · Waiting: {task}");
-    }
-    let line = widgets::elide_font(ui, &line, room, FontId::monospace(10.5));
-    ui.painter().text(egui::pos2(left, rect.top() + 29.0), Align2::LEFT_TOP, line, FontId::monospace(10.5), tint);
-    a11y::button(&resp, &format!("{name} · {}", crate::agent_menu::row_meta(info)));
-    match state_note(state, task) {
-        Some(note) => resp.on_hover_text(note),
-        None => resp,
-    }
-}
-
 /// What each agent says it is doing, from the workspace list.
 pub(crate) fn agent_tasks(app: &FigApp, agents: &[TargetInfo]) -> Vec<Option<String>> {
     let row = app.ws.rows.iter().find(|row| app.active_workspace.as_deref() == Some(row.id.as_str()));
@@ -367,10 +300,65 @@ pub(crate) fn agent_tasks(app: &FigApp, agents: &[TargetInfo]) -> Vec<Option<Str
         .collect()
 }
 
-/// Open the modal on its list (the header count, the composer's and the Sync pane's agent
-/// buttons, ⌘⇧A's new agent).
+/// Open the agents (the header count, the composer's and the Sync pane's agent buttons): the
+/// ⇧⌘P box on its Agents list.
 pub fn open(app: &mut FigApp) {
-    app.agents_modal.open_list();
+    app.agents_modal.open = false;
+    crate::map_palette::open(app, crate::map_palette::Scope::Agents);
+}
+
+/// Open the new agent's form (the Agents list's `New agent…`, ⌥⌘N); an agent still starting, or
+/// one that could not start, shows instead.
+pub fn new_agent(app: &mut FigApp) {
+    if app.agents_modal.creation.as_ref().is_some_and(|creation| !creation.ready) {
+        return show_creation(app);
+    }
+    let kind = match app.compose.targets.iter().filter(|info| info.new_agent).map(|info| info.target.kind().to_string()).collect::<Vec<_>>() {
+        clis if clis.contains(&app.agents_modal.form.kind) => app.agents_modal.form.kind.clone(),
+        clis => clis.into_iter().next().unwrap_or_default(),
+    };
+    let name = page_name(app);
+    let state = &mut app.agents_modal;
+    state.open = true;
+    state.just_opened = true;
+    state.open_form(&kind, &name);
+}
+
+/// Show the agent being created: its steps, or why it could not start.
+pub fn show_creation(app: &mut FigApp) {
+    if app.agents_modal.creation.is_some() {
+        app.agents_modal.open_creation();
+    }
+}
+
+/// The agent still being created (or that could not start), for the Agents list: its name, its
+/// line (`starting · 8s`, `couldn't start`) and whether it failed.
+pub fn pending(app: &FigApp) -> Option<(String, String, bool)> {
+    let now = app.agents_modal.now;
+    let creation = app.agents_modal.creation.as_ref().filter(|creation| !creation.ready)?;
+    let failed = creation.error.is_some();
+    let pane = creation.pane.as_deref().map(short_pane).filter(|pane| !pane.is_empty());
+    let state = if failed { "couldn't start".to_string() } else { format!("starting · {}s", (now - creation.started).max(0.0) as u64) };
+    let line = match pane {
+        Some(pane) => format!("pane {pane} · {state}"),
+        None => state,
+    };
+    Some((creation.form.name.clone(), line, failed))
+}
+
+/// The pane of the agent just created here, for the list's `new`.
+pub fn new_pane(app: &FigApp) -> Option<&str> {
+    app.agents_modal.creation.as_ref().filter(|creation| creation.ready).and_then(|creation| creation.pane.as_deref())
+}
+
+/// The page's name: what a new agent's pane is called to start with.
+fn page_name(app: &FigApp) -> String {
+    app.session
+        .page()
+        .ok()
+        .and_then(|id| app.session.doc().ok().and_then(|doc| doc.node(id).map(|node| node.name.trim().to_string())))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "New agent".to_string())
 }
 
 /// What the creation thread's messages since the last frame changed.
@@ -458,8 +446,12 @@ fn poll(app: &mut FigApp, ctx: &egui::Context) {
     }
     // The new agent is the prompt target; the prompt in the composer stays as it was.
     app.compose.choose(Target::Existing { pane, kind, status: "idle".to_string() });
-    app.agents_modal.view = View::List;
+    app.agents_modal.view = View::Form;
     crate::compose::refresh_targets(app, ctx);
+    // Watched from the modal, it ends on the Agents list, with the new agent in it.
+    if std::mem::take(&mut app.agents_modal.open) {
+        crate::map_palette::open(app, crate::map_palette::Scope::Agents);
+    }
 }
 
 /// Start creating `form`'s agent on a thread: one node request per step, each reported as it
@@ -554,9 +546,6 @@ fn fire(_app: &FigApp, _method: &'static str, _pane: String) {}
 #[derive(Default)]
 struct Out {
     close: bool,
-    pick: Option<Target>,
-    refresh: bool,
-    new_kind: Option<String>,
     create: bool,
     cancel: bool,
     retry: bool,
@@ -564,7 +553,6 @@ struct Out {
     back: bool,
     /// Back from a failure: the form, with its values.
     to_form: bool,
-    show_creation: bool,
 }
 
 /// The header's workspace (`mindmap · main`) and where a new agent opens (`/path · main`).
@@ -591,27 +579,18 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
         open(app);
         crate::compose::refresh_targets(app, ctx);
     }
+    app.agents_modal.now = ctx.input(|input| input.time);
     poll(app, ctx);
-    // The composer and the Sync pane treat the modal as their open menu (Enter and Esc are its).
-    app.compose.menu_open = app.agents_modal.open;
-    app.sync.menu_open = app.agents_modal.open;
+    // The composer and the Sync pane treat the Agents list and this modal as their open menu
+    // (Enter and Esc are theirs).
+    let picking = app.agents_modal.open || crate::map_palette::scope(app) == Some(&crate::map_palette::Scope::Agents);
+    app.compose.menu_open = picking;
+    app.sync.menu_open = picking;
     if !app.agents_modal.open {
         return;
     }
-    let targets = app.compose.targets.clone();
-    let selected = app.compose.target.clone();
-    let error = app.compose.targets_error.clone();
-    let (workspace, opens_in) = where_it_opens(app);
-    let page_name = app
-        .session
-        .page()
-        .ok()
-        .and_then(|id| app.session.doc().ok().and_then(|doc| doc.node(id).map(|node| node.name.trim().to_string())))
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "New agent".to_string());
-    let agents: Vec<TargetInfo> = targets.iter().filter(|info| !info.new_agent).cloned().collect();
-    let clis: Vec<String> = targets.iter().filter(|info| info.new_agent).map(|info| info.target.kind().to_string()).collect();
-    let tasks = agent_tasks(app, &agents);
+    let (_, opens_in) = where_it_opens(app);
+    let clis: Vec<String> = app.compose.targets.iter().filter(|info| info.new_agent).map(|info| info.target.kind().to_string()).collect();
     let now = ctx.input(|input| input.time);
     let mut out = Out::default();
 
@@ -627,30 +606,24 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
                     ui.set_width(MODAL_W);
                     let state = &mut app.agents_modal;
                     match state.view {
-                        View::List => list_view(ui, state, &agents, &tasks, &clis, selected.as_ref(), error.as_deref(), &workspace, now, &mut out),
                         View::Form => form_view(ui, state, &clis, &opens_in, &mut out),
                         View::Creating | View::Failed => creation_view(ui, state, &opens_in, now, &mut out),
                     }
                 });
         });
 
-    let state = &mut app.agents_modal;
-    if let Some(kind) = out.new_kind.take() {
-        state.open_form(&kind, &page_name);
-    }
     if out.back {
-        state.view = View::List;
-        state.focus = true;
+        // Back to where the form came from: the Agents list.
+        open(app);
+        return;
     }
+    let state = &mut app.agents_modal;
     if out.to_form {
         if let Some(creation) = state.creation.take() {
             state.form = creation.form;
         }
         state.view = View::Form;
         state.focus = true;
-    }
-    if out.show_creation {
-        state.view = if state.creation.as_ref().is_some_and(|c| c.error.is_some()) { View::Failed } else { View::Creating };
     }
     if out.create {
         let form = state.form.clone();
@@ -681,13 +654,6 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     {
         fire(app, "agent.focus", pane);
     }
-    if let Some(target) = out.pick {
-        app.compose.choose(target);
-        out.close = true;
-    }
-    if out.refresh {
-        crate::compose::refresh_targets(app, ctx);
-    }
     let pressed = ctx.input(|input| input.pointer.any_pressed());
     let pointer = ctx.input(|input| input.pointer.interact_pos());
     let inside = pointer.is_some_and(|pos| area.response.rect.contains(pos));
@@ -702,16 +668,11 @@ pub fn show(app: &mut FigApp, ctx: &egui::Context) {
     }
 }
 
-/// The header: `AGENTS  mindmap · main` and ×, or `← Agents` on the form.
-fn header(ui: &mut egui::Ui, back: bool, workspace: &str, out: &mut Out) {
+/// The form's header: `← Agents` (back to the Agents list) and ×.
+fn header(ui: &mut egui::Ui, out: &mut Out) {
     ui.horizontal(|ui| {
-        if back {
-            if ui.add(egui::Button::new(RichText::new("← Agents").font(regular(11.0)).color(MUTED())).frame(false)).clicked() {
-                out.back = true;
-            }
-        } else {
-            ui.label(RichText::new("AGENTS").font(FontId::monospace(9.5)).color(ACCENT()));
-            ui.label(RichText::new(workspace).font(FontId::monospace(9.0)).color(MUTED()));
+        if ui.add(egui::Button::new(RichText::new("← Agents").font(regular(11.0)).color(MUTED())).frame(false)).clicked() {
+            out.back = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.add(egui::Button::new(RichText::new("×").size(16.0).color(MUTED())).frame(false)).clicked() {
@@ -723,176 +684,6 @@ fn header(ui: &mut egui::Ui, back: bool, workspace: &str, out: &mut Out) {
 
 fn eyebrow(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).font(FontId::monospace(8.5)).color(MUTED()));
-}
-
-#[allow(clippy::too_many_arguments)]
-fn list_view(
-    ui: &mut egui::Ui,
-    state: &mut State,
-    agents: &[TargetInfo],
-    tasks: &[Option<String>],
-    clis: &[String],
-    selected: Option<&Target>,
-    error: Option<&str>,
-    workspace: &str,
-    now: f64,
-    out: &mut Out,
-) {
-    header(ui, false, workspace, out);
-    ui.add_space(6.0);
-    let working = agents.iter().filter(|info| AgentState::of(&info.status) == AgentState::Working).count();
-    let summary = if agents.is_empty() {
-        "No agents in this workspace yet.".to_string()
-    } else if working > 0 {
-        format!("{} agent{} · {} running", agents.len(), plural(agents.len()), working)
-    } else {
-        format!("{} agent{} · all idle", agents.len(), plural(agents.len()))
-    };
-    ui.label(RichText::new(summary).font(regular(12.0)).color(INK()));
-    ui.add_space(8.0);
-    // The search, with the arrows and Enter taken before it sees them.
-    let shown: Vec<usize> = {
-        let kept = crate::agent_menu::filter_agents(agents, &state.query);
-        kept.iter().filter_map(|info| agents.iter().position(|a| std::ptr::eq(a, *info))).collect()
-    };
-    let (down, up, enter) = ui.input_mut(|i| {
-        (
-            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
-        )
-    });
-    if down {
-        state.cursor = (state.cursor + 1).min(shown.len().saturating_sub(1));
-    }
-    if up {
-        state.cursor = state.cursor.saturating_sub(1);
-    }
-    let before = state.query.clone();
-    let search = egui::Frame::NONE
-        .fill(SOFT())
-        .stroke(Stroke::new(1.0, BORDER()))
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(Margin::symmetric(10, 7))
-        .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut state.query)
-                    .id(search_id())
-                    .frame(egui::Frame::NONE)
-                    .font(regular(11.5))
-                    .hint_text(RichText::new("Find an agent…").font(regular(11.5)).color(MUTED()))
-                    .desired_width(ui.available_width()),
-            )
-        })
-        .inner;
-    if state.focus {
-        search.request_focus();
-        state.focus = false;
-    }
-    if state.query != before {
-        state.cursor = 0;
-    }
-    state.cursor = state.cursor.min(shown.len().saturating_sub(1));
-    ui.add_space(10.0);
-    // The agent being created, if the modal was closed while it started (or failed).
-    if let Some(creation) = state.creation.as_ref().filter(|c| !c.ready) {
-        if pending_row(ui, creation, now) {
-            out.show_creation = true;
-        }
-        ui.add_space(8.0);
-    }
-    let new_pane = state.creation.as_ref().filter(|c| c.ready).and_then(|c| c.pane.clone());
-    egui::ScrollArea::vertical().id_salt("agents_modal_scroll").max_height(300.0).auto_shrink([false, true]).show(ui, |ui| {
-        if let Some(error) = error {
-            ui.label(RichText::new(error).font(regular(11.0)).color(DANGER()));
-            ui.add_space(8.0);
-        }
-        if shown.is_empty() && !agents.is_empty() {
-            ui.label(RichText::new("No agent matches the search.").font(regular(11.0)).color(MUTED()));
-        }
-        for (row, &index) in shown.iter().enumerate() {
-            let (Some(info), task) = (agents.get(index), tasks.get(index).and_then(|t| t.as_deref())) else { continue };
-            let chosen = selected.map(Target::line) == Some(info.target.line());
-            let new = matches!(&info.target, Target::Existing { pane, .. } if Some(pane) == new_pane.as_ref());
-            let resp = agent_row(ui, info, task, chosen, row == state.cursor, new);
-            if (down || up) && row == state.cursor {
-                resp.scroll_to_me(None);
-            }
-            if resp.clicked() && AgentState::of(&info.status).sendable() {
-                out.pick = Some(info.target.clone());
-            }
-            ui.add_space(8.0);
-        }
-    });
-    if enter
-        && let Some(info) = shown.get(state.cursor).and_then(|index| agents.get(*index))
-        && AgentState::of(&info.status).sendable()
-    {
-        out.pick = Some(info.target.clone());
-    }
-    ui.add_space(4.0);
-    divider(ui);
-    ui.add_space(8.0);
-    eyebrow(ui, "START A NEW AGENT");
-    ui.add_space(4.0);
-    if clis.is_empty() {
-        ui.label(RichText::new("No agent CLIs installed on the project host.").font(regular(11.0)).color(MUTED()));
-    } else {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-            for kind in clis {
-                if crate::agent_menu::cli_chip(ui, kind, false) {
-                    out.new_kind = Some(kind.clone());
-                }
-            }
-        });
-    }
-    ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        if ui.add(egui::Button::new(RichText::new("Refresh").font(regular(11.0)).color(MUTED())).frame(false)).clicked() {
-            out.refresh = true;
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let foot =
-                if new_pane.is_some() { "closes on ↵ · the prompt stays in the composer" } else { "↑↓ move · ↵ choose · esc close" };
-            ui.label(RichText::new(foot).font(FontId::monospace(8.5)).color(FAINT()));
-        });
-    });
-}
-
-/// The agent being created, as a list row: amber and dashed while it starts, red with Retry
-/// when it could not. A click shows its steps.
-fn pending_row(ui: &mut egui::Ui, creation: &Creation, now: f64) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), egui::Sense::click());
-    let failed = creation.error.is_some();
-    let (fill, ink) = if failed { (DANGER().gamma_multiply(0.08), DANGER()) } else { (AMBER().gamma_multiply(0.08), AMBER()) };
-    ui.painter().rect_filled(rect, CornerRadius::same(8), fill);
-    ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0, ink), egui::StrokeKind::Inside);
-    let mark = egui::pos2(rect.left() + 21.0, rect.center().y);
-    if !crate::agent_menu::paint_mark(ui.painter(), mark, 18.0, &creation.form.kind) {
-        ui.painter().circle_filled(mark, 4.0, ink);
-    }
-    let left = rect.left() + 40.0;
-    ui.painter().text(egui::pos2(left, rect.top() + 9.0), Align2::LEFT_TOP, &creation.form.name, semibold(14.0), INK());
-    let line = if failed {
-        "couldn't start · open to see why".to_string()
-    } else {
-        let pane = creation.pane.as_deref().map(short_pane).map(|p| format!("{p} · ")).unwrap_or_default();
-        format!("{pane}starting · {}s", (now - creation.started).max(0.0) as u64)
-    };
-    ui.painter().text(egui::pos2(left, rect.top() + 29.0), Align2::LEFT_TOP, line, FontId::monospace(10.5), ink);
-    a11y::button(&resp, &format!("{} · {}", creation.form.name, if failed { "couldn't start" } else { "starting" }));
-    resp.clicked()
-}
-
-fn divider(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
-    ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, BORDER()));
-}
-
-/// The search field's id, for tests.
-pub(crate) fn search_id() -> Id {
-    Id::new("agents_modal_search")
 }
 
 /// The name field's id, for tests.
@@ -917,7 +708,7 @@ fn modal_button(ui: &mut egui::Ui, label: &str, width: f32, primary: bool, enabl
 
 /// The new agent's form: the CLI, the model, the pane's name and where it opens.
 fn form_view(ui: &mut egui::Ui, state: &mut State, clis: &[String], opens_in: &str, out: &mut Out) {
-    header(ui, true, "", out);
+    header(ui, out);
     ui.add_space(6.0);
     ui.label(RichText::new("New agent").font(regular(20.0)).color(INK()));
     ui.add_space(12.0);
@@ -980,7 +771,7 @@ fn form_view(ui: &mut egui::Ui, state: &mut State, clis: &[String], opens_in: &s
 /// The agent being started, step by step; or why it could not start, with its pane's last lines.
 fn creation_view(ui: &mut egui::Ui, state: &mut State, opens_in: &str, now: f64, out: &mut Out) {
     let Some(creation) = state.creation.as_ref() else {
-        state.view = View::List;
+        state.view = View::Form;
         return;
     };
     let failed = creation.error.is_some();
@@ -1130,70 +921,6 @@ mod tests {
         assert_eq!(status_line("", "", "idle"), "Agent · idle");
     }
 
-    /// Draw one card per state, top to bottom, returning each card's rect and whether it was picked.
-    fn draw_cards(ctx: &egui::Context, time: f64, events: Vec<egui::Event>, infos: &[TargetInfo]) -> Vec<(egui::Rect, bool)> {
-        let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(480.0, 600.0))),
-            time: Some(time),
-            events,
-            ..Default::default()
-        };
-        let mut cards = Vec::new();
-        ctx.run_ui(input, |ui| {
-            ui.set_width(MODAL_W);
-            for (index, info) in infos.iter().enumerate() {
-                let top = ui.cursor().top();
-                let resp = agent_row(ui, info, Some("waiting on review"), index == 1, false, false);
-                let picked = resp.clicked() && AgentState::of(&info.status).sendable();
-                let rect = egui::Rect::from_min_max(egui::pos2(ui.min_rect().left(), top), egui::pos2(ui.min_rect().right(), ui.cursor().top()));
-                cards.push((rect, picked));
-            }
-        })
-        .textures_delta
-        .clear();
-        cards
-    }
-
-    #[test]
-    fn every_state_draws_a_card_and_only_known_states_can_be_picked() {
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx, false, 0);
-        let infos: Vec<TargetInfo> = ["working", "idle", "blocked", "", "a very long status that does not fit anywhere at all"]
-            .iter()
-            .enumerate()
-            .map(|(index, status)| TargetInfo {
-                target: Target::Existing { pane: format!("w1:p{index}"), kind: "codex".into(), status: status.to_string() },
-                label: format!("Pane {index}"),
-                title: None,
-                status: status.to_string(),
-                focused: false,
-                new_agent: false,
-            })
-            .collect();
-        let mut time = 0.0;
-        let mut frame = |events: Vec<egui::Event>| {
-            time += 1.0 / 60.0;
-            draw_cards(&ctx, time, events, &infos)
-        };
-        frame(vec![]);
-        let cards = frame(vec![]);
-        assert_eq!(cards.len(), infos.len());
-        assert!(cards.iter().all(|(rect, _)| (rect.height() - ROW_H).abs() <= 4.0), "{cards:?}");
-        let click = |at: egui::Pos2, frame: &mut dyn FnMut(Vec<egui::Event>) -> Vec<(egui::Rect, bool)>| {
-            let press =
-                |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-            frame(vec![egui::Event::PointerMoved(at)]);
-            frame(vec![press(true)]);
-            let picked = frame(vec![press(false)]);
-            frame(vec![]);
-            picked
-        };
-        let idle = cards.get(1).map(|(rect, _)| rect.center()).unwrap_or_default();
-        let unknown = cards.get(3).map(|(rect, _)| rect.center()).unwrap_or_default();
-        assert!(click(idle, &mut frame).get(1).is_some_and(|(_, picked)| *picked));
-        assert!(!click(unknown, &mut frame).get(3).is_some_and(|(_, picked)| *picked));
-    }
-
     #[test]
     fn claude_offers_its_models_and_every_cli_starts_on_its_own_default() {
         let claude: Vec<&str> = models_for("claude").iter().map(|(_, label)| *label).collect();
@@ -1253,14 +980,6 @@ mod tests {
     fn face(state: &mut State, now: f64) -> (Vec<egui::epaint::Shape>, Out) {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx, false, 0);
-        let agents = vec![TargetInfo {
-            target: Target::Existing { pane: "w1:p1".into(), kind: "codex".into(), status: "idle".into() },
-            label: "Backend".into(),
-            title: None,
-            status: "idle".into(),
-            focused: false,
-            new_agent: false,
-        }];
         let clis = vec!["claude".to_string(), "codex".to_string()];
         let mut out = Out::default();
         let mut shapes = Vec::new();
@@ -1274,7 +993,6 @@ mod tests {
             let mut output = ctx.run_ui(input, |ui| {
                 ui.set_width(MODAL_W);
                 match state.view {
-                    View::List => list_view(ui, state, &agents, &[None], &clis, None, None, "mindmap · main", now, &mut out),
                     View::Form => form_view(ui, state, &clis, "/root/code/mindmap · main", &mut out),
                     View::Creating | View::Failed => creation_view(ui, state, "/root/code/mindmap · main", now, &mut out),
                 }
@@ -1286,15 +1004,9 @@ mod tests {
     }
 
     #[test]
-    fn the_modal_lists_agents_then_makes_one_step_by_step() {
+    fn the_modal_makes_an_agent_step_by_step() {
         use crate::live_tests::has_text;
         let mut state = State::default();
-        state.open_list();
-        let (shapes, _) = face(&mut state, 0.0);
-        for text in ["AGENTS", "1 agent · all idle", "Backend", "p1 · idle", "START A NEW AGENT", "claude", "↑↓ move · ↵ choose · esc close"]
-        {
-            assert!(has_text(&shapes, text), "list: missing {text:?}");
-        }
         state.open_form("claude", "Agent picker");
         let (shapes, _) = face(&mut state, 0.0);
         for text in ["← Agents", "New agent", "CLI", "MODEL", "CLI default", "PANE NAME", "OPENS IN", "/root/code/mindmap · main", "Create agent  ↵"]
@@ -1332,15 +1044,6 @@ mod tests {
         ] {
             assert!(has_text(&shapes, text), "failed: missing {text:?}");
         }
-
-        // Closed mid-start, the list keeps the agent as a row of its own.
-        if let Some(made) = state.creation.as_mut() {
-            made.error = None;
-            made.steps = [Step::Done, Step::Running, Step::Todo, Step::Todo];
-        }
-        state.view = View::List;
-        let (shapes, _) = face(&mut state, 8.0);
-        assert!(has_text(&shapes, "p8 · starting · 8s"), "the starting agent shows in the list");
     }
 
     #[test]

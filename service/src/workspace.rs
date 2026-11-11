@@ -27,6 +27,9 @@ pub struct AgentDetail {
     /// The pane's terminal title: the task the agent names for itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The model the agent runs (`Opus 5.5`), when its process or its CLI's record tells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// The last commit that synced the map with the code.

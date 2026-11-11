@@ -71,7 +71,8 @@ pub fn run(app: &mut FigApp, ctx: &Context, id: &str) -> bool {
             if let Ok(ds) = app.session.ds_mut() {
                 ds.view.ui_hidden = false;
             }
-            app.compose.open_menu();
+            crate::map_palette::close(app);
+            crate::agents::new_agent(app);
         }
         "map.help" => app.ui.shortcuts_panel = !app.ui.shortcuts_panel,
         "map.preferences" => crate::map_palette::toggle(app, crate::map_palette::Scope::Settings),

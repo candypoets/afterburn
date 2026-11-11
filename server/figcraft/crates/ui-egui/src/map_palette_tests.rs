@@ -365,15 +365,13 @@ fn the_status_bars_agent_count_opens_the_agents() {
         let (mut u, _) = setup();
         u.app.compose.targets =
             vec![agent("design lead", "w1:p7", "working"), agent("sync", "w1:p11", "blocked"), agent("reviewer", "w1:p9", "idle")];
+        crate::agent_menu::remember_model("w1:p7", "Opus 5.5");
         u.frame(vec![]);
-        // The summary sits at the bar's right end.
+        // The summary sits at the bar's right end. It opens the ⇧⌘P box on its Agents list (the
+        // agent picker page's One agents modal), and the click that opened it does not close it.
         click(&mut u, egui::pos2(1440.0 - 40.0, 900.0 - 12.0));
-        // The count opens the Agents modal (the agent picker page's One agents modal) and the
-        // click that opened it does not close it; the palette's Agents scope lists the same agents.
-        assert!(u.app.agents_modal.open, "the click that opened it does not close it");
-        u.app.agents_modal.open = false;
-        crate::map_palette::open(&mut u.app, Scope::Agents);
-        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Agents));
+        assert!(!u.app.agents_modal.open, "the agents are picked in the box, not in a modal of their own");
+        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Agents), "the click that opened it does not close it");
         let view = crate::map_palette::view(&u.app, "");
         assert_eq!(view.chip.as_deref(), Some("Agents"));
         let rows: Vec<_> = view.items().map(|item| (item.label.as_str(), item.right.clone())).collect();
@@ -382,15 +380,59 @@ fn the_status_bars_agent_count_opens_the_agents() {
         assert_eq!(rows[0], ("design lead", status("RUNNING", Ink::Teal)));
         assert_eq!(rows[1], ("sync", status("BLOCKED", Ink::Amber)));
         assert_eq!(rows[2], ("reviewer", status("IDLE", Ink::Faint)));
-        assert_eq!(rows[3].0, "New agent…");
-        assert_eq!(rows[4].0, "Show in Herdr");
-        assert_eq!(view.items().next().unwrap().sub.as_deref(), Some("Claude · pane p7 · working"));
+        assert_eq!(rows[3].0, "Show in Herdr");
+        assert_eq!(rows[4].0, "New agent…");
+        // Each agent leads with its kind's mark and names its model when it is known.
+        let first = view.items().next().unwrap();
+        assert_eq!(first.mark.as_deref(), Some("claude"));
+        assert_eq!(first.sub.as_deref(), Some("Opus 5.5 · pane p7"), "the mark says the kind; the model leads the line");
+        assert_eq!(view.items().nth(1).unwrap().sub.as_deref(), Some("pane p11"), "an unknown model is left out");
         assert_eq!(view.count, "3 agents");
+        assert_eq!(view.hints, "↑↓ choose   ↵ send the prompt to it   ⌫ back");
         // ↵ on an agent makes it the one prompts go to, and closes the box.
         press(&mut u, Key::ArrowDown, Modifiers::NONE);
         press(&mut u, Key::Enter, Modifiers::NONE);
         assert!(u.app.ui.palette.is_none());
         assert_eq!(u.app.compose.target.as_ref(), Some(&u.app.compose.targets[1].target));
+    });
+}
+
+#[test]
+fn the_agent_buttons_open_the_agents_list_and_new_agent_opens_the_form() {
+    crate::with_map_mode(|| {
+        let (mut u, _) = setup();
+        let cli = |kind: &str| crate::compose::TargetInfo {
+            target: crate::workspaces::Target::New { kind: kind.into() },
+            label: kind.into(),
+            title: None,
+            status: String::new(),
+            focused: false,
+            new_agent: true,
+        };
+        u.app.compose.targets = vec![agent("reviewer", "w1:p9", "idle"), agent("lost", "w1:p3", ""), cli("codex"), cli("claude")];
+        u.frame(vec![]);
+        // The composer's and the Sync pane's agent buttons ask for the agents: the same list.
+        u.app.compose.open_menu();
+        u.frame(vec![]);
+        assert_eq!(crate::map_palette::scope(&u.app), Some(&Scope::Agents));
+        assert!(!u.app.agents_modal.open);
+        assert!(u.app.compose.menu_open, "Enter and Esc are the list's, not the composer's");
+        // An agent of unknown state is listed but can't be chosen.
+        let view = crate::map_palette::view(&u.app, "");
+        let lost = view.items().find(|item| item.label == "lost").unwrap();
+        assert!(lost.pick.is_none());
+        // The kind is found even though only its mark shows.
+        assert_eq!(crate::map_palette::view(&u.app, "claude").count, "2 agents");
+        // New agent… closes the list and opens the form on the first installed CLI.
+        let ctx = u.ctx.clone();
+        crate::map_palette::choose(&mut u.app, &ctx, crate::map_palette::Pick::NewAgent, "", false);
+        assert!(u.app.ui.palette.is_none());
+        assert!(u.app.agents_modal.open);
+        u.frame(vec![]);
+        // ← Agents (and Esc) leave the form; the action goes straight to it.
+        u.app.agents_modal.open = false;
+        crate::map_actions::run(&mut u.app, &ctx, "map.newAgent");
+        assert!(u.app.agents_modal.open && u.app.ui.palette.is_none());
     });
 }
 
