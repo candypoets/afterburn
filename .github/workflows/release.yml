@@ -72,6 +72,7 @@ jobs:
     name: macOS ${{ matrix.arch }}
     needs: meta
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -113,7 +114,10 @@ jobs:
   linux:
     name: Linux x64
     needs: meta
+    # 22.04 keeps the AppImage's glibc floor at 2.35; move to 24.04 (2.39) only when dropping
+    # every distro older than Ubuntu 24.04 / Debian 13.
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
@@ -134,6 +138,7 @@ jobs:
     name: Windows x64
     needs: meta
     runs-on: windows-2025
+    timeout-minutes: 90
     defaults:
       run:
         shell: pwsh
@@ -226,13 +231,18 @@ jobs:
             gh release delete "$TAG" --repo "$repo" --cleanup-tag --yes
           fi
           title="Afterburn $VERSION (${TAG})"
+          extra=()
           if [[ "$NIGHTLY" == true ]]; then
             title="Afterburn nightly ($(date -u +%Y-%m-%d))"
+          else
+            # Versioned releases get the changelog since the previous release, under our notes.
+            extra+=(--generate-notes)
           fi
           gh release create "$TAG" \
             --repo "$repo" \
             --target "$GITHUB_SHA" \
             --title "$title" \
             --notes-file notes.md \
+            "${extra[@]}" \
             --latest \
             dist/afterburn-* dist/SHA256SUMS
