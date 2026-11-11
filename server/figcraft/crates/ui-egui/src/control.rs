@@ -238,6 +238,9 @@ pub fn handle(app: &mut FigApp, ctx: &Context, method: &str, p: &Value) -> Resul
         "engine.execute" => {
             let cmd = p.get("command").and_then(Value::as_str).ok_or("`command` required")?;
             let params = p.get("params").cloned().unwrap_or(json!({}));
+            if crate::map_mode() && (cmd.starts_with("comment.") || cmd == "tool.comment") {
+                return Err(format!("command {cmd} is disabled in Afterburn: FigCraft comments are off"));
+            }
             let r = app.session.execute(cmd, &params).map_err(|e| e.to_string());
             // Programmatic calls never open dialogs.
             app.session.ui_requests.retain(|u| !u.kind.starts_with("dialog."));

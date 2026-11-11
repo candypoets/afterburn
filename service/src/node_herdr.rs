@@ -248,10 +248,19 @@ impl NodeHerdr {
     /// happens: `agent.tab` opens a labelled tab, `agent.start` starts the CLI (with a model)
     /// without prompting it, `agent.ready` waits until it is idle, `agent.screen` reads its last
     /// lines to explain a failure, and `agent.focus` brings its pane to the front.
-    pub fn agent_step(&self, method: &str, workspace: &WorkspaceView, request: &Value) -> Result<Value> {
+    pub fn agent_step(
+        &self,
+        method: &str,
+        workspace: &WorkspaceView,
+        request: &Value,
+    ) -> Result<Value> {
         let herdr = self.herdr()?;
         if method == "agent.tab" {
-            let created = agent::create_agent_tab(&herdr, workspace, request["label"].as_str().unwrap_or(""))?;
+            let created = agent::create_agent_tab(
+                &herdr,
+                workspace,
+                request["label"].as_str().unwrap_or(""),
+            )?;
             return Ok(json!({"pane": created.pane_id, "tab": created.tab_id}));
         }
         let checked = json!({"workspace": workspace.id, "pane": request["pane"]});
@@ -277,7 +286,9 @@ impl NodeHerdr {
                 let status = agent::wait_until_ready(&herdr, &pane, Duration::from_secs(seconds))?;
                 Ok(json!({"pane": pane, "status": status}))
             }
-            "agent.screen" => Ok(json!({"pane": pane, "lines": agent::last_lines(&herdr, &pane, 6)})),
+            "agent.screen" => {
+                Ok(json!({"pane": pane, "lines": agent::last_lines(&herdr, &pane, 6)}))
+            }
             "agent.focus" => {
                 herdr.focus_agent(&pane)?;
                 Ok(json!({"pane": pane}))
@@ -637,10 +648,14 @@ fn workspace_view(
         .filter(|p| !p.trim().is_empty())
         .or_else(|| pane_path(panes));
     let branch = path.as_deref().and_then(git_branch);
-    let map = if path
-        .as_ref()
-        .is_some_and(|p| Path::new(p).join(".afterburn/map.figcraft").is_file())
-    {
+    let map = if path.as_ref().is_some_and(|p| {
+        [
+            crate::node_git::DESIGN_PATH,
+            crate::node_git::LEGACY_DESIGN_PATH,
+        ]
+        .iter()
+        .any(|design| Path::new(p).join(design).is_file())
+    }) {
         "map"
     } else {
         "none"
@@ -686,6 +701,7 @@ fn workspace_view(
                         .clone()
                         .map(|title| title.trim().to_owned())
                         .filter(|title| !title.is_empty()),
+                    model: None,
                 })
             })
             .collect(),
@@ -701,7 +717,6 @@ fn workspace_view(
 fn pane_path(panes: &[Pane]) -> Option<String> {
     panes
         .iter()
-                    model: None,
         .filter(|p| p.focused)
         .chain(panes.iter())
         .filter_map(|p| p.cwd.as_ref())
@@ -719,6 +734,7 @@ fn last_sync(path: &str) -> Option<LastSync> {
             "-1",
             "--regexp-ignore-case",
             "--grep=^Afterburn-Sync:",
+            "--grep=^Mindmap-Sync:",
             "--format=%h%x1f%s%x1f%cI",
         ])
         .stdin(Stdio::null())

@@ -274,9 +274,12 @@ fn main() -> eframe::Result {
     // before enabling a client-side frame. Other windows inherit that decision.
     fig.ui.title_bar = desktop_title_bar();
     viewport = window_chrome(viewport, fig.ui.title_bar);
-    // In map mode the bundle's icon is the identity: eframe would set the
-    // runtime (Dock) icon from the embedded FigCraft one.
-    if !map_mode && let Some(icon) = icon {
+    // In map mode the bundle's icon is the identity. Without an icon eframe sets
+    // its own default as the runtime (Dock) icon a moment after launch; an empty
+    // one tells it to leave the bundle's icon alone.
+    if map_mode {
+        viewport = viewport.with_icon(egui::IconData::default());
+    } else if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
     let mut options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };

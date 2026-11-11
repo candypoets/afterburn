@@ -774,3 +774,87 @@ fn merge_readiness_and_exact_prepared_bytes_survive_restart_and_clear_on_release
     let mut manager = NodeDocuments::new();
     assert!(!manager.open(&repo.0).unwrap().merge_ready);
 }
+
+#[test]
+fn a_worktree_with_only_the_pre_rename_map_opens_it_moved_to_afterburn() {
+    let repo = Repo::new();
+    let mut doc = Document::new("Old map");
+    let page = doc.first_page().unwrap();
+    doc.node_mut(page)
+        .unwrap()
+        .plugin_data
+        .insert("mindmap.page_mode".into(), "exploration".into());
+    let legacy = repo.0.join(crate::node_git::LEGACY_DESIGN_PATH);
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, encode(&doc).unwrap()).unwrap();
+    repo.git(&["add", ".mindmap/map.figcraft"]);
+    repo.git(&["commit", "-qm", "old map"]);
+
+    let mut manager = NodeDocuments::new();
+    manager.open(&repo.0).unwrap();
+    assert!(!legacy.exists(), "the old file moved");
+    assert!(
+        !repo.0.join(".mindmap").exists(),
+        "its empty folder went with it"
+    );
+    let moved = repo.disk();
+    assert_eq!(
+        moved
+            .node(page)
+            .unwrap()
+            .plugin_data
+            .get("afterburn.page_mode")
+            .map(String::as_str),
+        Some("exploration")
+    );
+    assert!(!moved
+        .node(page)
+        .unwrap()
+        .plugin_data
+        .contains_key("mindmap.page_mode"));
+}
+
+#[test]
+fn figcraft_comments_are_disabled_in_afterburn() {
+    for command in [
+        "comment.add",
+        "comment.reply",
+        "comment.edit",
+        "comment.react",
+        "comment.resolve",
+        "comment.move",
+        "comment.delete",
+        "comment.markRead",
+        "comment.open",
+        "comment.next",
+        "comment.zoom",
+        "comment.link",
+        "comment.people",
+        "comment.list",
+        "tool.comment",
+        "view.comments",
+    ] {
+        let error = validate_command(command, &json!({}), 0)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("disabled in Afterburn"),
+            "{command}: {error}"
+        );
+    }
+    // A batch cannot smuggle one in.
+    let batch =
+        json!({"commands": [{"command": "comment.add", "params": {"text": "hi", "x": 0, "y": 0}}]});
+    let error = validate_command("command.batch", &batch, 0)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("disabled in Afterburn"), "{error}");
+    // Every comment command the engine has is covered, and none is listed.
+    for spec in figcraft_engine::all_commands() {
+        if spec.id.starts_with("comment.") {
+            assert!(figcraft_comment_command(spec.id));
+        }
+    }
+    assert!(!figcraft_comment_command("node.create"));
+    assert!(validate_command("node.create", &json!({}), 0).is_ok());
+}

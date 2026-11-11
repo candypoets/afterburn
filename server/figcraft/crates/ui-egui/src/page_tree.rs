@@ -140,10 +140,10 @@ impl Activity {
     }
 }
 
-/// `page`'s activity: burning while a Sync covers it, else designing while `designing` names
-/// the agent at work on it.
-pub fn activity(page: NodeId, building: &HashSet<NodeId>, designing: Option<String>) -> Option<Activity> {
-    if building.contains(&page) { Some(Activity::Burning) } else { designing.map(Activity::Designing) }
+/// `page`'s activities, right to left: burning while a Sync covers it, and designing while
+/// `designing` names the agent at work on it. Both show at once; neither hides the other.
+pub fn activity(page: NodeId, building: &HashSet<NodeId>, designing: Option<String>) -> Vec<Activity> {
+    building.contains(&page).then_some(Activity::Burning).into_iter().chain(designing.map(Activity::Designing)).collect()
 }
 
 /// Whether `page` is an exploration (see [`MODE_KEY`]).
@@ -172,7 +172,8 @@ const ROW_H: f32 = 30.0;
 const INDENT: f32 = 16.0;
 /// The mode icon before each name.
 const ICON: f32 = 14.0;
-/// The activity mark at the right of a busy page's row, and how far × moves in beside it.
+/// An activity mark at the right of a busy page's row, and the pitch of each: × and the name
+/// move in by one pitch per mark.
 const ACTIVITY: f32 = 18.0;
 const ACTIVITY_GAP: f32 = 24.0;
 
@@ -474,7 +475,7 @@ struct Line {
     name: String,
     kids: usize,
     mode: Mode,
-    activity: Option<Activity>,
+    activity: Vec<Activity>,
     folded: bool,
 }
 
@@ -602,9 +603,10 @@ fn row(
         let r = Rect::from_center_size(pos2(x - 11.0, rect.center().y), vec2(16.0, ROW_H));
         ui.interact(r, Id::new(("page_tree_fold", line.page.0)), Sense::click())
     });
-    // A busy page keeps its activity at the right; × moves in beside it.
-    let busy = line.activity.is_some();
-    let delete_x = rect.max.x - 14.0 - if busy { ACTIVITY_GAP } else { 0.0 };
+    // A busy page keeps its activities at the right; × moves in beside them.
+    let busy = !line.activity.is_empty();
+    let marks = line.activity.len() as f32 * ACTIVITY_GAP;
+    let delete_x = rect.max.x - 14.0 - marks;
     let delete = ui.interact(
         Rect::from_center_size(pos2(delete_x, rect.center().y), vec2(20.0, ROW_H - 6.0)),
         Id::new(("page_tree_delete", line.page.0)),
@@ -624,7 +626,7 @@ fn row(
     let icon = Rect::from_center_size(pos2(x + 4.0, rect.center().y), vec2(ICON, ICON));
     crate::icons::paint(ui.painter(), icon, line.mode.icon(), line.mode.ink(dark));
     let x = x + ICON;
-    let room = (rect.max.x - 34.0 - if busy { ACTIVITY_GAP } else { 0.0 } - x).max(30.0);
+    let room = (rect.max.x - 34.0 - marks - x).max(30.0);
     let mut end = None;
     let is_editing = editing.is_some();
     if let Some(text) = editing {
@@ -638,10 +640,10 @@ fn row(
     }
     // The right column: the depth cap on a page at the last level.
     let trail = pos2(rect.max.x - 14.0, rect.center().y);
-    if let (false, Some(activity)) = (is_editing, &line.activity) {
-        let at = Rect::from_center_size(trail, vec2(ACTIVITY, ACTIVITY));
+    for (i, activity) in line.activity.iter().enumerate().filter(|_| !is_editing) {
+        let at = Rect::from_center_size(trail - vec2(i as f32 * ACTIVITY_GAP, 0.0), vec2(ACTIVITY, ACTIVITY));
         paint_activity(ui, s, at, activity);
-        ui.interact(at, Id::new(("page_tree_activity", line.page.0)), Sense::hover()).on_hover_text(activity.tip(&line.name));
+        ui.interact(at, Id::new(("page_tree_activity", line.page.0, i)), Sense::hover()).on_hover_text(activity.tip(&line.name));
     }
     if is_editing {
         // The field covers the right column.
@@ -786,16 +788,16 @@ mod tests {
         assert_eq!(mode(&doc, checkout), Mode::Exploration);
         // A page Sync burns the page and its subpages, and nothing else.
         let canvas_sync = building_pages(&doc, Some(Some(canvas.0)));
-        assert_eq!(activity(canvas, &canvas_sync, None), Some(Activity::Burning));
-        assert_eq!(activity(paint, &canvas_sync, None), Some(Activity::Burning));
-        assert_eq!(activity(overview, &canvas_sync, None), None);
-        // An agent at work on a page designs it; a Sync covering it wins.
-        assert_eq!(activity(checkout, &canvas_sync, Some("Claude".into())), Some(Activity::Designing("Claude".into())));
-        assert_eq!(activity(paint, &canvas_sync, Some("Claude".into())), Some(Activity::Burning));
+        assert_eq!(activity(canvas, &canvas_sync, None), [Activity::Burning]);
+        assert_eq!(activity(paint, &canvas_sync, None), [Activity::Burning]);
+        assert_eq!(activity(overview, &canvas_sync, None), []);
+        // An agent at work on a page designs it; burned at the same time, it shows both.
+        assert_eq!(activity(checkout, &canvas_sync, Some("Claude".into())), [Activity::Designing("Claude".into())]);
+        assert_eq!(activity(paint, &canvas_sync, Some("Claude".into())), [Activity::Burning, Activity::Designing("Claude".into())]);
         assert_eq!(Activity::Designing("Claude".into()).tip("Strokes"), "Claude is designing Strokes");
         // An all-pages Sync burns every page.
         let all = building_pages(&doc, Some(None));
-        assert!([overview, canvas, paint, checkout].iter().all(|page| activity(*page, &all, None) == Some(Activity::Burning)));
+        assert!([overview, canvas, paint, checkout].iter().all(|page| activity(*page, &all, None) == [Activity::Burning]));
     }
 
     fn app_with_pages() -> (crate::layers_drag_tests::Ui, NodeId, NodeId, NodeId) {

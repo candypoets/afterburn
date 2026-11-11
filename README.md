@@ -17,13 +17,29 @@ Software work is wider than a chat thread: plans, designs, decisions, screenshot
 
 ## The loop
 
-1. **Init your repo.** Open a worktree, choose an agent, and press **Init**. The agent reads the code and draws the first map, with source references.
-2. **Point at something.** Select a card and leave a comment. The agent gets its identity and page scope, then reads the detail it needs.
-3. **Work on the picture.** Ask questions, explore alternatives, and zoom into subpages. Design edits stay on the canvas until you choose to build them.
-4. **Burn when ready.** Select the waiting changes to implement. The agent works from a frozen design, implements and checks the change, then commits the design and code together.
-5. **Keep going.** You can continue refining the canvas during a Burn. Those later edits wait for the next one.
+```mermaid
+flowchart LR
+    Repo[Open a worktree] --> Init[Choose agent · Init]
+    Init --> Map[Source-backed map]
+    Map --> Point[Point · comment]
+    Point --> Draw[Agent reads · draws]
+    Draw --> Refine[Review · refine]
+    Refine --> Point
+    Refine --> Burn[Burn a frozen design]
+    Burn --> Check[Implement · test]
+    Check --> Commit[Code + design · one commit]
+    Commit --> Map
+```
 
-Explanations and bug fixes have their own path: an explanation records the map; a fix records it with the implementation. A design proposal stays waiting. [Agent workflow →](skills/afterburn/SKILL.md)
+Sources: [service/src/node_context.rs:33](service/src/node_context.rs#L33) · [service/src/node_brief.rs:78](service/src/node_brief.rs#L78) · [service/src/node_git.rs:1050](service/src/node_git.rs#L1050).
+
+| Your intent | Agent's result | When it is recorded |
+|---|---|---|
+| Explain what exists | Diagram with code references | Explanation commit |
+| Fix a bug | Checked implementation + corrected map | Fix commit |
+| Explore an idea | A proposal on the canvas | Waits for Burn |
+
+You can keep designing during a Burn. Later edits wait for the next one. [Workflow contract →](skills/afterburn/SKILL.md)
 
 ## Why a canvas?
 
@@ -43,15 +59,38 @@ That distinction lets you design ahead without presenting every idea as a shippe
 
 ### Design continuously. Burn in parallel.
 
-A Burn names the waiting changes and their scope. For larger work, the agent can split independent tasks across subagents, then integrate and verify the result. The shared design gives those tasks a common brief.
+The next agent can fetch the same cards, pictures, and pending changes. For a large Burn, the agent can split independent work across subagents, then integrate and verify it.
 
-Completion is checked against Git: the node verifies the branch and ancestry, the exact frozen design, and the job's commit trailer. An idle agent alone doesn't mark the work done. These checks verify the recorded handoff; tests and review establish whether the implementation is correct. [Completion checks →](service/src/node_git.rs#L1050)
+```mermaid
+flowchart LR
+    Canvas[Shared canvas] --> Brief[Scope + waiting changes]
+    Brief --> A[Subagent A]
+    Brief --> B[Subagent B]
+    A --> Integrate[Integrate · test]
+    B --> Integrate
+    Integrate --> Commit[Code + frozen design]
+    Commit --> Verify[Node verifies commit]
+    Canvas -. later edits .-> Next[Next Burn]
+```
+
+Sources: [service/src/node_brief.rs:94](service/src/node_brief.rs#L94) · [service/src/node_brief.rs:125](service/src/node_brief.rs#L125) · [service/src/node_git.rs:1050](service/src/node_git.rs#L1050).
+
+The node checks the branch, ancestry, frozen design, and job trailer. Tests and review establish whether the implementation is correct.
 
 ## Give your agent a shared picture
 
-Every box has an ID. Through the Afterburn **MCP server**, an agent can fetch a card and its children, look at a screenshot, inspect the map, read the pending diff, and draw its answer back into the same document.
+Every box has an ID. Point once; the agent pulls the context it needs through the Afterburn **MCP server**.
 
-The prompt supplies the place and the task. The agent pulls the rest as needed.
+```mermaid
+flowchart LR
+    Comment[Comment + card ID] --> Agent[Your agent]
+    Agent --> Read[Read card · children · diff]
+    Read --> See[Inspect screenshot]
+    See --> Draw[Draw answer in place]
+    Draw --> Comment
+```
+
+Sources: [service/src/comments.rs:275](service/src/comments.rs#L275) · [service/src/node_main.rs:185](service/src/node_main.rs#L185).
 
 <details>
 <summary><strong>The tools behind the canvas</strong></summary>

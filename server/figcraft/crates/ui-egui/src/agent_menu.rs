@@ -64,10 +64,11 @@ fn WORKING() -> Color32 {
     crate::map_colors::get().working_ink
 }
 const DONE: Color32 = Color32::from_rgb(0x41, 0x6F, 0x91);
-/// The button's fill: green for a ready agent, amber for a working one, red for blocked.
-const READY_FILL: Color32 = Color32::from_rgb(0xEA, 0xF3, 0xF0);
-const WORKING_FILL: Color32 = Color32::from_rgb(0xFF, 0xF4, 0xDB);
-const BLOCKED_FILL: Color32 = Color32::from_rgb(0xFB, 0xED, 0xEA);
+/// The button's fill: the status ink (green for a ready agent, amber for a working one, red for
+/// blocked) washed over the theme's panel, so it follows light and dark themes.
+fn status_fill(ink: Color32) -> Color32 {
+    PANEL().lerp_to_gamma(ink, 0.12)
+}
 /// The selected row in the menu.
 #[allow(non_snake_case)]
 fn CHOSEN_FILL() -> Color32 {
@@ -156,9 +157,9 @@ pub(crate) fn button(ui: &mut Ui, id: Id, targets: &[TargetInfo], target: Option
     let (fill, stroke, ink) = match (target, chosen) {
         (Some(Target::New { .. }), _) => (PANEL(), BORDER(), INK()),
         (Some(_), Some(info)) => match readiness(&info.status) {
-            Readiness::Ready => (READY_FILL, MAP_INK(), INK()),
-            Readiness::Working => (WORKING_FILL, WORKING(), WORKING()),
-            Readiness::Blocked => (BLOCKED_FILL, DANGER(), DANGER()),
+            Readiness::Ready => (status_fill(MAP_INK()), MAP_INK(), INK()),
+            Readiness::Working => (status_fill(WORKING()), WORKING(), WORKING()),
+            Readiness::Blocked => (status_fill(DANGER()), DANGER(), DANGER()),
             Readiness::Unavailable => (PANEL(), BORDER(), MUTED()),
         },
         _ => (PANEL(), BORDER(), MUTED()),
@@ -265,7 +266,7 @@ pub(crate) fn body(
 
     let before = state.query.clone();
     let search = egui::Frame::NONE
-        .fill(Color32::from_rgb(0xF6, 0xF5, 0xF2))
+        .fill(SOFT())
         .stroke(Stroke::new(1.0, BORDER()))
         .corner_radius(CornerRadius::same(6))
         .inner_margin(Margin::symmetric(10, 7))
@@ -410,11 +411,11 @@ pub(crate) fn targets_of(agents: Vec<AgentDetail>, clis: &[String]) -> Vec<Targe
         if agent.pane.trim().is_empty() {
             continue;
         }
-        let label = agent_label(agent.name.as_deref(), agent.tab.as_deref(), &agent.pane);
         // The node names the model the agent runs, when its process tells.
         if let Some(model) = agent.model.as_deref().map(str::trim).filter(|model| !model.is_empty()) {
             remember_model(&agent.pane, model);
         }
+        let label = agent_label(agent.name.as_deref(), agent.tab.as_deref(), &agent.pane);
         let title = agent.title.map(|title| title.trim().to_string()).filter(|title| !title.is_empty());
         targets.push(TargetInfo {
             target: Target::Existing { pane: agent.pane, kind: agent.kind, status: agent.status.clone() },
@@ -807,5 +808,22 @@ mod tests {
         assert_eq!(agent_label(Some("agent-picker"), Some("Agent picker"), "w1:p8"), "Agent picker");
         assert_eq!(agent_label(Some("agent-picker-2"), Some("Agent picker"), "w1:p9"), "Agent picker");
         assert_eq!(agent_label(Some("backend"), Some("Tests"), "w1:p2"), "backend", "an unrelated tab does not rename the agent");
+    }
+
+    #[test]
+    fn the_button_fill_follows_the_theme() {
+        use crate::map_colors::{Theme, set};
+        let luma = |c: Color32| 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
+        for theme in Theme::ALL {
+            set(theme);
+            let panel = PANEL();
+            for ink in [MAP_INK(), WORKING(), DANGER()] {
+                let fill = status_fill(ink);
+                // Close to the panel (a wash, not a light card on a dark bar), tinted toward the ink.
+                assert!((luma(fill) - luma(panel)).abs() < 40.0, "{theme:?}: {fill:?} on {panel:?}");
+                assert_ne!(fill, panel, "{theme:?}");
+            }
+        }
+        set(Theme::Afterburn);
     }
 }

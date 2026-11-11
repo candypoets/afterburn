@@ -2202,6 +2202,8 @@ fn start_sync(app: &mut FigApp, ctx: &egui::Context, workspace: String, _snapsho
             return;
         }
     };
+    // The agent burns now: the page it was designing no longer shows its brush.
+    app.compose.release(&target.line());
     let note = app.sync.note.chars().take(MAX_NOTE_CHARS).collect::<String>();
     app.sync.node = Some(node.clone());
     // The unticked cards stay out of the frozen map and the agent's work: they keep waiting.

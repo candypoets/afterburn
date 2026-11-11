@@ -47,6 +47,12 @@ other pages are out of scope. Preserve card names and page IDs unless the task r
 change. Use existing components and layout conventions. Do not rebuild the whole map for a
 local edit.
 
+Answer on the canvas with cards. Asked to "comment on the canvas", to leave a note or to remark
+on a card, add or edit a card next to what it is about. Never use FigCraft's comment feature
+(`comment.*`, `tool.comment`, `view.comments`): it is disabled in Afterburn, the commands are
+not listed and the node refuses them. The only comments in Afterburn are the human's, and they
+reach you as a prompt (`On the page: …`, `On Card (id N) · path`).
+
 ## Video
 
 `add_video {source, parent, x, y, width?, name?}` (node method `media.add`) puts a clip on the

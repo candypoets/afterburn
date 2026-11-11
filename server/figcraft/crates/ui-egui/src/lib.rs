@@ -90,7 +90,13 @@ fn map_command_allowed(id: &str) -> bool {
     ) {
         return false;
     }
-    if id.starts_with("comment.") || id.starts_with("collab.") || id.starts_with("view.") {
+    // FigCraft's comment threads are off in Afterburn: the human comments in the composer, and
+    // those comments reach an agent as a prompt. `view.comments` stays: it shows or hides the
+    // composer's draft pins.
+    if id.starts_with("comment.") {
+        return false;
+    }
+    if id.starts_with("collab.") || id.starts_with("view.") {
         return true;
     }
     // Adding a page is navigation, not drawing: the human can make a blank page for an agent to

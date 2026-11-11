@@ -395,7 +395,14 @@ impl State {
     pub(crate) fn prompted_on(&mut self, page: NodeId, sent: &Target, agent: Option<&Value>) {
         let pane = agent.and_then(|agent| agent.get("pane")).and_then(Value::as_str).map(str::trim).filter(|pane| !pane.is_empty());
         let line = pane.map_or_else(|| sent.line(), |pane| format!("pane:{pane}"));
+        self.release(&line);
         self.prompted.insert(page, line);
+    }
+
+    /// The agent on `line` moved to other work (a prompt about another page, a Burn): the pages
+    /// it was prompted about before no longer count it as designing them.
+    pub(crate) fn release(&mut self, line: &str) {
+        self.prompted.retain(|_, prompted| prompted != line);
     }
 
     /// The agent designing `page` now: the one last prompted about it, while it is working. Its
@@ -1047,7 +1054,7 @@ fn draft_chip(ui: &mut Ui, index: usize, text: &str, active: bool, many: bool) -
         (true, _, _) => EDIT_FILL(),
         (false, true, false) => ACCENT_TINT(),
         (false, true, true) => ACCENT_TINT_HOVER(),
-        (false, false, true) => Color32::from_rgb(0xF1, 0xF0, 0xED),
+        (false, false, true) => crate::map_colors::get().tab_hover,
         (false, false, false) => SOFT(),
     };
     // A pill: 20 pt tall, fully rounded.
@@ -2193,6 +2200,20 @@ mod tests {
         state.prompted_on(other, &Target::New { kind: "codex".into() }, Some(&json!({"pane": "w1:p9", "kind": "codex"})));
         state.targets.push(agent("w1:p9", "codex", "working", None));
         assert_eq!(state.designing(other).as_deref(), Some("Codex"));
+    }
+
+    #[test]
+    fn a_page_stops_being_designed_when_its_agent_moves_to_another_page() {
+        let mut state = State { targets: vec![agent("w1:p5", "claude", "working", None)], ..State::default() };
+        let (first, second) = (NodeId(7), NodeId(8));
+        let sent = state.targets[0].target.clone();
+        state.prompted_on(first, &sent, None);
+        state.prompted_on(second, &sent, None);
+        assert_eq!(state.designing(first), None, "the agent works on the second page now");
+        assert_eq!(state.designing(second).as_deref(), Some("Claude"));
+        // A Burn sent to the same agent: no page is being designed by it.
+        state.release(&sent.line());
+        assert_eq!(state.designing(second), None);
     }
 
     #[test]

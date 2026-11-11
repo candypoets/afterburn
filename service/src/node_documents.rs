@@ -157,6 +157,7 @@ impl NodeDocuments {
                 }
             }
             None => {
+                migrate_legacy_file(&worktree)?;
                 let disk = read_optional(&worktree.join(DESIGN_PATH))?;
                 let doc = match &disk {
                     Some(bytes) => decode(bytes)?,
@@ -844,8 +845,32 @@ fn encode(doc: &Document) -> Result<Vec<u8>> {
 }
 fn decode(bytes: &[u8]) -> Result<Document> {
     figcraft_format::load_bytes(bytes)
-        .map(|(doc, _)| doc)
+        .map(|(mut doc, _)| {
+            crate::node_git::migrate_legacy_keys(&mut doc);
+            doc
+        })
         .map_err(collab_error)
+}
+
+/// A worktree whose map is still at the pre-rename path (`.mindmap/map.figcraft`) and has none at
+/// [`DESIGN_PATH`]: write the map there with its plugin keys renamed, then remove the old file
+/// (and its folder once empty). Git sees the move; the next commit carries it.
+fn migrate_legacy_file(worktree: &Path) -> Result<()> {
+    let design = worktree.join(DESIGN_PATH);
+    let legacy = worktree.join(crate::node_git::LEGACY_DESIGN_PATH);
+    if design.exists() || !legacy.is_file() {
+        return Ok(());
+    }
+    let doc = decode(&std::fs::read(&legacy)?)?;
+    if let Some(parent) = design.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    atomic_write(&design, &encode(&doc)?)?;
+    std::fs::remove_file(&legacy)?;
+    if let Some(folder) = legacy.parent() {
+        let _ = std::fs::remove_dir(folder);
+    }
+    Ok(())
 }
 fn require_resolved(outcome: &MergeOutcome) -> Result<()> {
     if outcome.conflicts.is_empty() {
@@ -924,6 +949,13 @@ fn identity(path: &Path) -> Result<(PathBuf, String, PathBuf)> {
     Ok((worktree, branch, git_dir.join("afterburn-node")))
 }
 
+/// FigCraft's own comment feature: threads, the Comment tool and the comments view. Afterburn
+/// never exposes it. Remarks are cards on the canvas, and the human's comments reach agents as
+/// prompts through `send` ([`crate::comments`]), which shares no code with these commands.
+pub fn figcraft_comment_command(command: &str) -> bool {
+    command.starts_with("comment.") || matches!(command, "tool.comment" | "view.comments")
+}
+
 /// Keep command execution in-memory, including nested batches. File/network/plugin commands
 /// belong to other node APIs; an RPC must never let engine file.save bypass this authority.
 fn validate_command(command: &str, params: &Value, depth: usize) -> Result<()> {
@@ -944,6 +976,11 @@ fn validate_command(command: &str, params: &Value, depth: usize) -> Result<()> {
         }
         return Ok(());
     }
+    if figcraft_comment_command(command) {
+        return Err(Error::new(format!(
+            "command {command} is disabled in Afterburn: FigCraft comments are off. Answer on the canvas with cards"
+        )));
+    }
     let family = command.split('.').next().unwrap_or("");
     let allowed = matches!(
         family,
@@ -960,7 +997,6 @@ fn validate_command(command: &str, params: &Value, depth: usize) -> Result<()> {
             | "variable"
             | "component"
             | "instance"
-            | "comment"
             | "vector"
             | "section"
             | "boolean"

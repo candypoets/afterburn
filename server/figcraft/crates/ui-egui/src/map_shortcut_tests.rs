@@ -53,6 +53,11 @@ fn map_keys_never_mutate_document_or_enter_editor_tools() {
         assert!(u.app.session.ds().unwrap().text_edit.is_none());
         assert!(!crate::map_command_allowed("edit.undo"));
         assert!(!crate::map_command_allowed("file.save"));
+        // FigCraft's comment threads are off; the composer's draft pins keep their toggle.
+        assert!(!crate::map_command_allowed("comment.add"));
+        assert!(!crate::map_command_allowed("comment.open"));
+        assert!(!crate::map_command_allowed("tool.comment"));
+        assert!(crate::map_command_allowed("view.comments"));
     });
 }
 #[test]
@@ -598,5 +603,30 @@ fn the_sidebar_starts_with_the_pages_and_has_no_switcher_or_footer() {
             assert!(crate::map_action_catalog::find(id).is_some_and(|a| crate::map_action_catalog::enabled(&u.app, a)), "{id}");
         }
         assert!(crate::native_menu::enabled(&u.app, crate::native_menu::ADD_MACHINE));
+    });
+}
+
+/// Afterburn has no FigCraft comment threads: a map that already holds one keeps it stored, and
+/// the viewer neither opens it nor lets it be changed.
+#[test]
+fn map_mode_never_shows_a_stored_comment_thread() {
+    crate::with_map_mode(|| {
+        let (mut u, _, _) = setup();
+        let c = u.app.session.execute("comment.add", &json!({"x": 150, "y": 150, "text": "Hello", "author": "Sam"})).unwrap()["id"].as_u64().unwrap();
+        assert!(u.app.session.ds().unwrap().view.comments);
+        assert!(u.app.run("comment.open", json!({"id": c})).is_none());
+        assert!(u.app.run("comment.reply", json!({"id": c, "text": "no"})).is_none());
+        // Even a thread opened behind the gate is closed by the next frame, and its pin takes
+        // no click.
+        u.app.ui.comments.show(c);
+        u.frame(vec![]);
+        assert_eq!(u.app.ui.comments.open, None);
+        let pin = u.app.to_screen(150.0, 150.0) + egui::vec2(14.0, -14.0);
+        u.button(pin, true);
+        u.button(pin, false);
+        u.frame(vec![]);
+        assert_eq!(u.app.ui.comments.open, None);
+        // The thread is still in the document, untouched.
+        assert!(u.app.session.doc().unwrap().comment(c).unwrap().replies.is_empty());
     });
 }

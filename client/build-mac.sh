@@ -62,14 +62,16 @@ for size in 16 32 128 256 512; do
   sips -z "$((size*2))" "$((size*2))" "$HERE/icon-1024.png" --out "$STAGING/AppIcon.iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$STAGING/AppIcon.iconset" -o "$RESOURCES/AppIcon.icns"
-python3 - "$BUNDLE" <<'PY'
+# Each build gets its own CFBundleVersion: macOS caches a running app's Dock icon by bundle id and
+# version, so a fixed version keeps showing an older build's icon after a new one is installed.
+python3 - "$BUNDLE" "$(date -u +%Y%m%d.%H%M%S)" <<'PY'
 import pathlib, plistlib, sys
 bundle = pathlib.Path(sys.argv[1])
 plist = {
     'CFBundleName': 'Afterburn', 'CFBundleDisplayName': 'Afterburn',
     'CFBundleExecutable': 'Afterburn', 'CFBundleIdentifier': 'dev.afterburn.client',
     'CFBundleIconFile': 'AppIcon', 'CFBundlePackageType': 'APPL',
-    'CFBundleShortVersionString': '0.1.0', 'CFBundleVersion': '1',
+    'CFBundleShortVersionString': '0.1.0', 'CFBundleVersion': sys.argv[2],
     'LSMinimumSystemVersion': '12.0', 'NSHighResolutionCapable': True,
     'LSApplicationCategoryType': 'public.app-category.developer-tools',
 }

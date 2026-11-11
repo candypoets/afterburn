@@ -468,7 +468,7 @@ impl Node {
             }
             "session.commands" => {
                 let filter = req["filter"].as_str().unwrap_or("");
-                let commands: Vec<Value> = figcraft_engine::all_commands().iter().filter(|c|c.id.contains(filter)).map(|c|json!({"id":c.id,"label":c.label,"params":c.params,"history":c.history})).collect();
+                let commands: Vec<Value> = figcraft_engine::all_commands().iter().filter(|c|c.id.contains(filter)).filter(|c|!crate::node_documents::figcraft_comment_command(c.id)).map(|c|json!({"id":c.id,"label":c.label,"params":c.params,"history":c.history})).collect();
                 Ok(json!({"commands":commands}))
             }
             "session.command" => {
@@ -630,7 +630,8 @@ impl Node {
                 let workspace = self.herdr.find_workspace(required(req, "workspace")?)?;
                 let session = self.session(req)?;
                 self.validate_workspace(&workspace, &session)?;
-                self.herdr.agent_step(required(req, "method")?, &workspace, req)
+                self.herdr
+                    .agent_step(required(req, "method")?, &workspace, req)
             }
             "pane.close" => self.herdr.close_pane(req),
             "worktree.create" => self

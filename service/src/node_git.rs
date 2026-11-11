@@ -24,6 +24,41 @@ use crate::error::{Error, Result};
 
 pub const DESIGN_PATH: &str = ".afterburn/map.figcraft";
 const TRAILER: &str = "Afterburn-Sync";
+/// Where a map lived before the rename to Afterburn. A worktree that only has this one is moved
+/// to [`DESIGN_PATH`] when it opens; older commits are still read from here.
+pub const LEGACY_DESIGN_PATH: &str = ".mindmap/map.figcraft";
+/// The Sync trailer before the rename: those records still count as baselines.
+const LEGACY_TRAILER: &str = "Mindmap-Sync";
+
+/// Rename the plugin keys a map written before the rename carries (`mindmap.parent_page` →
+/// `afterburn.parent_page`, …). A key already present under the new name wins. True when any
+/// key moved.
+pub fn migrate_legacy_keys(doc: &mut Document) -> bool {
+    let ids: Vec<NodeId> = doc.ids().collect();
+    let mut moved = false;
+    for id in ids {
+        let Some(node) = doc.node_mut(id) else {
+            continue;
+        };
+        let legacy: Vec<String> = node
+            .plugin_data
+            .keys()
+            .filter(|key| key.starts_with("mindmap."))
+            .cloned()
+            .collect();
+        for key in legacy {
+            if let (Some(value), Some(rest)) =
+                (node.plugin_data.remove(&key), key.strip_prefix("mindmap."))
+            {
+                node.plugin_data
+                    .entry(format!("afterburn.{rest}"))
+                    .or_insert(value);
+                moved = true;
+            }
+        }
+    }
+    moved
+}
 /// What a record says about the map it commits. `sync`: the code now implements it. `explain`:
 /// it describes the code as it already is. `fix`: a bug fix, committed with its code.
 pub const KINDS: [&str; 3] = ["sync", "explain", "fix"];
@@ -220,7 +255,7 @@ fn commit_markers(path: &Path, commit: &str) -> Result<(String, Vec<String>)> {
         &[
             "show",
             "-s",
-            "--format=%cI%n%(trailers:only,key=Afterburn-Sync,valueonly,unfold=true,separator=%x1f)",
+            "--format=%cI%n%(trailers:only,key=Afterburn-Sync,key=Mindmap-Sync,valueonly,unfold=true,separator=%x1f)",
             commit,
         ],
     )?;
@@ -235,8 +270,17 @@ fn commit_markers(path: &Path, commit: &str) -> Result<(String, Vec<String>)> {
     ))
 }
 
+/// The commit's map: at [`DESIGN_PATH`], or at [`LEGACY_DESIGN_PATH`] in a commit from before the
+/// rename.
 fn design_blob(path: &Path, commit: &str) -> Result<Option<String>> {
-    let out = git_text(path, &["ls-tree", commit, "--", DESIGN_PATH])?;
+    match design_blob_at(path, commit, DESIGN_PATH)? {
+        Some(blob) => Ok(Some(blob)),
+        None => design_blob_at(path, commit, LEGACY_DESIGN_PATH),
+    }
+}
+
+fn design_blob_at(path: &Path, commit: &str, design: &str) -> Result<Option<String>> {
+    let out = git_text(path, &["ls-tree", commit, "--", design])?;
     if out.is_empty() {
         return Ok(None);
     }
@@ -265,13 +309,15 @@ pub fn load_design_bytes(path: &Path, revision: &str) -> Result<Vec<u8>> {
 }
 
 fn decode_design(bytes: &[u8]) -> Result<Document> {
-    let (doc, repairs) = figcraft_format::load_bytes(bytes)
+    let (mut doc, repairs) = figcraft_format::load_bytes(bytes)
         .map_err(|e| Error::new(format!("decode design: {e}")))?;
     if !repairs.is_empty() {
         return Err(Error::new(
             "design requires repairs; refusing an inexact baseline",
         ));
     }
+    // A map committed before the rename compares with the live one under the same keys.
+    migrate_legacy_keys(&mut doc);
     Ok(doc)
 }
 
@@ -302,6 +348,7 @@ fn find_baseline(path: &Path, page: Option<u64>, sync_only: bool) -> Result<Opti
             "--format=%H",
             "--regexp-ignore-case",
             "--grep=^Afterburn-Sync:",
+            &format!("--grep=^{LEGACY_TRAILER}:"),
             &tip,
         ],
     )?;
@@ -994,6 +1041,7 @@ pub fn prepare_commit(path: &Path, frozen: &FrozenSync) -> Result<Value> {
             &format!("100644,{blob},{DESIGN_PATH}"),
         ],
     )?;
+    stage_legacy_removal(&root)?;
     Ok(
         json!({"job": frozen.id, "blob": blob, "path": DESIGN_PATH, "trailer": frozen.trailer, "start_head": frozen.start_head}),
     )
@@ -1427,6 +1475,20 @@ pub fn stage_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
             "--cacheinfo",
             &format!("100644,{blob},{DESIGN_PATH}"),
         ],
+    )?;
+    stage_legacy_removal(&root)?;
+    Ok(())
+}
+
+/// The map moved from [`LEGACY_DESIGN_PATH`] when the worktree opened: the commit that carries
+/// the new map also removes the old one, so the repository keeps a single map.
+fn stage_legacy_removal(root: &Path) -> Result<()> {
+    if root.join(LEGACY_DESIGN_PATH).exists() {
+        return Ok(());
+    }
+    git(
+        root,
+        &["update-index", "--force-remove", "--", LEGACY_DESIGN_PATH],
     )?;
     Ok(())
 }

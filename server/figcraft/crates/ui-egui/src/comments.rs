@@ -213,7 +213,12 @@ fn me(app: &FigApp) -> String {
 }
 
 /// Pins are visible with the Comment tool, or when View › Comments is on (Shift+C).
+/// Never in map mode: Afterburn has no FigCraft comment threads, and a map that already holds
+/// some keeps them stored but unshown.
 fn visible(app: &FigApp) -> bool {
+    if crate::map_mode() {
+        return false;
+    }
     app.session.tool.tool == ToolId::Comment
         || app.session.ds().is_ok_and(|ds| ds.view.comments)
         || app.ui.comments.open.is_some()
@@ -818,6 +823,11 @@ fn escape(app: &mut FigApp, ctx: &egui::Context) -> bool {
 
 /// The thread popover and the draft composer, floating next to their pins on the canvas.
 pub fn popovers(app: &mut FigApp, ctx: &egui::Context) {
+    if crate::map_mode() {
+        app.ui.comments.close();
+        app.ui.comments.draft = None;
+        return;
+    }
     if escape(app, ctx) {
         return;
     }

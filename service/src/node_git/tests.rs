@@ -889,3 +889,72 @@ fn marking_a_pages_mode_never_waits_for_a_sync() {
     let drift = design_drift(&repo.0, &live, Some(page.0)).unwrap();
     assert!(!drift.is_empty());
 }
+
+#[test]
+fn a_map_committed_before_the_rename_still_baselines_under_the_new_keys() {
+    let repo = Repo::new();
+    let (mut doc, page, node, _) = design();
+    doc.node_mut(node)
+        .unwrap()
+        .plugin_data
+        .insert("mindmap.parent_page".into(), page.0.to_string());
+    fs::create_dir_all(repo.0.join(".mindmap")).unwrap();
+    fs::write(
+        repo.0.join(LEGACY_DESIGN_PATH),
+        figcraft_format::save_bytes(&doc, None).unwrap(),
+    )
+    .unwrap();
+    git(&repo.0, &["add", "--", LEGACY_DESIGN_PATH]).unwrap();
+    git(
+        &repo.0,
+        &["commit", "-m", "Old record\n\nMindmap-Sync: all explain"],
+    )
+    .unwrap();
+    let old = head(&repo.0).unwrap().unwrap();
+
+    let found = baseline(&repo.0, None)
+        .unwrap()
+        .expect("the Mindmap-Sync record still counts");
+    assert_eq!(found.commit, old);
+    let committed = load_design(&repo.0, &old).unwrap();
+    let keys = &committed.node(node).unwrap().plugin_data;
+    assert_eq!(keys.get("afterburn.parent_page"), Some(&page.0.to_string()));
+    assert!(!keys.contains_key("mindmap.parent_page"));
+
+    // The worktree moved the map: staging the new one also stages the old one's removal.
+    fs::remove_file(repo.0.join(LEGACY_DESIGN_PATH)).unwrap();
+    repo.write_design(&committed);
+    stage_design(&repo.0).unwrap();
+    let staged = git_text(&repo.0, &["diff", "--cached", "--name-status"]).unwrap();
+    assert!(
+        staged.contains(&format!("D\t{LEGACY_DESIGN_PATH}")),
+        "{staged}"
+    );
+    assert!(staged.contains(&format!("A\t{DESIGN_PATH}")), "{staged}");
+    // With nothing left to remove, staging is unchanged.
+    git(&repo.0, &["commit", "-m", "Move the map"]).unwrap();
+    stage_design(&repo.0).unwrap();
+}
+
+#[test]
+fn legacy_keys_move_to_afterburn_and_a_new_key_wins() {
+    let (mut doc, _, node, _) = design();
+    let data = &mut doc.node_mut(node).unwrap().plugin_data;
+    data.insert("mindmap.page_mode".into(), "exploration".into());
+    data.insert("mindmap.source_node".into(), "old".into());
+    data.insert("afterburn.source_node".into(), "new".into());
+    data.insert("other.key".into(), "kept".into());
+    assert!(migrate_legacy_keys(&mut doc));
+    let data = &doc.node(node).unwrap().plugin_data;
+    assert_eq!(
+        data.get("afterburn.page_mode").map(String::as_str),
+        Some("exploration")
+    );
+    assert_eq!(
+        data.get("afterburn.source_node").map(String::as_str),
+        Some("new")
+    );
+    assert_eq!(data.get("other.key").map(String::as_str), Some("kept"));
+    assert!(data.keys().all(|key| !key.starts_with("mindmap.")));
+    assert!(!migrate_legacy_keys(&mut doc), "nothing left to move");
+}
