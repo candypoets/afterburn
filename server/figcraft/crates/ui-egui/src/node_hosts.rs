@@ -546,7 +546,7 @@ fn platform(os: &str, arch: &str) -> Result<String, String> {
     };
     let arch = match arch.trim() {
         "arm64" | "aarch64" => "arm64",
-        "x86_64" | "amd64" => "x64",
+        "x86_64" | "amd64" | "x64" => "x64",
         _ => return Err("This host CPU is unsupported".into()),
     };
     Ok(format!("{os}-{arch}"))
@@ -962,6 +962,10 @@ mod tests {
     fn platform_detection_matches_bundle_layout() {
         assert_eq!(platform("Darwin", "aarch64").ok().as_deref(), Some("darwin-arm64"));
         assert_eq!(platform("Linux", "x86_64").ok().as_deref(), Some("linux-x64"));
+        assert_eq!(platform("Windows", "x86_64").ok().as_deref(), Some("windows-x64"));
+        assert_eq!(platform("windows", "x64").ok().as_deref(), Some("windows-x64"));
         assert!(platform("Linux", "riscv64").is_err());
+        // Only windows-x64 is published; an ARM64 app reports a platform it cannot bundle.
+        assert_eq!(platform("Windows", "aarch64").ok().as_deref(), Some("windows-arm64"));
     }
 }
