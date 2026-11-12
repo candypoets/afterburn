@@ -122,13 +122,25 @@ link to stable asset URLs (`…/releases/latest/download/<asset>`) instead of fi
 | `afterburn-macos-arm64.dmg` / `.zip` | `macos-15` | `client/build-mac.sh` with `INSTALL_NODE=0`, ad-hoc signed |
 | `afterburn-macos-x64.dmg` / `.zip` | `macos-15-intel` | same script, Intel |
 | `afterburn-linux-x64.AppImage` / `.tar.gz` | `ubuntu-22.04` | `client/build-linux.sh`, glibc 2.35 baseline |
-| `afterburn-windows-x64.zip` | `windows-2025` | app only: the node crate is Unix-only |
+| `afterburn-windows-x64.zip` | `windows-2025` | app plus `node/windows-x64/afterburn-node.exe` |
 | `SHA256SUMS` | — | checksums of everything above |
 
 - A push to `main` rebuilds the rolling **nightly** release (deleted and recreated, marked latest).
 - A `v*` tag publishes that tag as its own release, with generated notes:
   `git tag v0.1.0 && git push origin v0.1.0`.
 - **Actions → Release → Run workflow** repeats either, and takes an optional tag.
+
+## Windows
+
+The node builds and runs natively on Windows: Herdr's control socket is a named pipe there
+(`interprocess` derives the pipe name from the same socket path on both sides), Herdr's installer is
+`install.ps1`, and `%APPDATA%\herdr` replaces `~/.config/herdr`. The app has no `sh` and no service
+manager, so on first run it starts the bundled `node/windows-x64/afterburn-node.exe serve` detached
+(no console window) and waits for 127.0.0.1:47822; the node keeps serving after the window closes. Herdr itself is still installed only with explicit approval, from the Add machine
+flow.
+
+Herdr's Windows support is documented at <https://herdr.dev/tui/docs/windows-beta/> (ConPTY panes,
+some integrations narrower than Unix).
 
 Builds are unsigned: macOS bundles are ad-hoc signed but not notarized (first launch needs
 right-click → Open), and the Windows binary is not Authenticode signed. Signed builds need the

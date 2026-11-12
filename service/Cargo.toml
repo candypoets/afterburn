@@ -23,3 +23,8 @@ figcraft-collab = { workspace = true }
 figcraft-engine = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-text = { workspace = true }
+
+# Herdr's control socket is a Unix domain socket on Unix and a named pipe on Windows. Windows
+# builds use the same crate Herdr itself uses to derive the pipe name from the socket path.
+[target.'cfg(windows)'.dependencies]
+interprocess = "2.4"

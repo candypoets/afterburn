@@ -7,8 +7,11 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+#[cfg(unix)]
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -30,7 +33,14 @@ mod events;
 pub(crate) use events::rpc;
 pub use events::{HerdrEvent, HerdrMonitor};
 
+#[cfg(unix)]
 const OFFICIAL_INSTALLER: &str = "https://herdr.dev/install.sh";
+#[cfg(windows)]
+const OFFICIAL_WINDOWS_INSTALLER: &str = "https://herdr.dev/install.ps1";
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Lifecycle metadata only; terminal text and environment variables never enter node events.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -136,14 +146,23 @@ impl NodeHerdr {
             .ok_or_else(|| Error::new("Herdr is not installed"))?;
         // `herdr server` is the documented foreground headless entry point. Spawn it in its own
         // process group with detached standard streams. Reap it without owning its lifetime.
-        let mut child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .arg("server")
             .env("HERDR_SOCKET_PATH", &self.socket)
             .env("HERDR_ENV", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        command.process_group(0);
+        #[cfg(windows)]
+        {
+            // Detach from the node's console so quitting the app does not take Herdr down.
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        }
+        let mut child = command
             .spawn()
             .map_err(|_| Error::new("could not start the shared Herdr headless server"))?;
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -465,10 +484,14 @@ impl NodeHerdr {
 }
 
 fn current_socket() -> Result<(PathBuf, String)> {
+    #[cfg(windows)]
+    let config_home = env::var_os("APPDATA").map(PathBuf::from);
+    #[cfg(not(windows))]
+    let config_home = env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
     resolve_socket(
         env::var_os("HERDR_SOCKET_PATH").map(PathBuf::from),
         env::var("HERDR_SESSION").ok().as_deref(),
-        env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+        config_home,
         env::var_os("HOME").map(PathBuf::from),
     )
 }
@@ -528,16 +551,40 @@ fn resolve_socket(
 }
 
 fn executable(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    #[cfg(unix)]
+    {
+        fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(windows)]
+    {
+        fs::metadata(path).is_ok_and(|m| m.is_file())
+    }
+}
+
+fn candidate_names(name: &Path) -> Vec<PathBuf> {
+    // Windows PATH lookup is extension-driven; `herdr` on PATH means `herdr.exe`.
+    #[cfg(windows)]
+    {
+        let mut names = vec![name.to_owned()];
+        if name.extension().is_none() {
+            names.push(name.with_extension("exe"));
+        }
+        names
+    }
+    #[cfg(not(windows))]
+    {
+        vec![name.to_owned()]
+    }
 }
 
 fn path_binary(name: &Path) -> Option<PathBuf> {
     if name.components().count() > 1 {
         return executable(name).then(|| name.to_owned());
     }
+    let names = candidate_names(name);
     env::var_os("PATH").and_then(|paths| {
         env::split_paths(&paths)
-            .map(|dir| dir.join(name))
+            .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
             .find(|path| executable(path))
     })
 }
@@ -559,6 +606,13 @@ fn discover_binary(requested: &Path) -> Option<PathBuf> {
             candidates.push(PathBuf::from(&home).join(".local/bin/herdr"));
             candidates.push(PathBuf::from(home).join(".cargo/bin/herdr"));
         }
+        // The Windows installer puts the active release on PATH and keeps this stable alias.
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            let programs = PathBuf::from(local_app_data).join("Programs/Herdr/bin");
+            candidates.push(programs.join("herdr.exe"));
+            candidates.push(programs.join("herdr"));
+        }
+        #[cfg(not(windows))]
         candidates.extend([
             PathBuf::from("/opt/homebrew/bin/herdr"),
             PathBuf::from("/usr/local/bin/herdr"),
@@ -568,7 +622,20 @@ fn discover_binary(requested: &Path) -> Option<PathBuf> {
 }
 
 fn install() -> Result<()> {
-    // Fetch into memory and feed sh on stdin; no script, credentials, or installer output files.
+    #[cfg(unix)]
+    {
+        install_unix()
+    }
+    #[cfg(windows)]
+    {
+        install_windows()
+    }
+}
+
+/// The official Unix installer, fetched into memory and fed to `sh` on stdin; no script,
+/// credentials, or installer output files are left behind.
+#[cfg(unix)]
+fn install_unix() -> Result<()> {
     let output = Command::new("curl")
         .args([
             "--fail",
@@ -606,6 +673,42 @@ fn install() -> Result<()> {
     loop {
         if let Some(status) = child.try_wait()? {
             write_result?;
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(Error::new("official Herdr installer failed"))
+            };
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::new("official Herdr installer timed out"));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Windows has no `sh`: run the official PowerShell installer, which puts the versioned release
+/// on PATH and maintains the `%LOCALAPPDATA%\Programs\Herdr\bin` compatibility alias.
+#[cfg(windows)]
+fn install_windows() -> Result<()> {
+    let mut child = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &format!("irm {OFFICIAL_WINDOWS_INSTALLER} | iex"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| Error::new("could not run the official Herdr installer"))?;
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        if let Some(status) = child.try_wait()? {
             return if status.success() {
                 Ok(())
             } else {
@@ -797,6 +900,7 @@ fn resolve_workspace(workspaces: Vec<WorkspaceView>, query: &str) -> Result<Work
     }
 }
 
-#[cfg(test)]
+// The Herdr test harness speaks Unix domain sockets and file modes; Windows has neither.
+#[cfg(all(test, unix))]
 #[path = "node_herdr_tests.rs"]
 mod tests;

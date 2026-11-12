@@ -1,3 +1,5 @@
+#![cfg(unix)] // the black-box harness speaks Unix domain sockets (Herdr's fake)
+
 //! Black-box tests of the node's multiplexed TCP protocol. Every process, Git worktree and
 //! Herdr socket address is disposable; no installed agent or real record is consulted.
 //! Sync uses sync.capture for an existing external worker, without prompting an agent.

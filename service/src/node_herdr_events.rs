@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::io::{ErrorKind, Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -238,6 +239,10 @@ fn stream_events(
                     }
                 }
             }
+        } else {
+            // Windows reads never block; keep an idle subscription cheap without adding latency
+            // to a status event (the poll below is a liveness check, not the status source).
+            thread::sleep(Duration::from_millis(10));
         }
         // The socket carries real status transitions. This infrequent snapshot is a liveness
         // check and lost-event reconciliation, never the sole status source.
@@ -276,15 +281,86 @@ fn resync(tx: &mpsc::Sender<HerdrEvent>, snapshot: &Value) -> Result<()> {
     send(tx, HerdrEvent::Resync { agents })
 }
 
-fn connect(path: &Path, timeout: Duration) -> Result<UnixStream> {
-    let stream =
-        UnixStream::connect(path).map_err(|_| Error::new("shared Herdr socket is unavailable"))?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-    Ok(stream)
+/// A connection to the machine's shared Herdr server: a Unix domain socket on Unix, the named
+/// pipe Herdr binds on Windows. Both carry newline-delimited JSON.
+struct Conn {
+    #[cfg(unix)]
+    stream: UnixStream,
+    #[cfg(windows)]
+    stream: interprocess::local_socket::Stream,
 }
 
-fn write_request(stream: &mut UnixStream, id: &str, method: &str, params: Value) -> Result<()> {
+fn connect(path: &Path, timeout: Duration) -> Result<Conn> {
+    #[cfg(unix)]
+    {
+        let stream = UnixStream::connect(path)
+            .map_err(|_| Error::new("shared Herdr socket is unavailable"))?;
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        Ok(Conn { stream })
+    }
+    #[cfg(windows)]
+    {
+        use interprocess::local_socket::{prelude::*, GenericNamespaced};
+
+        let _ = timeout;
+        // Herdr converts its socket path to a namespaced named pipe with the same crate, so
+        // matching that conversion is what keeps the two ends talking.
+        let name = path
+            .to_string_lossy()
+            .to_string()
+            .to_ns_name::<GenericNamespaced>()
+            .map_err(|_| Error::new("shared Herdr socket is unavailable"))?;
+        let stream = interprocess::local_socket::Stream::connect(name)
+            .map_err(|_| Error::new("shared Herdr socket is unavailable"))?;
+        // Named pipes cannot take a read timeout; non-blocking reads keep the deadline and
+        // cancellation behaviour identical to the Unix socket's timed reads.
+        stream.set_nonblocking(true)?;
+        Ok(Conn { stream })
+    }
+}
+
+impl Read for Conn {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        #[cfg(unix)]
+        {
+            self.stream.read(buf)
+        }
+        #[cfg(windows)]
+        {
+            // `&Stream` is the readable form; interprocess keeps the whole stream intact.
+            let mut stream = &self.stream;
+            stream.read(buf)
+        }
+    }
+}
+
+impl Write for Conn {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        #[cfg(unix)]
+        {
+            self.stream.write(buf)
+        }
+        #[cfg(windows)]
+        {
+            let mut stream = &self.stream;
+            stream.write(buf)
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.stream.flush()
+        }
+        #[cfg(windows)]
+        {
+            Ok(())
+        }
+    }
+}
+
+fn write_request(stream: &mut Conn, id: &str, method: &str, params: Value) -> Result<()> {
     let mut request = serde_json::to_vec(&json!({"id": id, "method": method, "params": params}))?;
     request.push(b'\n');
     stream
@@ -327,7 +403,7 @@ struct Frames {
 }
 
 impl Frames {
-    fn next(&mut self, stream: &mut UnixStream) -> Result<Option<Value>> {
+    fn next(&mut self, stream: &mut Conn) -> Result<Option<Value>> {
         loop {
             if let Some(newline) = self.pending.iter().position(|b| *b == b'\n') {
                 if newline > MAX_FRAME {
@@ -355,7 +431,10 @@ impl Frames {
                 Err(error)
                     if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
                 {
-                    return Ok(None)
+                    // Windows reads never block, so pace the poll instead of spinning; on Unix
+                    // this only runs after a timed-out read.
+                    thread::sleep(Duration::from_millis(2));
+                    return Ok(None);
                 }
                 Err(error) if error.kind() == ErrorKind::Interrupted => continue,
                 Err(_) => return Err(Error::new("could not read Herdr socket")),
@@ -363,7 +442,7 @@ impl Frames {
         }
     }
 
-    fn until(&mut self, stream: &mut UnixStream, deadline: Instant) -> Result<Value> {
+    fn until(&mut self, stream: &mut Conn, deadline: Instant) -> Result<Value> {
         while Instant::now() < deadline {
             if let Some(frame) = self.next(stream)? {
                 return Ok(frame);
@@ -396,11 +475,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn split_frames_survive_timeout_and_multiple_lines() {
-        let (mut client, mut server) = UnixStream::pair().unwrap();
+        let (client, mut server) = UnixStream::pair().unwrap();
         client
             .set_read_timeout(Some(Duration::from_millis(10)))
             .unwrap();
+        let mut client = Conn { stream: client };
         let mut frames = Frames::default();
         server.write_all(b"{\"event\":").unwrap();
         assert!(frames.next(&mut client).unwrap().is_none());

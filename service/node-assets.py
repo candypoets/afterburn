@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 
-PLATFORMS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64")
+PLATFORMS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
 
 
 def digest(path):

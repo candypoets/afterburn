@@ -7,8 +7,7 @@
 # - Push a v* tag       → that tag's release, with generated notes
 # - Run manually        → same, optionally into a tag you name
 #
-# Builds are unsigned: macOS is ad-hoc signed, Windows is not Authenticode signed. The headless
-# node is Unix-only (service/ uses std::os::unix), so the Windows build ships the app alone.
+# Builds are unsigned: macOS is ad-hoc signed, Windows is not Authenticode signed.
 name: Release
 
 on:
@@ -147,16 +146,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-x64
-      # The node is Unix-only, so this builds the app alone (it reaches a node over TCP).
-      - name: Build app
-        run: cargo build --locked --release -p figcraft
+      - name: Build app and node
+        run: cargo build --locked --release -p figcraft -p afterburn-node
+      # The app cannot open a repo without its node: ship afterburn-node.exe beside it, in the
+      # `node/windows-x64/` layout the app validates and starts on first run.
       - name: Package .zip
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path out | Out-Null
+          New-Item -ItemType Directory -Force -Path out/node/windows-x64 | Out-Null
           Copy-Item target/release/figcraft.exe out/afterburn.exe
-          Compress-Archive -Path out/afterburn.exe -DestinationPath out/afterburn-windows-x64.zip
-          Remove-Item out/afterburn.exe
+          Copy-Item target/release/afterburn-node.exe out/node/windows-x64/afterburn-node.exe
+          python service/node-assets.py record --binary out/node/windows-x64/afterburn-node.exe --platform windows-x64 --output out/node/windows-x64/build-info.json
+          Compress-Archive -Path out/afterburn.exe, out/node -DestinationPath out/afterburn-windows-x64.zip
+          Remove-Item -Recurse -Force out/afterburn.exe, out/node
           Get-ChildItem out
       - uses: actions/upload-artifact@v4
         with:
@@ -213,8 +215,9 @@ jobs:
           | Windows · x64 | `afterburn-windows-x64.zip` |
           | All | `SHA256SUMS` |
 
-          The Windows zip ships the app alone; the headless node (`afterburn-node`, installed on the
-          machine that holds the repo) is built for macOS and Linux only.
+          Every build bundles the headless node (`afterburn-node`) for the platform it targets. On
+          Windows the app starts it from `node/windows-x64/` on first run; Herdr installs with its
+          own PowerShell installer when you approve it.
           EOF
           cat notes.md
       - name: Publish release

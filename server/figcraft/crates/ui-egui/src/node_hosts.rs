@@ -541,6 +541,7 @@ fn platform(os: &str, arch: &str) -> Result<String, String> {
     let os = match os.trim() {
         "Darwin" | "macos" => "darwin",
         "Linux" | "linux" => "linux",
+        "Windows" | "windows" | "win32" => "windows",
         _ => return Err("This host operating system is unsupported".into()),
     };
     let arch = match arch.trim() {
@@ -553,14 +554,26 @@ fn platform(os: &str, arch: &str) -> Result<String, String> {
 
 fn resources() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe()
-        && let Some(contents) = exe.parent().and_then(|p| p.parent())
+        && let Some(directory) = exe.parent()
     {
-        let path = contents.join("Resources");
-        if path.join("install-node.sh").is_file() {
-            return Ok(path);
+        // macOS: Contents/MacOS/<exe> with the payload in the sibling Resources directory.
+        if let Some(contents) = directory.parent() {
+            let path = contents.join("Resources");
+            if path.join("install-node.sh").is_file() {
+                return Ok(path);
+            }
+        }
+        // Windows: the zip ships `node/<platform>/` next to afterburn.exe.
+        if directory.join("node").is_dir() {
+            return Ok(directory.to_owned());
         }
     }
     Err("Install a complete Afterburn app bundle containing its node and portable installer.".into())
+}
+
+/// The node's file name: Windows needs the `.exe` suffix.
+fn node_binary_name() -> &'static str {
+    if cfg!(windows) { "afterburn-node.exe" } else { "afterburn-node" }
 }
 
 fn validate_asset_info(info: &serde_json::Value, platform: &str) -> Result<(), String> {
@@ -579,8 +592,9 @@ fn bundled_node(resources: &std::path::Path, platform: &str) -> Result<PathBuf, 
     let info = std::fs::read(directory.join("build-info.json")).map_err(|_| "The bundled node is missing its build identity")?;
     let info: serde_json::Value = serde_json::from_slice(&info).map_err(|_| "Invalid bundled node build identity")?;
     validate_asset_info(&info, platform)?;
-    let binary = directory.join("afterburn-node");
-    if !binary.is_file() || !resources.join("install-node.py").is_file() {
+    let binary = directory.join(node_binary_name());
+    let has_installer = cfg!(windows) || resources.join("install-node.py").is_file();
+    if !binary.is_file() || !has_installer {
         return Err(format!("The app does not include a complete node installer for {platform}."));
     }
     validate_asset_hash(&binary, &info)?;
@@ -635,6 +649,31 @@ fn validate_stage(stage: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Windows has no launchd/systemd helper: the app starts the bundled node detached and waits for
+/// its loopback port. Quitting the app then leaves the node serving, as the Unix installers do.
+#[cfg(windows)]
+fn start_local_node(binary: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = Command::new(binary);
+    command
+        .arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    command.spawn().map_err(|_| "Could not start the Afterburn node".to_owned())?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if TcpStream::connect(LOCAL).is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    Err("The Afterburn node did not answer on 127.0.0.1:47822 after starting".to_owned())
+}
+
 fn install_helper(host: &Host, update: bool) -> Result<(), String> {
     let resources = resources()?;
     if let Some(target) = &host.ssh {
@@ -672,16 +711,25 @@ fn install_helper(host: &Host, update: bool) -> Result<(), String> {
         }
         let platform = platform(std::env::consts::OS, std::env::consts::ARCH)?;
         let binary = bundled_node(&resources, &platform)?;
-        let mut command = Command::new("sh");
-        command.arg(resources.join("install-node.sh")).arg("--binary").arg(binary).args(["--build-id", afterburn_build::BUILD_ID]);
-        if std::env::consts::OS == "linux" && run(Command::new("id").arg("-u"), TIMEOUT, true)?.trim() == "0" {
-            command.args(["--scope", "system"]);
+        // Windows has neither `sh` nor a service manager: start the bundled node directly. It
+        // keeps serving after the app quits, like the launchd/systemd installers on Unix hosts.
+        #[cfg(windows)]
+        {
+            start_local_node(&binary)
         }
-        if update {
-            command.arg("--upgrade");
+        #[cfg(not(windows))]
+        {
+            let mut command = Command::new("sh");
+            command.arg(resources.join("install-node.sh")).arg("--binary").arg(binary).args(["--build-id", afterburn_build::BUILD_ID]);
+            if std::env::consts::OS == "linux" && run(Command::new("id").arg("-u"), TIMEOUT, true)?.trim() == "0" {
+                command.args(["--scope", "system"]);
+            }
+            if update {
+                command.arg("--upgrade");
+            }
+            run(&mut command, Duration::from_secs(120), true)?;
+            Ok(())
         }
-        run(&mut command, Duration::from_secs(120), true)?;
-        Ok(())
     }
 }
 
@@ -695,6 +743,10 @@ fn herdr_binary() -> PathBuf {
         candidates.push(home.join(".local/bin/herdr"));
         candidates.push(home.join(".cargo/bin/herdr"));
     }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        candidates.push(PathBuf::from(local_app_data).join("Programs/Herdr/bin/herdr.exe"));
+    }
+    #[cfg(not(windows))]
     candidates.extend([PathBuf::from("/opt/homebrew/bin/herdr"), PathBuf::from("/usr/local/bin/herdr")]);
     candidates.into_iter().find(|path| path.is_file()).unwrap_or_else(|| PathBuf::from("herdr"))
 }
