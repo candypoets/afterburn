@@ -24,6 +24,13 @@ See [installation commands and upgrade safeguards](NODE.md#deployment-and-migrat
 `systemd/afterburn-node.service` is a root-checkout example using `target/release`; the portable
 installer generates units pointing to the installed version instead.
 
+**Windows.** `cargo build -p afterburn-node --target x86_64-pc-windows-msvc` produces
+`afterburn-node.exe`; the app ships it under `node/windows-x64/` and starts it on first run (no
+launchd/systemd, no `install-node.sh` path). Herdr's control socket is a named pipe there, derived
+from the same socket path with the `interprocess` crate Herdr uses; its config directory is
+`%APPDATA%\herdr` and its installer is `install.ps1`. The portable Unix installer still targets
+macOS and Linux hosts.
+
 | File | What it does |
 |---|---|
 | `src/node_main.rs` | CLI (`serve`, `request`, `mcp`, `migrate`, `build-info`) and the stdio MCP adapter for agents. |
