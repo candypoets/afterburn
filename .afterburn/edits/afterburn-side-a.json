@@ -24,7 +24,7 @@
       "source": ".afterburn/edits/afterburn-side-a/footage/thread-show.mp4",
       "in": 0.0,
       "out": 4.0,
-      "title": "Prompts step up one per beat; the oldest scroll away."
+      "title": "A terminal: prompts and edits step up one pair per beat, the first ones scroll away, context left falls to 12%."
     },
     {
       "id": "map-say",
@@ -38,7 +38,7 @@
       "source": ".afterburn/edits/afterburn-side-a/footage/map-show.mp4",
       "in": 0.0,
       "out": 4.0,
-      "title": "Pages and cards fill in: .afterburn/map.figcraft"
+      "title": "The app window: the page tree and three cards fill in. .afterburn/map.figcraft"
     },
     {
       "id": "point-say",
@@ -52,7 +52,7 @@
       "source": ".afterburn/edits/afterburn-side-a/footage/point-show.mp4",
       "in": 0.0,
       "out": 3.0,
-      "title": "The cursor clicks the card Why a canvas."
+      "title": "The cursor picks the card Why a canvas; the composer now comments on that card."
     },
     {
       "id": "comment-say",
@@ -66,7 +66,7 @@
       "source": ".afterburn/edits/afterburn-side-a/footage/comment-show.mp4",
       "in": 0.0,
       "out": 3.0,
-      "title": "The comment is typed and sent: On Card Why a canvas."
+      "title": "The comment is typed and sent to claude: On Card Why a canvas."
     },
     {
       "id": "memory-say",
@@ -80,7 +80,7 @@
       "source": ".afterburn/edits/afterburn-side-a/footage/memory-show.mp4",
       "in": 0.0,
       "out": 2.5,
-      "title": "The thread scrolls on; the card keeps the comment."
+      "title": "The terminal scrolls on; the card keeps its saved comment."
     },
     {
       "id": "context-say",
@@ -94,7 +94,7 @@
       "source": ".afterburn/edits/afterburn-side-a/footage/context-show.mp4",
       "in": 0.0,
       "out": 3.0,
-      "title": "Arrow keys to Social. Scope: page Social and its subpages only."
+      "title": "Arrow keys through the page tree to Social. Scope: page Social and its subpages only."
     },
     {
       "id": "design-say",
@@ -136,7 +136,7 @@
       "source": ".afterburn/edits/afterburn-side-a/footage/ignite-show.mp4",
       "in": 0.0,
       "out": 3.5,
-      "title": "Agent picker, claude, New agent, Create agent: a Herdr pane."
+      "title": "The agent picker: claude, New agent, Create agent. A Herdr pane."
     },
     {
       "id": "burn-say",
@@ -150,7 +150,7 @@
       "source": ".afterburn/edits/afterburn-side-a/footage/burn-show.mp4",
       "in": 0.0,
       "out": 2.5,
-      "title": "The Burn pane. The cursor waits, then clicks Burn 1 card."
+      "title": "The Burn sidebar: 1 card waiting. The cursor clicks Burn 1 card with claude."
     },
     {
       "id": "deck-burn",
