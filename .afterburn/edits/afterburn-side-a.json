@@ -1,0 +1,174 @@
+{
+  "name": "afterburn-side-a",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "target_seconds": 70.0,
+  "clips": [
+    {
+      "id": "deck-open",
+      "source": ".afterburn/edits/afterburn-side-a/footage/deck-open.mp4",
+      "in": 0.0,
+      "out": 5.0,
+      "title": "The landing turntable. Play sinks, the camera dives to the needle."
+    },
+    {
+      "id": "thread-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/thread-say.mp4",
+      "in": 0.0,
+      "out": 3.0,
+      "title": "Your agent lives in a thread."
+    },
+    {
+      "id": "thread-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/thread-show.mp4",
+      "in": 0.0,
+      "out": 4.0,
+      "title": "Prompts step up one per beat; the oldest scroll away."
+    },
+    {
+      "id": "map-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/map-say.mp4",
+      "in": 0.0,
+      "out": 3.0,
+      "title": "Afterburn draws your repo as a map."
+    },
+    {
+      "id": "map-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/map-show.mp4",
+      "in": 0.0,
+      "out": 4.0,
+      "title": "Pages and cards fill in: .afterburn/map.figcraft"
+    },
+    {
+      "id": "point-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/point-say.mp4",
+      "in": 0.0,
+      "out": 2.0,
+      "title": "Point. Don't describe."
+    },
+    {
+      "id": "point-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/point-show.mp4",
+      "in": 0.0,
+      "out": 3.0,
+      "title": "The cursor clicks the card Why a canvas."
+    },
+    {
+      "id": "comment-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/comment-say.mp4",
+      "in": 0.0,
+      "out": 2.0,
+      "title": "Comment on the card."
+    },
+    {
+      "id": "comment-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/comment-show.mp4",
+      "in": 0.0,
+      "out": 3.0,
+      "title": "The comment is typed and sent: On Card Why a canvas."
+    },
+    {
+      "id": "memory-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/memory-say.mp4",
+      "in": 0.0,
+      "out": 2.5,
+      "title": "Memory that doesn't scroll away."
+    },
+    {
+      "id": "memory-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/memory-show.mp4",
+      "in": 0.0,
+      "out": 2.5,
+      "title": "The thread scrolls on; the card keeps the comment."
+    },
+    {
+      "id": "context-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/context-say.mp4",
+      "in": 0.0,
+      "out": 2.0,
+      "title": "Context, scoped to a page."
+    },
+    {
+      "id": "context-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/context-show.mp4",
+      "in": 0.0,
+      "out": 3.0,
+      "title": "Arrow keys to Social. Scope: page Social and its subpages only."
+    },
+    {
+      "id": "design-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/design-say.mp4",
+      "in": 0.0,
+      "out": 3.0,
+      "title": "Design in a canvas, not in a thread."
+    },
+    {
+      "id": "design-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/design-show.mp4",
+      "in": 0.0,
+      "out": 2.0,
+      "title": "Prompt, code, prompt, code: the trace leaves intent."
+    },
+    {
+      "id": "drift-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/drift-say.mp4",
+      "in": 0.0,
+      "out": 1.5,
+      "title": "Less drift."
+    },
+    {
+      "id": "drift-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/drift-show.mp4",
+      "in": 0.0,
+      "out": 2.0,
+      "title": "Design, design, design, then one Burn: the trace stays on intent."
+    },
+    {
+      "id": "ignite-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/ignite-say.mp4",
+      "in": 0.0,
+      "out": 2.5,
+      "title": "Ignite any agent from the canvas."
+    },
+    {
+      "id": "ignite-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/ignite-show.mp4",
+      "in": 0.0,
+      "out": 3.5,
+      "title": "Agent picker, claude, New agent, Create agent: a Herdr pane."
+    },
+    {
+      "id": "burn-say",
+      "source": ".afterburn/edits/afterburn-side-a/footage/burn-say.mp4",
+      "in": 0.0,
+      "out": 2.0,
+      "title": "Design. Then burn."
+    },
+    {
+      "id": "burn-show",
+      "source": ".afterburn/edits/afterburn-side-a/footage/burn-show.mp4",
+      "in": 0.0,
+      "out": 2.5,
+      "title": "The Burn pane. The cursor waits, then clicks Burn 1 card."
+    },
+    {
+      "id": "deck-burn",
+      "source": ".afterburn/edits/afterburn-side-a/footage/deck-burn.mp4",
+      "in": 0.0,
+      "out": 7.5,
+      "title": "The record from above; the burn crosses it; back to the landing view."
+    },
+    {
+      "id": "end-card",
+      "source": ".afterburn/edits/afterburn-side-a/footage/end-card.mp4",
+      "in": 0.0,
+      "out": 4.5,
+      "title": "AFTERBURN. Design it. Burn it. afterburn.nuts.cash"
+    }
+  ],
+  "music": {
+    "source": ".afterburn/edits/afterburn-side-a/music/score-from-8s.m4a",
+    "gain_db": -1.4
+  }
+}
