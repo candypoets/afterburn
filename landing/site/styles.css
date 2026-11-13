@@ -1,4 +1,5 @@
-/* Afterburn landing: the Landing page design (desktop 1440, mobile 390). */
+/* Afterburn landing: the Landing page design. The home page is Motion 4 (desktop 1440); the
+   download page and the soon page share the base (fonts, nav, buttons, headline cuts). */
 
 @font-face {
   font-family: "JetBrains Mono";
@@ -154,113 +155,106 @@ a { color: inherit; text-decoration: none; }
   color: var(--muted);
   font: 500 13px/1 var(--mono);
 }
-.cta-bottom { display: none; }
 
-/* Demo video over the sunset band */
-.stage {
-  position: relative;
-  width: min(1080px, 100%);
-  margin-top: 14px;
-  flex: 1 0 auto; /* down to the bottom of the window, so the band is too */
-}
-.band {
-  position: absolute;
-  z-index: 0;
-  left: 50%;
-  width: 100vw;
-  max-width: 1440px;
-  transform: translateX(-50%);
-  /* 53.95% down the 1080:608 player, as a share of its width (a margin's percentages are), so the
-     band starts at the same place on the video however tall the stage grows. */
-  top: 0;
-  margin-top: 30.372%;
-  bottom: -20px; /* through the hero's bottom padding */
-  background:
-    linear-gradient(var(--ink), var(--ink)) bottom / 100% 7.5% no-repeat,
-    linear-gradient(var(--sun) 0 30%, var(--ink) 30% 33%, var(--ember) 33% 55%,
-                    var(--ink) 55% 59.5%, var(--flare) 59.5% 75.5%, var(--ink) 75.5% 81.5%,
-                    var(--deep) 81.5% 92.5%, var(--ink) 92.5%);
-}
-@media (min-width: 1441px) {
-  .band { max-width: none; }
-}
-
-.player {
+/* The home page: Motion 4, the turntable hero on ink (desktop 1440 × 900). */
+body.home { background: var(--ink); color: var(--cream); }
+.home .hero { padding-bottom: 0; }
+.home .eyebrow {
   position: relative;
   z-index: 1;
-  margin: 0;
+  margin: 76px 0 0;
+  max-width: 800px;
+  color: var(--ember);
+  font: 700 14px/18px var(--mono);
+  letter-spacing: 0.14em;
+  text-align: center;
+}
+.home .headline { position: relative; z-index: 1; margin-top: 8px; }
+.home .cta-row { position: relative; z-index: 1; margin-top: 6px; }
+.home .platforms { color: #8d8a85; }
+.home .btn:focus-visible, .home .play:focus-visible, .home .ctl:focus-visible,
+.home .progress:focus-visible { outline-color: var(--sun); }
+
+/* The turntable: it sits behind the text, its empty top under the CTA row. */
+.player {
+  position: relative;
+  z-index: 0;
+  width: min(1080px, 100%);
+  margin: -54px 0 0;
   aspect-ratio: 1080 / 608;
-  border-radius: 16px;
   overflow: hidden;
   background: var(--ink);
-  box-shadow: 0 24px 60px rgba(11, 11, 13, 0.25);
   color: var(--cream);
+  /* The render's black is a shade off the page's: feather the edges so no box shows. */
+  -webkit-mask: linear-gradient(90deg, transparent, #000 4% 96%, transparent),
+                linear-gradient(transparent, #000 4% 96%, transparent);
+  -webkit-mask-composite: source-in;
+          mask: linear-gradient(90deg, transparent, #000 4% 96%, transparent),
+                linear-gradient(transparent, #000 4% 96%, transparent);
+          mask-composite: intersect;
 }
-.player video, .poster, .poster img {
+.player[data-state="playing"], .player[data-state="paused"], .player:fullscreen {
+  -webkit-mask: none;
+          mask: none;
+}
+.player video {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+  background: var(--ink);
 }
-.player video { background: var(--ink); }
-.player[data-state="poster"] video { visibility: hidden; }
-.player:not([data-state="poster"]) .poster { display: none; }
-.scrim {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(rgba(11, 11, 13, 0) 50%, rgba(11, 11, 13, 0.6));
-  pointer-events: none;
-}
+.player .lift, .player .film { visibility: hidden; }
+.player[data-state="lift"] .lift { visibility: visible; }
+.player[data-state="lift"] .rest { visibility: hidden; }
+.player[data-state="playing"] .film, .player[data-state="paused"] .film { visibility: visible; }
+.player[data-state="playing"] .loop, .player[data-state="paused"] .loop { visibility: hidden; }
+
+/* The play button is the one on the vinyl: an invisible target over it (43% across, 44% down). */
 .play {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 11.26%;
-  aspect-ratio: 1;
+  left: 42.55%;
+  top: 43.5%;
+  width: 13%;
+  height: 14%;
   transform: translate(-50%, -50%);
+  padding: 0;
   border: 0;
   border-radius: 50%;
-  background: var(--hot);
-  color: var(--cream);
+  background: none;
   cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: transform 0.15s ease, filter 0.15s ease;
 }
-.play:hover { transform: translate(-50%, -50%) scale(1.05); filter: brightness(1.06); }
-.play svg { width: 40%; fill: currentColor; transform: translateX(6%); }
-.watch {
+.player[data-state="playing"] .play, .player[data-state="paused"] .play { display: none; }
+.soon {
   position: absolute;
   left: 0;
   right: 0;
-  top: 62.96%;
+  top: 56%;
   margin: 0;
   text-align: center;
   font: italic 800 16px/1.3 var(--mono);
-  text-shadow: 0 1px 12px rgba(11, 11, 13, 0.35);
+  text-shadow: 0 1px 12px rgba(11, 11, 13, 0.6);
+  opacity: 0;
+  transition: opacity 0.2s ease;
 }
-.pill {
-  display: none;
-  position: absolute;
-  right: 12px;
-  bottom: 10px;
-  padding: 4px 8px;
-  border-radius: 12px;
-  background: rgba(11, 11, 13, 0.8);
-  font: 700 12px/16px var(--mono);
-}
+.player[data-state="soon"] .soon { opacity: 1; }
+
+/* The film's controls: only while it plays or is paused, never on the turntable. */
 .controls {
   position: absolute;
   left: 24px;
   right: 24px;
   bottom: 24px;
   height: 20px;
-  display: flex;
+  display: none;
   align-items: center;
   gap: 16px;
+  transition: opacity 0.2s ease;
 }
+.player[data-state="playing"] .controls, .player[data-state="paused"] .controls { display: flex; }
+.player[data-state="playing"]:not(:hover) .controls { opacity: 0; }
 .time {
   flex: none;
   width: 94px;
@@ -300,13 +294,16 @@ a { color: inherit; text-decoration: none; }
 .ctl[aria-pressed="true"] { color: var(--sun); }
 .mute .off, .mute[aria-pressed="true"] .on { display: none; }
 .mute[aria-pressed="true"] .off { display: block; }
-.player[data-state="playing"] .play,
-.player[data-state="playing"] .watch,
-.player[data-state="paused"] .watch { opacity: 0; pointer-events: none; }
-.player[data-state="playing"] .scrim { opacity: 0.5; }
-.player[data-state="playing"]:not(:hover) .controls { opacity: 0; }
-.controls, .play, .watch, .scrim { transition: opacity 0.2s ease; }
-.player[data-state="soon"] .play { filter: grayscale(0.2); }
+
+/* The band: four stripes across the bottom of the window (4, 2.5, 2 and 1.5 of 10 px). */
+.home .band {
+  flex: none;
+  margin-top: auto;
+  width: 100vw;
+  height: 10px;
+  background: linear-gradient(var(--sun) 0 40%, var(--ember) 40% 65%, var(--flare) 65% 85%,
+                              var(--deep) 85%);
+}
 
 /* Between the two designed widths: scale the headline down with the window. */
 @media (max-width: 1100px) {
@@ -314,7 +311,7 @@ a { color: inherit; text-decoration: none; }
   .headline { font-size: 7.6vw; line-height: 1.31; }
 }
 
-/* Mobile (the 390 design) */
+/* Narrow windows: the headline stacks and the turntable moves below the CTA row. */
 @media (max-width: 700px) {
   .hero { padding: 22px 20px 32px; }
   .nav { height: 30px; }
@@ -333,25 +330,17 @@ a { color: inherit; text-decoration: none; }
   }
   .headline .burn { margin-top: -12px; }
   .sub { display: block; }
-  .cta-top { display: none; }
-  .stage { margin-top: 22px; flex: none; }
-  .band { top: 40.6%; margin-top: 0; bottom: -83px; }
-  .player { border-radius: 12px; }
-  .play { width: 11.26%; min-width: 39.4px; }
-  .watch, .controls { display: none; }
-  .player:not([data-state="poster"]) .controls { display: flex; left: 12px; right: 12px; bottom: 12px; gap: 12px; }
-  .player:not([data-state="poster"]) .time { width: auto; }
-  .player:not([data-state="poster"]) .cc { display: none; }
-  .pill { display: block; }
-  .player:not([data-state="poster"]) .pill { display: none; }
-  .cta-bottom {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    margin-top: 103px;
-    width: 100%;
+  .home .hero { padding-bottom: 0; }
+  .home .eyebrow { margin-top: 40px; font-size: 11px; line-height: 16px; letter-spacing: 0.1em; }
+  .home .headline { margin-top: 16px; }
+  .home .cta-row { margin-top: 24px; flex-direction: column; gap: 14px; width: 100%; }
+  .home .cta-row .btn-cta { width: 100%; height: 56px; }
+  .player { margin-top: 16px; width: calc(100% + 40px); }
+  .player:not([data-state="rest"]):not([data-state="lift"]):not([data-state="soon"]) .controls {
+    left: 12px; right: 12px; bottom: 12px; gap: 12px;
   }
-  .cta-bottom .btn-cta { width: 100%; height: 56px; }
+  .time { width: auto; }
+  .cc { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

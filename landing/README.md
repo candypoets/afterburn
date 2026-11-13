@@ -1,7 +1,7 @@
 # Afterburn landing page
 
-The pages built from the map's **Landing page** design — hero v2 and the download page — desktop
-1440, mobile 390. Served at <https://afterburn.nuts.cash> by its own nginx container behind the
+The pages built from the map's **Landing page** design — the turntable hero (Motion 4) and the
+download page. Served at <https://afterburn.nuts.cash> by its own nginx container behind the
 host's Traefik (`web` entrypoint, network `traefik-net`; TLS ends in front of Traefik).
 
 ```sh
@@ -9,13 +9,17 @@ docker compose -f landing/compose.yaml up -d --build
 ```
 
 - `site/`: static HTML, CSS and the scripts; no build step.
-  - `/` — the hero (`site/index.html`, `site/styles.css`, `site/player.js`).
+  - `/` — the hero (`site/index.html`, `site/styles.css`, `site/player.js`): a turntable on ink.
+    At rest `assets/turntable.mp4` loops (the record turns); hovering the play button on the vinyl
+    swaps in `assets/turntable-hover.mp4` (the button lifts and glows); a click plays the film in
+    the same frame. Both loops are 3.6 s renders taken from the map, with their first frames as
+    posters (`turntable.jpg`, `turntable-hover.jpg`).
   - `/download/` — the download page (`site/download/index.html`, `site/download.css`,
     `site/download.js`). `/download` redirects to it.
   - `/node.sh` — the headless-node installer (`site/node.sh`), served as `text/x-shellscript`.
 - `files/` (not committed) is mounted read-only at `/srv/files`:
-  - `files/media/demo.mp4` (and `demo.en.vtt`): the demo video. Until it is there, Play says
-    "Demo lands soon".
+  - `files/media/demo.mp4` (and `demo.en.vtt`): the film the turntable plays. Until it is there,
+    a click says "The film lands soon".
   - `files/download/…`: the builds the download page links to. Drop them in; no rebuild needed.
 
     **The download page now links to GitHub Releases**, not to these files: the app builds are
@@ -43,5 +47,6 @@ docker compose -f landing/compose.yaml up -d --build
     installer with `--scope user` (`system` as root on Linux). `AFTERBURN_NODE_BASE` points it at
     another base (for example `file:///tmp/node` when testing); `AFTERBURN_NODE_UPGRADE=1`
     replaces a supervised, idle node.
-- The poster is a real screenshot of the app (the Brand & design language board).
+- `assets/poster.jpg`, the share image, is a real screenshot of the app (the Brand & design
+  language board).
 - Fonts: JetBrains Mono (JetBrains, Apache-2.0/OFL), subset to woff2. Icons: Phosphor (MIT).
