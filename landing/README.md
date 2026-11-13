@@ -13,7 +13,11 @@ docker compose -f landing/compose.yaml up -d --build
     At rest `assets/turntable.mp4` loops (the record turns); hovering the play button on the vinyl
     swaps in `assets/turntable-hover.mp4` (the button lifts and glows); a click plays the film in
     the same frame. Both loops are 3.6 s renders taken from the map, with their first frames as
-    posters (`turntable.jpg`, `turntable-hover.jpg`).
+    posters (`turntable.jpg`, `turntable-hover.jpg`). The band's stripes are baked into the loops
+    behind the turntable; the band outside the video is sized in the video's width (`cqw`), so
+    the stripes meet at every window width. The loops are encoded BT.709 and tagged, so browsers
+    show the stripes in the same colours as the CSS band; the page's black is the renders'
+    (`#0A0A0C`).
   - `/download/` — the download page (`site/download/index.html`, `site/download.css`,
     `site/download.js`). `/download` redirects to it.
   - `/node.sh` — the headless-node installer (`site/node.sh`), served as `text/x-shellscript`.
